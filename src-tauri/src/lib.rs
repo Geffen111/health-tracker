@@ -1,0 +1,42 @@
+mod commands;
+mod db;
+mod models;
+
+use tauri::Manager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let pool = tauri::async_runtime::block_on(db::init_db());
+            app.manage(pool);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::daily_log::get_daily_log,
+            commands::daily_log::upsert_daily_log,
+            commands::daily_log::list_daily_logs,
+            commands::medications::list_medications,
+            commands::medications::create_medication,
+            commands::medications::update_medication,
+            commands::medications::archive_medication,
+            commands::medications::get_doses_for_date,
+            commands::medications::upsert_dose,
+            commands::blood_pressure::get_bp_for_date,
+            commands::blood_pressure::upsert_bp,
+            commands::activity::list_activity_categories,
+            commands::activity::list_activity_types,
+            commands::activity::get_activities_for_date,
+            commands::activity::add_activity_entry,
+            commands::activity::delete_activity_entry,
+            commands::pem::get_calibration_params,
+            commands::pem::update_calibration_param,
+            commands::pem::get_pem_predictions,
+            commands::pem::run_pem_model,
+            commands::dashboard::get_dashboard_summary,
+            commands::import_xlsx::import_spreadsheet,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
