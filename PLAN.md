@@ -109,10 +109,12 @@ upsert and is unaffected.)
 ### C. Cross-cutting
 - **C1 — Date display format (#11).** Show dates as **DD/MM/YY** everywhere; keep ISO
   `YYYY-MM-DD` in the DB. Add a shared formatter.
-- **C2 — Claude Design handover (#10).** Prepare a handover bundle for claude.ai/design to
-  develop the visual style, once the data model (section A) is settled so Design knows the
-  real entities/screens. Keep the bundle out of this git root (see
-  Family Finance design-handoff convention).
+- **C2 — Claude Design handover (#10).** ✅ Brief prepared 2026-06-26 at
+  `../health-tracker-design-handoff/README.md` (sibling folder, out of this git root per the
+  Family Finance design-handoff convention). Greenfield design brief: app context, ME/CFS
+  design principles, per-screen requirements (incl. all the UX notes), data dictionary, PEM
+  context. Awaiting Claude Design comps (`.dc.html` + screenshots + ICONS.md) to come back,
+  then section B implementation.
 
 ## PEM model formulas (Spreadsheet V5 — authoritative)
 
