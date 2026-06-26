@@ -20,26 +20,45 @@ pub async fn upsert_daily_log(
         "INSERT INTO daily_logs (log_date, day_name, fatigue_desc, fatigue_rating, headache_desc,
          headache_rating, headache_duration_hours, other_symptoms, my_sleep_rating, phone_sleep_rating,
          sleep_avg, sleep_time_head_on_pillow, sleep_actual_asleep, sleep_rem, sleep_deep, sleep_awake,
-         steps, activity_calories, ave_resting_hr, ave_hr, rostered_hours, sick_leave_hours,
+         steps, activity_calories, ave_resting_hr, ave_hr, hr_min, hr_max, rostered_hours, sick_leave_hours,
          office_hours, wfh_hours, alcohol_std_drinks, multivitamin, vitamin_c, add_meds,
          compression_socks, notes, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         -- COALESCE so a page that only manages some fields (e.g. the Work page sends
+         -- null for sleep/steps/meds) does NOT wipe values another page already saved
+         -- for that day. A null in the incoming row means \"leave this field as-is\".
          ON CONFLICT(log_date) DO UPDATE SET
-         fatigue_desc=excluded.fatigue_desc, fatigue_rating=excluded.fatigue_rating,
-         headache_desc=excluded.headache_desc, headache_rating=excluded.headache_rating,
-         headache_duration_hours=excluded.headache_duration_hours,
-         other_symptoms=excluded.other_symptoms, my_sleep_rating=excluded.my_sleep_rating,
-         phone_sleep_rating=excluded.phone_sleep_rating, sleep_avg=excluded.sleep_avg,
-         sleep_time_head_on_pillow=excluded.sleep_time_head_on_pillow,
-         sleep_actual_asleep=excluded.sleep_actual_asleep, sleep_rem=excluded.sleep_rem,
-         sleep_deep=excluded.sleep_deep, sleep_awake=excluded.sleep_awake,
-         steps=excluded.steps, activity_calories=excluded.activity_calories,
-         ave_resting_hr=excluded.ave_resting_hr, ave_hr=excluded.ave_hr,
-         rostered_hours=excluded.rostered_hours, sick_leave_hours=excluded.sick_leave_hours,
-         office_hours=excluded.office_hours, wfh_hours=excluded.wfh_hours,
-         alcohol_std_drinks=excluded.alcohol_std_drinks, multivitamin=excluded.multivitamin,
-         vitamin_c=excluded.vitamin_c, add_meds=excluded.add_meds,
-         compression_socks=excluded.compression_socks, notes=excluded.notes,
+         day_name=COALESCE(excluded.day_name, daily_logs.day_name),
+         fatigue_desc=COALESCE(excluded.fatigue_desc, daily_logs.fatigue_desc),
+         fatigue_rating=COALESCE(excluded.fatigue_rating, daily_logs.fatigue_rating),
+         headache_desc=COALESCE(excluded.headache_desc, daily_logs.headache_desc),
+         headache_rating=COALESCE(excluded.headache_rating, daily_logs.headache_rating),
+         headache_duration_hours=COALESCE(excluded.headache_duration_hours, daily_logs.headache_duration_hours),
+         other_symptoms=COALESCE(excluded.other_symptoms, daily_logs.other_symptoms),
+         my_sleep_rating=COALESCE(excluded.my_sleep_rating, daily_logs.my_sleep_rating),
+         phone_sleep_rating=COALESCE(excluded.phone_sleep_rating, daily_logs.phone_sleep_rating),
+         sleep_avg=COALESCE(excluded.sleep_avg, daily_logs.sleep_avg),
+         sleep_time_head_on_pillow=COALESCE(excluded.sleep_time_head_on_pillow, daily_logs.sleep_time_head_on_pillow),
+         sleep_actual_asleep=COALESCE(excluded.sleep_actual_asleep, daily_logs.sleep_actual_asleep),
+         sleep_rem=COALESCE(excluded.sleep_rem, daily_logs.sleep_rem),
+         sleep_deep=COALESCE(excluded.sleep_deep, daily_logs.sleep_deep),
+         sleep_awake=COALESCE(excluded.sleep_awake, daily_logs.sleep_awake),
+         steps=COALESCE(excluded.steps, daily_logs.steps),
+         activity_calories=COALESCE(excluded.activity_calories, daily_logs.activity_calories),
+         ave_resting_hr=COALESCE(excluded.ave_resting_hr, daily_logs.ave_resting_hr),
+         ave_hr=COALESCE(excluded.ave_hr, daily_logs.ave_hr),
+         hr_min=COALESCE(excluded.hr_min, daily_logs.hr_min),
+         hr_max=COALESCE(excluded.hr_max, daily_logs.hr_max),
+         rostered_hours=COALESCE(excluded.rostered_hours, daily_logs.rostered_hours),
+         sick_leave_hours=COALESCE(excluded.sick_leave_hours, daily_logs.sick_leave_hours),
+         office_hours=COALESCE(excluded.office_hours, daily_logs.office_hours),
+         wfh_hours=COALESCE(excluded.wfh_hours, daily_logs.wfh_hours),
+         alcohol_std_drinks=COALESCE(excluded.alcohol_std_drinks, daily_logs.alcohol_std_drinks),
+         multivitamin=COALESCE(excluded.multivitamin, daily_logs.multivitamin),
+         vitamin_c=COALESCE(excluded.vitamin_c, daily_logs.vitamin_c),
+         add_meds=COALESCE(excluded.add_meds, daily_logs.add_meds),
+         compression_socks=COALESCE(excluded.compression_socks, daily_logs.compression_socks),
+         notes=COALESCE(excluded.notes, daily_logs.notes),
          updated_at=datetime('now')"
     )
     .bind(&log.log_date).bind(&log.day_name).bind(&log.fatigue_desc).bind(log.fatigue_rating)
@@ -48,6 +67,7 @@ pub async fn upsert_daily_log(
     .bind(log.sleep_avg).bind(log.sleep_time_head_on_pillow).bind(log.sleep_actual_asleep)
     .bind(log.sleep_rem).bind(log.sleep_deep).bind(log.sleep_awake)
     .bind(log.steps).bind(log.activity_calories).bind(log.ave_resting_hr).bind(log.ave_hr)
+    .bind(log.hr_min).bind(log.hr_max)
     .bind(log.rostered_hours).bind(log.sick_leave_hours).bind(log.office_hours).bind(log.wfh_hours)
     .bind(log.alcohol_std_drinks).bind(log.multivitamin).bind(log.vitamin_c).bind(&log.add_meds)
     .bind(log.compression_socks).bind(&log.notes)

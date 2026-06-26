@@ -5,3 +5,4 @@ pub mod activity;
 pub mod pem;
 pub mod dashboard;
 pub mod import_xlsx;
+pub mod watch_calibration;

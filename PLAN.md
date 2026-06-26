@@ -68,7 +68,14 @@ Importer bugs fixed during this import (`commands/import_xlsx.rs`):
 
 Grouped by what they touch. IDs match the user's note numbers.
 
-### A. Data model / backend (do first — unblocks the UI and the design handover)
+### A. Data model / backend — ✅ DONE 2026-06-26 (migrations 08–10, commands wired)
+
+Also fixed a data-loss bug found here: `upsert_daily_log` overwrote *every* column, so a
+partial save from one page (e.g. Work hours) wiped another page's fields (sleep/steps/meds)
+for that day. The `ON CONFLICT` now `COALESCE`s — a null incoming field leaves the stored
+value as-is, so each page safely contributes its slice of the day. (The importer has its own
+upsert and is unaffected.)
+
 - **A1 — Medication history & lifecycle (#4).** New `medication_history` table recording
   started/ceased events with dates + free text ("Ceased medication X on …"). When a med's
   `active` flag (or default dose) changes, append a history row and surface an in-app banner

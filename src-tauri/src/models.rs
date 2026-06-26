@@ -26,6 +26,8 @@ pub struct DailyLog {
     pub activity_calories: Option<f64>,
     pub ave_resting_hr: Option<i64>,
     pub ave_hr: Option<i64>,
+    pub hr_min: Option<i64>,
+    pub hr_max: Option<i64>,
     pub rostered_hours: Option<f64>,
     pub sick_leave_hours: Option<f64>,
     pub office_hours: Option<f64>,
@@ -59,6 +61,28 @@ pub struct MedicationDose {
     pub log_date: String,
     pub time_taken: Option<String>,
     pub dose_amount: Option<f64>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct MedicationHistoryEntry {
+    pub id: i64,
+    pub medication_id: Option<i64>,
+    pub medication_name: String,
+    pub event_type: String,
+    pub event_date: String,
+    pub detail: Option<String>,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+}
+
+// ── Watch calibration ──
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct WatchCalibration {
+    pub id: i64,
+    pub cal_date: String,
+    pub cal_time: Option<String>,
     pub notes: Option<String>,
 }
 

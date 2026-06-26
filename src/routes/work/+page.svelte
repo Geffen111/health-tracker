@@ -10,7 +10,6 @@
   let sickLeaveHours = $state<number>(0);
   let officeHours = $state<number>(7.6);
   let wfhHours = $state<number>(0);
-  let notes = $state('');
 
   let logs = $state<any[]>([]);
   let monthlyLoading = $state(true);
@@ -28,20 +27,17 @@
         sickLeaveHours = existing.sick_leave_hours ?? 0;
         officeHours = existing.office_hours ?? 7.6;
         wfhHours = existing.wfh_hours ?? 0;
-        notes = existing.notes ?? '';
       } else {
         rosteredHours = 7.6;
         sickLeaveHours = 0;
         officeHours = 7.6;
         wfhHours = 0;
-        notes = '';
       }
     } catch {
       rosteredHours = 7.6;
       sickLeaveHours = 0;
       officeHours = 7.6;
       wfhHours = 0;
-      notes = '';
     }
   }
 
@@ -80,7 +76,7 @@
       vitamin_c: null,
       add_meds: null,
       compression_socks: null,
-      notes: notes || null
+      notes: null
     };
   }
 
@@ -172,11 +168,8 @@
       <label for="wfh">WFH Hours</label>
       <input id="wfh" type="number" step="0.25" min="0" bind:value={wfhHours} />
     </div>
-    <div class="field full-width">
-      <label for="notes">Notes</label>
-      <textarea id="notes" bind:value={notes} rows="3" placeholder="Work notes for the day"></textarea>
-    </div>
   </div>
+  <p class="notes-hint">Day notes now live in <strong>Daily Log → Other Daily Notes</strong>.</p>
   <button class="save-btn" onclick={save}>
     {saved ? '✓ Saved!' : 'Save'}
   </button>
@@ -300,6 +293,8 @@
   :global(.dark) .card { background: #1e2a45; }
 
   .form-card { max-width: 700px; }
+  .notes-hint { font-size: 12px; color: #888; margin-top: 14px; margin-bottom: 0; }
+  :global(.dark) .notes-hint { color: #999; }
   .summary-card { max-width: 700px; }
 
   .card h2 {
@@ -319,7 +314,6 @@
     flex-direction: column;
     gap: 6px;
   }
-  .full-width { grid-column: 1 / -1; }
 
   label { font-size: 13px; font-weight: 600; color: #555; }
   :global(.dark) label { color: #bbb; }
@@ -336,18 +330,6 @@
     border-color: #444;
     color: #e0e0e0;
   }
-
-  textarea {
-    width: 100%;
-    padding: 10px;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    font-family: inherit;
-    font-size: 14px;
-    resize: vertical;
-    background: #fff;
-  }
-  :global(.dark) textarea { background: #2a3a5c; border-color: #444; color: #e0e0e0; }
 
   .save-btn {
     padding: 12px 32px;

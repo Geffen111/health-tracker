@@ -83,8 +83,8 @@
   </div>
 
   <div class="field full-width">
-    <label>Notes</label>
-    <textarea bind:value={log.notes} rows="3" placeholder="Any additional notes for the day"></textarea>
+    <label for="daily-notes">Other Daily Notes</label>
+    <textarea id="daily-notes" bind:value={log.notes} rows="3" placeholder="Anything else worth noting for the day (incl. work notes)"></textarea>
   </div>
 
   <button class="save-btn" onclick={save}>
