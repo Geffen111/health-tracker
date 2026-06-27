@@ -8,7 +8,10 @@
   let nowTime = new Date().toTimeString().slice(0, 5);
   let selectedDate = $state(today);
   let bpReadings = $state<any[]>([]);
-  let dailyLog = $state<any>(null);
+  // Heart rate is a full-day synced metric — when viewing today it's still
+  // incomplete, so the HR tiles show the most recent complete day (yesterday).
+  let hrLog = $state<any>(null);
+  let hrDate = $derived(selectedDate === today ? shiftISO(today, -1) : selectedDate);
   let banner = $state(false);
   let calDays = $state<number | null>(null);
   let lastCal = $state<any>(null);
@@ -81,7 +84,7 @@
   async function loadDailyLog() {
     try {
       const logs: any[] = await invoke('list_daily_logs', { limit: 30, offset: 0 });
-      dailyLog = logs.find((l: any) => l.log_date === selectedDate) || null;
+      hrLog = logs.find((l: any) => l.log_date === hrDate) || null;
     } catch (e) { console.error('Error loading daily logs:', e); }
   }
 
@@ -93,8 +96,8 @@
     } catch {}
   }
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadBP(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadBP(); }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadBP(); loadDailyLog(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadBP(); loadDailyLog(); }
 
   async function addReading() {
     if (!nSys || !nDia) return;
@@ -222,26 +225,29 @@
   <div class="hr-card">
     <div class="hr-header">
       <span class="card-heading">Heart rate</span>
+      {#if hrDate !== selectedDate}
+        <span class="hr-day">Yesterday · {formatDateShort(hrDate)}</span>
+      {/if}
     </div>
     <div class="hr-grid">
       <div class="hr-tile">
         <div class="hr-tile-label">Resting</div>
-        <div class="hr-tile-val">{dailyLog?.ave_resting_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
+        <div class="hr-tile-val">{hrLog?.ave_resting_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
       </div>
       <div class="hr-tile">
         <div class="hr-tile-label">Average</div>
-        <div class="hr-tile-val">{dailyLog?.ave_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
+        <div class="hr-tile-val">{hrLog?.ave_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
       </div>
       <div class="hr-tile">
         <div class="hr-tile-label">Daily min</div>
-        <div class="hr-tile-val">{dailyLog?.hr_min ?? '—'}<span class="hr-unit"> bpm</span></div>
+        <div class="hr-tile-val">{hrLog?.hr_min ?? '—'}<span class="hr-unit"> bpm</span></div>
       </div>
       <div class="hr-tile">
         <div class="hr-tile-label">Daily max</div>
-        <div class="hr-tile-val">{dailyLog?.hr_max ?? '—'}<span class="hr-unit"> bpm</span></div>
+        <div class="hr-tile-val">{hrLog?.hr_max ?? '—'}<span class="hr-unit"> bpm</span></div>
       </div>
     </div>
-    <div class="hr-note">Min &amp; max come from the watch's continuous monitoring; resting and average are the daily figures.</div>
+    <div class="hr-note">Today's heart-rate figures aren't complete until the day ends, so this shows the most recent full day. Min &amp; max come from the watch's continuous monitoring.</div>
   </div>
 </div>
 
@@ -347,6 +353,7 @@
 
   .hr-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:16px; }
   .hr-header { display:flex; justify-content:space-between; align-items:center; }
+  .hr-day { font-size:11.5px; color:var(--tm); font-weight:600; }
   .hr-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .hr-tile { background:var(--inset); border-radius:13px; padding:13px 14px; }
   .hr-tile-label { font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--ts); }

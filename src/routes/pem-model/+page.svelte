@@ -1,20 +1,25 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate, todayISO } from '$lib/formatDate';
+  import { formatDate, todayISO, shiftISO } from '$lib/formatDate';
 
   let params = $state<any[]>([]);
   let predictions = $state<any[]>([]);
   let loading = $state(true);
   let showAdvanced = $state(false);
 
+  // PEM is post-exertional: today's crash risk is driven by the load you carried
+  // on the days BEFORE today. Today's own figures are empty until logged (often
+  // not until tomorrow), so the page shows the most recent COMPLETE day —
+  // yesterday — and presents it as today's risk, flagging the source date.
+  const loadDate = shiftISO(todayISO(), -1);
+
   onMount(async () => {
     try {
       params = await invoke('get_calibration_params');
       predictions = await invoke('get_pem_predictions', { limit: 14 });
-      // If today hasn't been computed yet, run it so the contribution breakdown
-      // below reflects today's data rather than sitting blank.
-      if (!predictions.find((p: any) => p.log_date === todayISO())) {
+      // Make sure yesterday's prediction exists so the breakdown isn't blank.
+      if (!predictions.find((p: any) => p.log_date === loadDate)) {
         await runModel();
       }
     } catch (e) {
@@ -25,9 +30,8 @@
   });
 
   async function runModel() {
-    const today = todayISO();
     try {
-      await invoke('run_pem_model', { date: today });
+      await invoke('run_pem_model', { date: loadDate });
       predictions = await invoke('get_pem_predictions', { limit: 14 });
     } catch (e) {
       console.error('Run model error:', e);
@@ -39,9 +43,10 @@
     params = params.map((p: any) => p.param_name === name ? { ...p, param_value: value } : p);
   }
 
-  let todayPrediction = $derived(predictions.find((p: any) => p.log_date === todayISO()));
+  // The prediction driving today's risk (computed from yesterday's complete data).
+  let todayPrediction = $derived(predictions.find((p: any) => p.log_date === loadDate));
 
-  // Load contributions for the bars + steps below, derived from today's prediction.
+  // Load contributions for the bars + steps below, from yesterday's prediction.
   let loads = $derived.by(() => {
     const p = todayPrediction;
     const phys = p?.physical_load ?? 0;
@@ -86,10 +91,10 @@
 <div class="page-header">
   <div>
     <div class="page-title">PEM Model</div>
-    <div class="page-subtitle">What's driving today's crash risk · {formatDate(todayISO())}</div>
+    <div class="page-subtitle">Today's crash risk, driven by yesterday's load · {formatDate(loadDate)}</div>
   </div>
   <div class="header-actions">
-    <button class="run-btn" onclick={runModel}>Run PEM Model for Today</button>
+    <button class="run-btn" onclick={runModel}>Recalculate</button>
   </div>
 </div>
 
@@ -117,7 +122,7 @@
     </div>
 
     <div class="load-card">
-      <div class="card-heading">Today's load contributions</div>
+      <div class="card-heading">Load contributions <span class="load-day">· yesterday {formatDate(loadDate)}</span></div>
       <div class="load-bars">
         <div class="load-item">
           <div class="load-header"><span><span class="load-swatch" style="background:var(--accent);"></span>Physical</span><span class="load-val">{todayPrediction ? num(loads.phys) : '—'}</span></div>
@@ -173,7 +178,7 @@
         <div class="step-desc" style="color:var(--amber-fg);font-weight:600;">{todayPrediction?.risk_band ?? '—'} · pace gently</div>
       </div>
     </div>
-    <div class="step-note">Tomorrow's predicted fatigue from this risk is about <strong>{todayPrediction?.predicted_next_day_fatigue?.toFixed(1) ?? '—'} / 10</strong>.</div>
+    <div class="step-note">Today's predicted fatigue from this risk is about <strong>{todayPrediction?.predicted_next_day_fatigue?.toFixed(1) ?? '—'} / 10</strong>.</div>
   </div>
 
   <div class="advanced-card">
@@ -243,6 +248,7 @@
 
   .load-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:16px; }
   .card-heading { font-family:'Source Serif 4',serif; font-size:16px; font-weight:600; color:var(--tp); }
+  .load-day { font-family:'Public Sans',sans-serif; font-size:12px; font-weight:500; color:var(--tm); }
   .card-subtitle { font-size:12.5px; color:var(--ts); }
 
   .load-bars { display:flex; flex-direction:column; gap:13px; }

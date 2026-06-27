@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
+  import { formatDate, formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
 
   let today = $state(todayISO());
   let selectedDate = $state(today);
@@ -16,12 +16,13 @@
     my_sleep_rating: null,
     phone_sleep_rating: null,
     sleep_avg: null,
-    notes: '',
-    steps: null,
     alcohol_std_drinks: null,
-    multivitamin: null,
-    vitamin_c: null,
+    notes: '',
   });
+  // Steps are a full-day synced metric — today's count is incomplete until the
+  // day is over, so the daily log shows (and edits) YESTERDAY's complete total.
+  let prevSteps = $state<number | null>(null);
+  let stepsDate = $derived(shiftISO(selectedDate, -1));
   let saved = $state(false);
 
   onMount(async () => loadDate(selectedDate));
@@ -31,6 +32,11 @@
       const existing = await invoke('get_daily_log', { date });
       if (existing) Object.assign(log, existing);
     } catch {}
+    // Steps come from the previous day's row (yesterday's complete total).
+    try {
+      const p: any = await invoke('get_daily_log', { date: shiftISO(date, -1) });
+      prevSteps = p?.steps ?? null;
+    } catch { prevSteps = null; }
   }
 
   async function save() {
@@ -40,6 +46,8 @@
     const m = log.my_sleep_rating, p = log.phone_sleep_rating;
     log.sleep_avg = (m != null && p != null) ? (m + p) / 2 : (m ?? p ?? null);
     await invoke('upsert_daily_log', { log });
+    // Steps belong to the previous day's row.
+    await invoke('upsert_daily_log', { log: { log_date: stepsDate, steps: prevSteps } });
     saved = true;
     setTimeout(() => saved = false, 2000);
   }
@@ -180,9 +188,9 @@
       </div>
 
       <div class="text-field">
-        <label for="steps">Steps <span class="label-hint">· synced</span></label>
+        <label for="steps">Steps <span class="label-hint">· yesterday {formatDate(stepsDate)}</span></label>
         <div class="input-unit">
-          <input id="steps" type="number" min="0" bind:value={log.steps} placeholder="0" />
+          <input id="steps" type="number" min="0" bind:value={prevSteps} placeholder="0" />
           <span class="unit-label">steps</span>
         </div>
       </div>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate, todayISO } from '$lib/formatDate';
+  import { formatDate, todayISO, shiftISO } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
 
   let summary = $state<any>(null);
@@ -50,12 +50,19 @@
     return m ?? p ?? null;
   }
 
+  // Steps & cardio are full-day synced metrics — today's are incomplete, so the
+  // dashboard shows yesterday's complete totals for those. Sleep is "last night"
+  // (complete by morning) so it stays on today's row.
+  let yesterdayLog = $derived(logs.find((l: any) => l.log_date === shiftISO(todayISO(), -1)) ?? null);
+
   let fatigue = $derived(todayLog?.fatigue_rating ?? null);
   let sleep = $derived(sleepScore(todayLog));
-  let steps = $derived(todayLog?.steps ?? null);
-  let restingHr = $derived(todayLog?.ave_resting_hr ?? null);
-  let riskBand = $derived(summary?.current_risk_band ?? null);
-  let riskScore = $derived(predictions?.find((p: any) => p.log_date === todayISO())?.predicted_pem_risk ?? null);
+  let steps = $derived(yesterdayLog?.steps ?? null);
+  let restingHr = $derived(yesterdayLog?.ave_resting_hr ?? null);
+  // Today's crash risk is the PEM prediction computed from yesterday's load.
+  let yesterdayPred = $derived(predictions?.find((p: any) => p.log_date === shiftISO(todayISO(), -1)) ?? null);
+  let riskBand = $derived(yesterdayPred?.risk_band ?? summary?.current_risk_band ?? null);
+  let riskScore = $derived(yesterdayPred?.predicted_pem_risk ?? null);
 
   function gaugeArc(score: number | null): { pct: number; color: string } {
     if (score == null) return { pct: 0, color: 'var(--inset)' };
