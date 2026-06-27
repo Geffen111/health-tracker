@@ -66,3 +66,19 @@ pub async fn upsert_bp(
     .map(|r| r.last_insert_rowid())
     .map_err(|e| e.to_string())
 }
+
+/// Permanently remove a single BP reading (systolic/diastolic are NOT NULL, so a
+/// soft-delete by nulling them isn't possible — this deletes the row outright).
+#[tauri::command]
+pub async fn delete_bp(
+    pool: State<'_, SqlitePool>,
+    log_date: String,
+    reading_num: i64,
+) -> Result<(), String> {
+    sqlx::query("DELETE FROM blood_pressure WHERE log_date = ? AND reading_num = ?")
+        .bind(&log_date).bind(reading_num)
+        .execute(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}

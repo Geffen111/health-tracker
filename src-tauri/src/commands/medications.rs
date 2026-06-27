@@ -327,3 +327,22 @@ pub async fn upsert_dose(
     .map(|r| r.last_insert_rowid())
     .map_err(|e| e.to_string())
 }
+
+/// Permanently remove a logged dose (identified by its unique med+date+time key).
+#[tauri::command]
+pub async fn delete_dose(
+    pool: State<'_, SqlitePool>,
+    medication_id: i64,
+    log_date: String,
+    time_taken: Option<String>,
+) -> Result<(), String> {
+    sqlx::query(
+        "DELETE FROM medication_doses \
+         WHERE medication_id = ? AND log_date = ? AND time_taken IS ?"
+    )
+    .bind(medication_id).bind(&log_date).bind(&time_taken)
+    .execute(&*pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}

@@ -12,6 +12,11 @@
     try {
       params = await invoke('get_calibration_params');
       predictions = await invoke('get_pem_predictions', { limit: 14 });
+      // If today hasn't been computed yet, run it so the contribution breakdown
+      // below reflects today's data rather than sitting blank.
+      if (!predictions.find((p: any) => p.log_date === todayISO())) {
+        await runModel();
+      }
     } catch (e) {
       console.error('PEM error:', e);
     } finally {
@@ -35,6 +40,20 @@
   }
 
   let todayPrediction = $derived(predictions.find((p: any) => p.log_date === todayISO()));
+
+  // Load contributions for the bars + steps below, derived from today's prediction.
+  let loads = $derived.by(() => {
+    const p = todayPrediction;
+    const phys = p?.physical_load ?? 0;
+    const cog = p?.cognitive_load ?? 0;
+    const sen = p?.sensory_social_load ?? 0;
+    return { phys, cog, sen, total: phys + cog + sen, max: Math.max(phys, cog, sen, 0.01) };
+  });
+
+  // Format a number for display, or an em-dash when there's no prediction yet.
+  function num(v: number | null | undefined, dp = 2): string {
+    return v == null ? '—' : v.toFixed(dp);
+  }
 
   function bandColor(band: string | null): string {
     if (band === 'High') return 'var(--red-fg)';
@@ -101,22 +120,22 @@
       <div class="card-heading">Today's load contributions</div>
       <div class="load-bars">
         <div class="load-item">
-          <div class="load-header"><span><span class="load-swatch" style="background:var(--accent);"></span>Physical</span><span class="load-val">—</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:0%;background:var(--accent);"></div></div>
+          <div class="load-header"><span><span class="load-swatch" style="background:var(--accent);"></span>Physical</span><span class="load-val">{todayPrediction ? num(loads.phys) : '—'}</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:{loads.phys / loads.max * 100}%;background:var(--accent);"></div></div>
         </div>
         <div class="load-item">
-          <div class="load-header"><span><span class="load-swatch" style="background:var(--peri);"></span>Cognitive</span><span class="load-val">—</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:0%;background:var(--peri);"></div></div>
+          <div class="load-header"><span><span class="load-swatch" style="background:var(--peri);"></span>Cognitive</span><span class="load-val">{todayPrediction ? num(loads.cog) : '—'}</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:{loads.cog / loads.max * 100}%;background:var(--peri);"></div></div>
         </div>
         <div class="load-item">
-          <div class="load-header"><span><span class="load-swatch" style="background:var(--amber);"></span>Sensory / social</span><span class="load-val">—</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:0%;background:var(--amber);"></div></div>
+          <div class="load-header"><span><span class="load-swatch" style="background:var(--amber);"></span>Sensory / social</span><span class="load-val">{todayPrediction ? num(loads.sen) : '—'}</span></div>
+          <div class="bar-track"><div class="bar-fill" style="width:{loads.sen / loads.max * 100}%;background:var(--amber);"></div></div>
         </div>
       </div>
       <div class="load-tiles">
         <div class="load-tile">
           <div class="tile-label">Recovery debt</div>
-          <div class="tile-val">{todayPrediction?.predicted_pem_risk?.toFixed(1) ?? '—'} <span class="tile-threshold">/ 4.0</span></div>
+          <div class="tile-val">{num(todayPrediction?.recovery_debt, 1)} <span class="tile-threshold">/ 4.0</span></div>
         </div>
         <div class="load-tile">
           <div class="tile-label">Crash flag</div>
@@ -132,20 +151,20 @@
     <div class="step-row">
       <div class="step">
         <div class="step-label">1 · Total load</div>
-        <div class="step-val">—</div>
+        <div class="step-val">{todayPrediction ? num(loads.total) : '—'}</div>
         <div class="step-desc">physical + cognitive + sensory</div>
       </div>
-      <span class="step-op">×</span>
+      <span class="step-op">→</span>
       <div class="step">
-        <div class="step-label">2 · Sensitivity</div>
-        <div class="step-val">—</div>
-        <div class="step-desc">higher when fatigue is high</div>
+        <div class="step-label">2 · Weighted load</div>
+        <div class="step-val">{num(todayPrediction?.three_day_weighted_load)}</div>
+        <div class="step-desc">recent days, scaled</div>
       </div>
-      <span class="step-op">+</span>
+      <span class="step-op">→</span>
       <div class="step">
         <div class="step-label">3 · Recovery debt</div>
-        <div class="step-val">—</div>
-        <div class="step-desc">under the crash line</div>
+        <div class="step-val">{num(todayPrediction?.recovery_debt)}</div>
+        <div class="step-desc">load held over crash line</div>
       </div>
       <span class="step-op">→</span>
       <div class="step result">

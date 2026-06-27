@@ -5,6 +5,10 @@ use sqlx::FromRow;
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct DailyLog {
+    // The frontend builds a fresh log object (no id) when saving a brand-new
+    // day, so `id` must be optional for deserialization; the DB assigns it via
+    // AUTOINCREMENT and the upsert never binds it.
+    #[serde(default)]
     pub id: i64,
     pub log_date: String,
     pub day_name: Option<String>,
@@ -71,6 +75,8 @@ pub struct MedicationScheduleItem {
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct MedicationDose {
+    // New doses are logged without an id (assigned by the DB); see DailyLog.
+    #[serde(default)]
     pub id: i64,
     pub medication_id: i64,
     pub log_date: String,
@@ -105,6 +111,8 @@ pub struct WatchCalibration {
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct BloodPressure {
+    // New readings are added without an id (assigned by the DB); see DailyLog.
+    #[serde(default)]
     pub id: i64,
     pub log_date: String,
     pub reading_num: i64,

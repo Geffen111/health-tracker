@@ -117,16 +117,7 @@
 
   async function deleteReading(readingNum: number) {
     try {
-      await invoke('upsert_bp', {
-        bp: {
-          log_date: selectedDate,
-          reading_num: readingNum,
-          time_taken: null,
-          systolic: null,
-          diastolic: null,
-          notes: 'DELETED',
-        },
-      });
+      await invoke('delete_bp', { logDate: selectedDate, readingNum });
       await loadBP();
     } catch (e) { console.error('Error deleting BP:', e); }
   }

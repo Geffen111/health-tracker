@@ -108,9 +108,7 @@
   }
 
   async function deleteDose(medId: number, time: string) {
-    await invoke('upsert_dose', {
-      dose: { medication_id: medId, log_date: today, time_taken: time, dose_amount: null, notes: 'DELETED' },
-    });
+    await invoke('delete_dose', { medicationId: medId, logDate: today, timeTaken: time });
     todayDoses = await invoke('get_doses_for_date', { date: today });
   }
 

@@ -11,7 +11,6 @@
   let workHours = $state(7.5);
   let workDays = $state<number[]>([1, 2, 3, 4, 5]);
 
-  let status = $state('full');
   let rosteredHours = $state(7.5);
   let sickLeaveHours = $state(0);
   let officeHours = $state(7.5);
@@ -48,9 +47,6 @@
         if (existing.wfh_hours != null) wfhHours = existing.wfh_hours;
       }
     } catch {}
-    if (sickLeaveHours > 0) status = 'sick';
-    else if ((officeHours + wfhHours) < rosteredHours) status = 'partial';
-    else status = 'full';
   }
 
   function prevDay() {
@@ -61,13 +57,6 @@
   function nextDay() {
     selectedDate = shiftISO(selectedDate, 1);
     loadDate(selectedDate);
-  }
-
-  function pickStatus(s: string) {
-    status = s;
-    if (s === 'sick') { sickLeaveHours = workHours; officeHours = 0; wfhHours = 0; }
-    else if (s === 'full') { sickLeaveHours = 0; officeHours = workHours; wfhHours = 0; }
-    else { sickLeaveHours = 0; }
   }
 
   async function save() {
@@ -133,15 +122,18 @@
     return src.reduce((sum: number, l: any) => sum + (l[field] ?? 0), 0);
   }
 
+  // Status is derived from the entered hours, not picked manually:
+  //   not rostered            → Day Off
+  //   rostered but worked none → Sick
+  //   worked less than rostered → Partial
+  //   worked the full roster    → Full
   function statusBadge(log: any): { label: string; cls: string } {
-    const sick = log.sick_leave_hours ?? 0;
-    const office = log.office_hours ?? 0;
-    const wfh = log.wfh_hours ?? 0;
-    const rostered = log.rostered_hours ?? workHours;
-    if (sick > 0) return { label: 'Sick', cls: 'sick' };
-    if (rostered <= 0 && office + wfh <= 0) return { label: 'Day Off', cls: 'off' };
-    if (office + wfh >= rostered) return { label: 'Full', cls: 'full' };
-    return { label: 'Partial', cls: 'partial' };
+    const worked = (log.office_hours ?? 0) + (log.wfh_hours ?? 0);
+    const rostered = log.rostered_hours ?? 0;
+    if (rostered <= 0) return { label: 'Day Off', cls: 'off' };
+    if (worked <= 0) return { label: 'Sick', cls: 'sick' };
+    if (worked < rostered) return { label: 'Partial', cls: 'partial' };
+    return { label: 'Full', cls: 'full' };
   }
 
   function fmt(val: number | null | undefined): string {
@@ -171,14 +163,7 @@
 <div class="two-col">
   <div class="entry-card">
     <div class="card-heading">Today's entry</div>
-    <div class="seg-field">
-      <label for="work-status">Status</label>
-      <div class="seg-control" id="work-status">
-        <button class="seg-btn" class:active={status === 'full'} onclick={() => pickStatus('full')}>Full</button>
-        <button class="seg-btn" class:active={status === 'partial'} onclick={() => pickStatus('partial')}>Partial</button>
-        <button class="seg-btn" class:active={status === 'sick'} onclick={() => pickStatus('sick')}>Sick</button>
-      </div>
-    </div>
+    <p class="entry-hint">Status is worked out automatically from the hours below.</p>
     <div class="field-grid">
       <div class="text-field">
         <label for="rostered">Rostered</label>
@@ -215,10 +200,6 @@
         <div class="worked-val">{workedToday}<span class="worked-unit"> h</span></div>
       </div>
       <button class="save-btn" onclick={save}>{saved ? '✓ Saved' : 'Save'}</button>
-    </div>
-    <div class="notes-hint">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--tm)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
-      <span>Daily notes now live on the Daily Log screen.</span>
     </div>
   </div>
 
@@ -282,11 +263,7 @@
   .entry-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:20px; }
   .card-heading { font-family:'Source Serif 4',serif; font-size:17px; font-weight:600; color:var(--tp); }
 
-  .seg-field { display:flex; flex-direction:column; gap:8px; }
-  .seg-field label { font-size:12px; font-weight:700; color:var(--ts); }
-  .seg-control { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:3px; gap:2px; }
-  .seg-btn { flex:1; background:transparent; border:none; border-radius:9px; padding:8px 6px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }
-  .seg-btn.active { background:var(--accent); color:#fff; }
+  .entry-hint { font-size:12px; color:var(--tm); line-height:1.5; margin-top:-6px; }
 
   .field-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   .text-field { display:flex; flex-direction:column; gap:7px; }
@@ -300,9 +277,6 @@
   .worked-val { font-family:'Source Serif 4',serif; font-size:24px; font-weight:600; color:var(--tp); font-variant-numeric:tabular-nums; }
   .worked-unit { font-size:13px; color:var(--tm); }
   .save-btn { background:var(--accent);color:#fff;border:none;border-radius:999px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer; }
-
-  .notes-hint { font-size:11.5px; color:var(--ts); line-height:1.5; display:flex; gap:8px; }
-  .notes-hint svg { flex-shrink:0; margin-top:1px; }
 
   .table-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
   .table-header { display:flex; justify-content:space-between; align-items:center; padding:18px 20px 14px; }
