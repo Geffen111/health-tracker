@@ -14,6 +14,13 @@
   let apiKeySaved = $state(false);
   let savingKey = $state(false);
 
+  let csvRoot = $state('G:\\My Drive');
+  let autoImport = $state(true);
+  let lastSync = $state<string | null>(null);
+  let syncing = $state(false);
+  let syncMsg = $state('');
+  let syncErr = $state(false);
+
   onMount(async () => {
     try {
       const count: any = await invoke('get_dashboard_summary');
@@ -25,7 +32,45 @@
       const k = await invoke<string | null>('get_api_key');
       if (k) { apiKey = k; apiKeySaved = true; }
     } catch {}
+    try {
+      const s: any = await invoke('get_sync_settings');
+      if (s?.csv_root) csvRoot = s.csv_root;
+      autoImport = s?.auto_import ?? true;
+      lastSync = s?.last_sync ?? null;
+    } catch {}
   });
+
+  async function saveSyncSettings() {
+    try {
+      await invoke('save_sync_settings', { csvRoot, autoImport });
+    } catch (e) { console.error('Error saving sync settings:', e); }
+  }
+
+  async function toggleAutoImport() {
+    autoImport = !autoImport;
+    await saveSyncSettings();
+  }
+
+  async function syncNow(full = false) {
+    syncing = true;
+    syncMsg = '';
+    syncErr = false;
+    try {
+      await saveSyncSettings();
+      const r: any = await invoke('import_health_csv', { root: csvRoot, full });
+      lastSync = r.last_sync;
+      syncMsg = `Synced ${r.days_updated} day${r.days_updated === 1 ? '' : 's'} from ${r.files_processed} file${r.files_processed === 1 ? '' : 's'} (${r.files_skipped} unchanged). Steps ${r.steps_days}, HR ${r.hr_days}, sleep ${r.sleep_days}, energy ${r.energy_days}.`;
+      if (r.errors && r.errors.length) {
+        syncErr = true;
+        syncMsg += ` · ${r.errors.length} issue(s): ${r.errors.slice(0, 3).join('; ')}`;
+      }
+    } catch (e) {
+      syncErr = true;
+      syncMsg = 'Sync failed: ' + e;
+    } finally {
+      syncing = false;
+    }
+  }
 
   async function saveApiKey() {
     savingKey = true;
@@ -96,21 +141,31 @@
   <div class="card">
     <div>
       <div class="card-heading">Watch &amp; health sync</div>
-      <div class="card-subtitle">Reads the Samsung Health CSV that Health Sync writes to Google Drive.</div>
+      <div class="card-subtitle">Reads the Samsung Health CSVs that Health Sync writes to Google Drive (steps, heart rate, sleep &amp; energy).</div>
     </div>
     <div class="text-field">
-      <label for="csv-path">Google Drive CSV folder</label>
-      <input id="csv-path" value="G:\Apps\HealthSync\exports" class="mono-input" />
+      <label for="csv-path">Google Drive root folder</label>
+      <input id="csv-path" bind:value={csvRoot} onchange={saveSyncSettings} class="mono-input" />
+      <span class="field-hint">Expects subfolders: Health Sync Steps / Heart rate / Sleep / Energy burned.</span>
     </div>
     <div class="toggle-card-row">
       <div>
         <div class="toggle-label">Auto-import on launch</div>
-        <div class="toggle-sub">Last synced 2h ago · steps, HR &amp; sleep</div>
+        <div class="toggle-sub">{lastSync ? `Last synced ${lastSync}` : 'Not synced yet'} · steps, HR, sleep &amp; energy</div>
       </div>
-      <button class="toggle" class:active={true} aria-label="Toggle auto-import">
+      <button class="toggle" class:active={autoImport} onclick={toggleAutoImport} aria-label="Toggle auto-import">
         <span class="toggle-knob"></span>
       </button>
     </div>
+    <div class="sync-actions">
+      <button class="run-import-btn" onclick={() => syncNow(false)} disabled={syncing}>
+        {syncing ? 'Syncing…' : 'Sync now'}
+      </button>
+      <button class="sync-full-btn" onclick={() => syncNow(true)} disabled={syncing}>Full re-sync</button>
+    </div>
+    {#if syncMsg}
+      <div class="export-msg" class:err={syncErr}>{syncMsg}</div>
+    {/if}
   </div>
 
   <div class="card row-card">
@@ -237,12 +292,18 @@
   .text-field { display:flex; flex-direction:column; gap:7px; }
   .text-field label { font-size:12px; font-weight:700; color:var(--ts); }
   .mono-input { width:100%; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:11px 13px; font-size:13px; color:var(--tp); font-family:'Public Sans',monospace; }
+  .field-hint { font-size:11.5px; color:var(--tm); }
+  .sync-actions { display:flex; gap:10px; }
+  .sync-full-btn { background:var(--card); color:var(--tp); border:1px solid var(--border); border-radius:999px; padding:11px 18px; font-size:13px; font-weight:700; cursor:pointer; }
+  .sync-full-btn:disabled, .run-import-btn:disabled { opacity:.6; cursor:not-allowed; }
 
   .toggle-card-row { display:flex; align-items:center; justify-content:space-between; }
   .toggle-label { font-size:13.5px; color:var(--tp); font-weight:600; }
   .toggle-sub { font-size:11.5px; color:var(--tm); }
-  .toggle { width:46px;height:26px;border-radius:999px;border:none;background:var(--accent);position:relative;cursor:pointer;flex-shrink:0;padding:0; }
-  .toggle-knob { position:absolute;top:3px;left:23px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2); }
+  .toggle { width:46px;height:26px;border-radius:999px;border:none;background:var(--border);position:relative;cursor:pointer;flex-shrink:0;padding:0;transition:background .15s; }
+  .toggle.active { background:var(--accent); }
+  .toggle-knob { position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .15s; }
+  .toggle.active .toggle-knob { left:23px; }
 
   .theme-seg { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; }
   .theme-seg-btn { display:inline-flex; align-items:center; gap:7px; background:transparent; border:none; border-radius:999px; padding:7px 15px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }

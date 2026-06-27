@@ -51,6 +51,9 @@ pub fn run() {
             commands::ask::ask_question,
             commands::insights::get_insights,
             commands::insights::refresh_insights,
+            commands::settings::get_sync_settings,
+            commands::settings::save_sync_settings,
+            commands::csv_import::import_health_csv,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

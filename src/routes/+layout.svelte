@@ -1,5 +1,7 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
 
   interface NavItem {
     href: string;
@@ -26,6 +28,16 @@
     darkMode = !darkMode;
     document.documentElement.classList.toggle('dark', darkMode);
   }
+
+  // Best-effort Health Sync auto-import on launch (silent; surfaced in Settings).
+  onMount(async () => {
+    try {
+      const s: any = await invoke('get_sync_settings');
+      if (s?.auto_import) {
+        await invoke('import_health_csv', { root: s.csv_root ?? null, full: false });
+      }
+    } catch {}
+  });
 
   let { children }: { children: import('svelte').Snippet } = $props();
 </script>
