@@ -15,6 +15,7 @@
     other_symptoms: '',
     my_sleep_rating: null,
     phone_sleep_rating: null,
+    sleep_avg: null,
     notes: '',
     steps: null,
     alcohol_std_drinks: null,
@@ -34,6 +35,10 @@
 
   async function save() {
     log.log_date = selectedDate;
+    // Sleep Score Avg = mean of my rating and the Samsung score; if only one is
+    // present, use that. Stored so the dashboard and PEM model read one field.
+    const m = log.my_sleep_rating, p = log.phone_sleep_rating;
+    log.sleep_avg = (m != null && p != null) ? (m + p) / 2 : (m ?? p ?? null);
     await invoke('upsert_daily_log', { log });
     saved = true;
     setTimeout(() => saved = false, 2000);
@@ -164,6 +169,14 @@
           <input type="range" id="sleep-rating" min="0" max="10" step="0.5" bind:value={log.my_sleep_rating} class="slider-input" />
         </div>
         <div class="watch-hint">Watch detail on the Sleep screen</div>
+      </div>
+
+      <div class="text-field">
+        <label for="samsung-sleep">Samsung sleep score <span class="label-hint">· manual</span></label>
+        <div class="input-unit">
+          <input id="samsung-sleep" type="number" min="0" max="10" step="0.1" bind:value={log.phone_sleep_rating} placeholder="—" />
+          <span class="unit-label">/ 10</span>
+        </div>
       </div>
 
       <div class="text-field">

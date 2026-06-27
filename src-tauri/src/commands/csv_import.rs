@@ -87,8 +87,14 @@ pub async fn import_health_csv(
             Ok((h, recs)) => match agg_steps(&h, &recs) {
                 Ok(m) => {
                     files_processed += 1;
+                    // Daily totals, not increments — overlapping files (e.g. a
+                    // monthly range plus a single-day export) report the same
+                    // day, so take the max rather than summing.
                     for (d, n) in m {
-                        *steps.entry(d).or_insert(0) += n;
+                        let e = steps.entry(d).or_insert(0);
+                        if n > *e {
+                            *e = n;
+                        }
                     }
                 }
                 Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
@@ -212,14 +218,29 @@ pub async fn import_health_csv(
 
 // ── Pure per-metric aggregation (unit-tested) ──
 
-/// SUM step counts per day.
+/// Steps per day. Samsung Health writes one daily-total row per day at 00:00:00
+/// (its official count, source `com.sec.android.app.shealth`); Health Connect
+/// adds per-interval rows. Summing both double-counts, so prefer the daily total
+/// and fall back to summing the granular rows on days with no midnight total.
 fn agg_steps(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, i64>, &'static str> {
     let di = col(headers, "Date").ok_or("missing Date column")?;
     let si = col(headers, "Steps").ok_or("missing Steps column")?;
-    let mut out: HashMap<String, i64> = HashMap::new();
+    let mut snap: HashMap<String, i64> = HashMap::new();
+    let mut gran: HashMap<String, i64> = HashMap::new();
     for r in records {
-        if let (Some(date), Some(n)) = (r.get(di).and_then(date_part), r.get(si).and_then(parse_i64)) {
-            *out.entry(date).or_insert(0) += n;
+        let cell = match r.get(di) { Some(c) => c, None => continue };
+        let date = match date_part(cell) { Some(d) => d, None => continue };
+        let n = match r.get(si).and_then(parse_i64) { Some(v) => v, None => continue };
+        if cell.split_whitespace().nth(1) == Some("00:00:00") {
+            *snap.entry(date).or_insert(0) += n;
+        } else {
+            *gran.entry(date).or_insert(0) += n;
+        }
+    }
+    let mut out: HashMap<String, i64> = gran;
+    for (d, v) in snap {
+        if v > 0 {
+            out.insert(d, v); // the daily total supersedes the granular sum
         }
     }
     Ok(out)
@@ -441,16 +462,27 @@ mod tests {
     }
 
     #[test]
-    fn steps_sum_all_rows_for_the_day() {
+    fn steps_use_daily_total_not_sum() {
+        let h = rec(&["Date", "Time", "Steps", "Source"]);
+        let recs = vec![
+            rec(&["2026.06.26 00:00:00", "00:00:00", "6705", "com.sec.android.app.shealth"]),
+            rec(&["2026.06.26 06:41:09", "06:41:09", "6", "android"]),
+            rec(&["2026.06.26 06:41:21", "06:41:21", "8", "android"]),
+        ];
+        let m = agg_steps(&h, &recs).unwrap();
+        // The 00:00:00 daily total wins; the granular rows are not added on top.
+        assert_eq!(m.get("2026-06-26"), Some(&6705));
+    }
+
+    #[test]
+    fn steps_fall_back_to_granular_without_midnight_total() {
         let h = rec(&["Date", "Time", "Steps"]);
         let recs = vec![
-            rec(&["2026.06.26 00:00:00", "00:00:00", "6705"]),
             rec(&["2026.06.26 06:41:09", "06:41:09", "6"]),
             rec(&["2026.06.26 06:41:21", "06:41:21", "8"]),
         ];
         let m = agg_steps(&h, &recs).unwrap();
-        // Current behaviour: the 00:00:00 row is included in the SUM.
-        assert_eq!(m.get("2026-06-26"), Some(&6719));
+        assert_eq!(m.get("2026-06-26"), Some(&14));
     }
 
     #[test]

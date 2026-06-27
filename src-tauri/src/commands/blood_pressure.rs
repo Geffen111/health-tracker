@@ -1,6 +1,37 @@
 use crate::models::BloodPressure;
+use serde::Serialize;
 use sqlx::SqlitePool;
 use tauri::State;
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct BpDailyAvg {
+    pub log_date: String,
+    pub avg_systolic: Option<f64>,
+    pub avg_diastolic: Option<f64>,
+}
+
+/// Daily-averaged blood pressure over the last `days` days, oldest first —
+/// feeds the Cardio history chart.
+#[tauri::command]
+pub async fn get_bp_history(
+    pool: State<'_, SqlitePool>,
+    days: i64,
+) -> Result<Vec<BpDailyAvg>, String> {
+    sqlx::query_as::<_, BpDailyAvg>(
+        "SELECT log_date, \
+                AVG(systolic) AS avg_systolic, \
+                AVG(diastolic) AS avg_diastolic \
+         FROM blood_pressure \
+         WHERE systolic IS NOT NULL AND diastolic IS NOT NULL \
+           AND log_date >= date('now', ?) \
+         GROUP BY log_date \
+         ORDER BY log_date",
+    )
+    .bind(format!("-{} days", days))
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())
+}
 
 #[tauri::command]
 pub async fn get_bp_for_date(

@@ -30,7 +30,7 @@ pub async fn get_dashboard_summary(pool: State<'_, SqlitePool>) -> Result<Dashbo
     let avg_fatigue: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(fatigue_rating) FROM daily_logs WHERE fatigue_rating IS NOT NULL")
         .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
 
-    let avg_sleep: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(sleep_avg) FROM daily_logs WHERE sleep_avg IS NOT NULL")
+    let avg_sleep: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating)) FROM daily_logs WHERE COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating) IS NOT NULL")
         .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
 
     let avg_steps: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(steps) FROM daily_logs WHERE steps IS NOT NULL")
@@ -45,10 +45,10 @@ pub async fn get_dashboard_summary(pool: State<'_, SqlitePool>) -> Result<Dashbo
     let f30: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(fatigue_rating) FROM daily_logs WHERE fatigue_rating IS NOT NULL AND log_date >= date('now', '-30 days')")
         .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
 
-    let s7: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(sleep_avg) FROM daily_logs WHERE sleep_avg IS NOT NULL AND log_date >= date('now', '-7 days')")
+    let s7: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating)) FROM daily_logs WHERE COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating) IS NOT NULL AND log_date >= date('now', '-7 days')")
         .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
 
-    let s30: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(sleep_avg) FROM daily_logs WHERE sleep_avg IS NOT NULL AND log_date >= date('now', '-30 days')")
+    let s30: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating)) FROM daily_logs WHERE COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating) IS NOT NULL AND log_date >= date('now', '-30 days')")
         .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
 
     let st7: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(steps) FROM daily_logs WHERE steps IS NOT NULL AND log_date >= date('now', '-7 days')")

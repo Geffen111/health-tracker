@@ -10,12 +10,12 @@
   let logs = $state<any[]>([]);
   let loading = $state(true);
   let rangeDays = $state(14);
-  let metricA = $state('fatigue');
-  let metricB = $state('steps');
+  let metricA = $state<string | null>('fatigue');
+  let metricB = $state<string | null>('steps');
 
   const METRICS: Record<string, { label: string; field: string; color: string; format: (v: number) => string }> = {
     fatigue: { label: 'Fatigue', field: 'fatigue_rating', color: 'var(--accent)', format: (v) => v.toFixed(1) },
-    sleep: { label: 'Sleep', field: 'sleep_avg', color: 'var(--accent)', format: (v) => v.toFixed(1) },
+    sleep: { label: 'Sleep score', field: 'sleep_avg', color: 'var(--accent)', format: (v) => v.toFixed(1) },
     steps: { label: 'Steps', field: 'steps', color: 'var(--peri)', format: (v) => Math.round(v).toLocaleString() },
     restingHr: { label: 'Resting HR', field: 'ave_resting_hr', color: 'var(--amber)', format: (v) => v.toFixed(0) },
     headache: { label: 'Headache', field: 'headache_rating', color: 'var(--red)', format: (v) => v.toFixed(1) },
@@ -27,12 +27,12 @@
       const [s, log, preds] = await Promise.all([
         invoke<any>('get_dashboard_summary'),
         invoke<any>('get_daily_log', { date: todayISO() }),
-        invoke<any[]>('get_pem_predictions', { limit: 14 }),
+        invoke<any[]>('get_pem_predictions', { limit: 60 }),
       ]);
       summary = s;
       todayLog = log;
       predictions = preds;
-      logs = await invoke<any[]>('list_daily_logs', { limit: 30, offset: 0 });
+      logs = await invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 });
     } catch (e) {
       console.error('Dashboard error:', e);
     } finally {
@@ -40,8 +40,18 @@
     }
   });
 
+  // Sleep Score Avg = mean of my rating + Samsung score (fallback to whichever
+  // exists). Historical rows already store this in sleep_avg.
+  function sleepScore(log: any): number | null {
+    if (!log) return null;
+    if (log.sleep_avg != null) return log.sleep_avg;
+    const m = log.my_sleep_rating, p = log.phone_sleep_rating;
+    if (m != null && p != null) return (m + p) / 2;
+    return m ?? p ?? null;
+  }
+
   let fatigue = $derived(todayLog?.fatigue_rating ?? null);
-  let sleep = $derived(todayLog?.sleep_avg ?? null);
+  let sleep = $derived(sleepScore(todayLog));
   let steps = $derived(todayLog?.steps ?? null);
   let restingHr = $derived(todayLog?.ave_resting_hr ?? null);
   let riskBand = $derived(summary?.current_risk_band ?? null);
@@ -96,18 +106,56 @@
       const p = predictions.find((x: any) => x.log_date === log.log_date);
       return p?.predicted_pem_risk ?? null;
     }
+    if (field === 'sleep_avg') return sleepScore(log);
     return log[field] ?? null;
+  }
+
+  // Clicking a selected signal turns it off; otherwise it fills the first free
+  // slot (A = left axis, B = right axis), replacing the secondary if both full.
+  function toggleMetric(key: string) {
+    if (metricA === key) { metricA = null; return; }
+    if (metricB === key) { metricB = null; return; }
+    if (metricA == null) { metricA = key; return; }
+    if (metricB == null) { metricB = key; return; }
+    metricB = key;
   }
 
   let chartLogs = $derived([...logs].reverse().slice(-rangeDays));
   let chartLabels = $derived(chartLogs.map((l: any) => formatDate(l.log_date)));
-  let chartMetricA = $derived(METRICS[metricA]);
-  let chartMetricB = $derived(METRICS[metricB]);
-  let chartDataA = $derived(chartLogs.map((l: any) => fieldVal(l, chartMetricA.field)));
-  let chartDataB = $derived(chartLogs.map((l: any) => fieldVal(l, chartMetricB.field)));
+  let chartMetricA = $derived(metricA ? METRICS[metricA] : null);
+  let chartMetricB = $derived(metricB ? METRICS[metricB] : null);
+
+  let compareDatasets = $derived([
+    ...(chartMetricA ? [{
+      label: chartMetricA.label,
+      data: chartLogs.map((l: any) => fieldVal(l, chartMetricA!.field)),
+      borderColor: chartMetricA.color,
+      backgroundColor: chartMetricA.color,
+      yAxisID: 'y',
+    }] : []),
+    ...(chartMetricB ? [{
+      label: chartMetricB.label,
+      data: chartLogs.map((l: any) => fieldVal(l, chartMetricB!.field)),
+      borderColor: chartMetricB.color,
+      backgroundColor: chartMetricB.color,
+      yAxisID: 'y1',
+    }] : []),
+  ]);
+
+  let compareOptions = $derived({
+    elements: { point: { radius: 2, hoverRadius: 5 } },
+    spanGaps: true,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      y: { type: 'linear', position: 'left', beginAtZero: true, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      ...(chartMetricB ? { y1: { type: 'linear', position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { color: 'var(--ts)', font: { size: 11 } } } } : {}),
+      x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
+    },
+    plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
+  });
 
   let sleepLogs = $derived([...logs].reverse().slice(-14));
-  let sleepChartData = $derived(sleepLogs.map((l: any) => l.sleep_avg ?? null));
+  let sleepChartData = $derived(sleepLogs.map((l: any) => sleepScore(l)));
 </script>
 
 <div class="page-header">
@@ -151,7 +199,7 @@
             <span class="risk-tag">↑ Fatigue {fatigue}/10</span>
           {/if}
           {#if sleep != null && sleep < 7}
-            <span class="risk-tag">↓ Sleep {sleep.toFixed(1)}h</span>
+            <span class="risk-tag">↓ Sleep {sleep.toFixed(1)}/10</span>
           {/if}
         </div>
       </div>
@@ -164,8 +212,8 @@
           <div class="mini-value">{fatigue != null ? fatigue.toFixed(1) : '—'}<span class="mini-unit"> /10</span></div>
         </div>
         <div class="mini-inset">
-          <div class="mini-label">Sleep</div>
-          <div class="mini-value">{sleep != null ? sleep.toFixed(1) : '—'}<span class="mini-unit"> h</span></div>
+          <div class="mini-label">{todayLog?.phone_sleep_rating != null ? 'Sleep score' : 'My sleep score'}</div>
+          <div class="mini-value">{sleep != null ? sleep.toFixed(1) : '—'}<span class="mini-unit"> /10</span></div>
         </div>
       </div>
       <div class="mini-card">
@@ -188,47 +236,32 @@
         <div class="card-subtitle">See how any two measures move together</div>
       </div>
       <div class="range-toggle">
-        <button class="range-btn" class:active={rangeDays === 7} onclick={() => rangeDays = 7}>7D</button>
         <button class="range-btn" class:active={rangeDays === 14} onclick={() => rangeDays = 14}>14D</button>
         <button class="range-btn" class:active={rangeDays === 30} onclick={() => rangeDays = 30}>30D</button>
+        <button class="range-btn" class:active={rangeDays === 60} onclick={() => rangeDays = 60}>60D</button>
       </div>
     </div>
     <div class="metric-picker-row">
       {#each Object.entries(METRICS) as [key, m]}
-        <button class="metric-pill" class:accent={metricA === key} class:peri={metricB === key} onclick={() => { metricA === key ? {} : metricA === metricB ? metricB = key : metricA = key; }}>
+        <button class="metric-pill" class:accent={metricA === key} class:peri={metricB === key} onclick={() => toggleMetric(key)}>
           <span class="pill-dot" style="background:{m.color};"></span>
           {m.label}
+          {#if metricA === key}<span class="pill-axis">L</span>{:else if metricB === key}<span class="pill-axis">R</span>{/if}
         </button>
       {/each}
     </div>
     <div style="height:200px;">
-      <Chart
-        type="line"
-        labels={chartLabels}
-        datasets={[
-          {
-            label: chartMetricA.label,
-            data: chartDataA.filter((v): v is number => v != null),
-            borderColor: chartMetricA.color,
-            backgroundColor: chartMetricA.color,
-          },
-          {
-            label: chartMetricB.label,
-            data: chartDataB.filter((v): v is number => v != null),
-            borderColor: chartMetricB.color,
-            backgroundColor: chartMetricB.color,
-          },
-        ]}
-        options={{
-          elements: { point: { radius: 2, hoverRadius: 5 } },
-          scales: {
-            y: { beginAtZero: true, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
-            x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
-          },
-          plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
-        }}
-        chartArea="200px"
-      />
+      {#if compareDatasets.length === 0}
+        <div class="compare-empty">Pick a signal above to plot.</div>
+      {:else}
+        <Chart
+          type="line"
+          labels={chartLabels}
+          datasets={compareDatasets}
+          options={compareOptions}
+          chartArea="200px"
+        />
+      {/if}
     </div>
   </div>
 
@@ -246,8 +279,8 @@
     </div>
     <div class="stat-card">
       <div class="stat-card-header">
-        <span class="stat-label">Sleep · 14 nights</span>
-        <span class="stat-avg">avg {summary.sleep_last_30d?.toFixed(1) ?? '—'}h</span>
+        <span class="stat-label">Sleep score · 14 nights</span>
+        <span class="stat-avg">avg {summary.sleep_last_30d?.toFixed(1) ?? '—'}/10</span>
       </div>
       <div style="height:50px;">
         <Chart
@@ -542,6 +575,23 @@
   }
   .metric-pill.accent .pill-dot { background: var(--accent); }
 .metric-pill.peri .pill-dot { background: var(--peri); }
+  .pill-axis {
+    font-size: 9.5px;
+    font-weight: 800;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: var(--card);
+    border: 1px solid currentColor;
+  }
+  .compare-empty {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--tm);
+    font-size: 13px;
+  }
 
   .bottom-row {
     display: flex;

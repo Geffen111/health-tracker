@@ -99,7 +99,9 @@ pub async fn get_pem_predictions(
 pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<PemPrediction, String> {
     // ── 1. Fetch daily log ──
     let log: Option<PemDailyLog> = sqlx::query_as(
-        "SELECT fatigue_rating, sleep_avg, steps, activity_calories, \
+        "SELECT fatigue_rating, \
+         COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating) AS sleep_avg, \
+         steps, activity_calories, \
          office_hours, wfh_hours, rostered_hours \
          FROM daily_logs WHERE log_date = ?"
     )

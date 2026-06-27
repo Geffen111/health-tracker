@@ -10,9 +10,11 @@
   let loading = $state(true);
   let currentLog = $state<any>(null);
 
+  let rangeDays = $state(30);
+
   onMount(async () => {
     try {
-      logs = await invoke('list_daily_logs', { limit: 30, offset: 0 });
+      logs = await invoke('list_daily_logs', { limit: 60, offset: 0 });
     } catch (e) {
       console.error('Error loading sleep data:', e);
     } finally {
@@ -24,28 +26,54 @@
     currentLog = logs.find((l: any) => l.log_date === selectedDate) || null;
   });
 
-  let trendLogs = $derived([...logs].reverse());
+  // Oldest first, limited to the selected range.
+  let trendLogs = $derived([...logs].reverse().slice(-rangeDays));
 
   function prevDay() { selectedDate = shiftISO(selectedDate, -1); }
   function nextDay() { selectedDate = shiftISO(selectedDate, 1); }
 
-  let selectedMetric = $state('asleep');
+  let selectedMetric = $state('score');
 
   function pickMetric(k: string) { selectedMetric = k; }
 
+  // Sleep Score Avg = mean of my rating + Samsung score (fallback to whichever
+  // exists). Historical rows already store this in sleep_avg.
+  function sleepScore(l: any): number | null {
+    if (!l) return null;
+    if (l.sleep_avg != null) return l.sleep_avg;
+    const m = l.my_sleep_rating, p = l.phone_sleep_rating;
+    if (m != null && p != null) return (m + p) / 2;
+    return m ?? p ?? null;
+  }
+
+  // The '__score__' sentinel is computed, not a raw column.
+  function fieldOf(l: any, field: string): number | null {
+    if (!l) return null;
+    if (field === '__score__') return sleepScore(l);
+    return l[field] ?? null;
+  }
+
   let metricConfig: Record<string, { label: string; unit: string; field: string; color: string }> = {
-    asleep: { label: 'Time asleep', unit: 'h', field: 'sleep_actual_asleep', color: 'var(--accent)' },
+    score: { label: 'Sleep score', unit: '/10', field: '__score__', color: 'var(--accent)' },
+    inbed: { label: 'In bed', unit: 'h', field: 'sleep_time_head_on_pillow', color: 'var(--accent-fg)' },
+    asleep: { label: 'Asleep', unit: 'h', field: 'sleep_actual_asleep', color: '#A6CEC4' },
     rem: { label: 'REM', unit: 'h', field: 'sleep_rem', color: 'var(--peri)' },
     deep: { label: 'Deep', unit: 'h', field: 'sleep_deep', color: '#3F726A' },
     awake: { label: 'Awake', unit: 'h', field: 'sleep_awake', color: 'var(--amber)' },
-    rating: { label: 'Rating', unit: '/10', field: 'sleep_avg', color: 'var(--accent)' },
+    my: { label: 'My rating', unit: '/10', field: 'my_sleep_rating', color: 'var(--accent)' },
+    samsung: { label: 'Samsung', unit: '/10', field: 'phone_sleep_rating', color: 'var(--amber-fg)' },
   };
 
+  // Headline = Sleep Score Avg. Total time in bed = Samsung "head on pillow"
+  // (asleep + awake); fall back to the asleep figure for un-synced days.
+  let scoreVal = $derived(sleepScore(currentLog));
+  let timeInBed = $derived(currentLog ? (currentLog.sleep_time_head_on_pillow ?? currentLog.sleep_actual_asleep ?? null) : null);
+
   let curMetric = $derived(metricConfig[selectedMetric]);
-  let curLastVal = $derived(currentLog ? (currentLog[curMetric.field] ?? null) : null);
-  let trendValues = $derived(trendLogs.map((l: any) => l[curMetric.field] ?? null).filter((v: number | null): v is number => v != null));
+  let curLastVal = $derived(fieldOf(currentLog, curMetric.field));
+  let trendValues = $derived(trendLogs.map((l: any) => fieldOf(l, curMetric.field)).filter((v: number | null): v is number => v != null));
   let curAvgVal = $derived(trendValues.length > 0 ? (trendValues.reduce((a: number, b: number) => a + b, 0) / trendValues.length) : null);
-  let curLastFmt = $derived(curMetric.unit === 'h' && curLastVal != null ? curLastVal.toFixed(1) : curLastVal != null ? curLastVal.toFixed(1) : '—');
+  let curLastFmt = $derived(curLastVal != null ? curLastVal.toFixed(1) : '—');
 
   function barWidth(val: number | null, field: string): number {
     if (val == null || !currentLog) return 0;
@@ -55,7 +83,7 @@
   }
 
   let chartLabels = $derived(trendLogs.map((l: any) => formatDateShort(l.log_date)));
-  let chartData = $derived(trendLogs.map((l: any) => l[curMetric.field] ?? null));
+  let chartData = $derived(trendLogs.map((l: any) => fieldOf(l, curMetric.field)));
 </script>
 
 <div class="page-header">
@@ -85,9 +113,9 @@
 {:else}
   <div class="last-night-card">
     <div class="last-night-left">
-      <div class="section-label">Last night</div>
-      <div class="big-hours">{currentLog.sleep_actual_asleep != null ? currentLog.sleep_actual_asleep.toFixed(1) : '—'}<span class="big-unit"> h</span></div>
-      <div class="last-night-sub">asleep · rating {currentLog.my_sleep_rating ?? '—'}/10</div>
+      <div class="section-label">Last night · sleep score</div>
+      <div class="big-hours">{scoreVal != null ? scoreVal.toFixed(1) : '—'}<span class="big-unit"> /10</span></div>
+      <div class="last-night-sub">{timeInBed != null ? timeInBed.toFixed(1) : '—'}h in bed · {currentLog.sleep_actual_asleep != null ? currentLog.sleep_actual_asleep.toFixed(1) : '—'}h asleep</div>
     </div>
     <div class="last-night-right">
       <div class="stage-bar">
@@ -126,21 +154,39 @@
       <div class="tile-value">{currentLog.sleep_awake != null ? currentLog.sleep_awake.toFixed(1) : '—'}<span class="tile-unit"> h</span></div>
       <div class="tile-sub">{currentLog.sleep_awake != null && currentLog.sleep_awake > 0 ? 'Brief wakes' : 'None'}</div>
     </div>
+    <div class="tile">
+      <div class="tile-label">My score</div>
+      <div class="tile-value">{currentLog.my_sleep_rating != null ? currentLog.my_sleep_rating.toFixed(1) : '—'}<span class="tile-unit"> /10</span></div>
+      <div class="tile-sub">from daily log</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Samsung score</div>
+      <div class="tile-value">{currentLog.phone_sleep_rating != null ? currentLog.phone_sleep_rating.toFixed(1) : '—'}<span class="tile-unit"> /10</span></div>
+      <div class="tile-sub">{currentLog.phone_sleep_rating != null ? 'from daily log' : 'not entered'}</div>
+    </div>
   </div>
 {/if}
 
 <div class="trend-card">
   <div class="trend-header">
     <div>
-      <div class="card-title">30-day trend</div>
+      <div class="card-title">{rangeDays}-day trend</div>
       <div class="card-subtitle">Choose what to plot</div>
+      <div class="seg-range">
+        <button class="metric-btn" class:active={rangeDays === 14} onclick={() => rangeDays = 14}>14D</button>
+        <button class="metric-btn" class:active={rangeDays === 30} onclick={() => rangeDays = 30}>30D</button>
+        <button class="metric-btn" class:active={rangeDays === 60} onclick={() => rangeDays = 60}>60D</button>
+      </div>
     </div>
     <div class="metric-toggle">
+      <button class="metric-btn" class:active={selectedMetric === 'score'} onclick={() => pickMetric('score')}>Score</button>
+      <button class="metric-btn" class:active={selectedMetric === 'inbed'} onclick={() => pickMetric('inbed')}>In bed</button>
       <button class="metric-btn" class:active={selectedMetric === 'asleep'} onclick={() => pickMetric('asleep')}>Asleep</button>
       <button class="metric-btn" class:active={selectedMetric === 'rem'} onclick={() => pickMetric('rem')}>REM</button>
       <button class="metric-btn" class:active={selectedMetric === 'deep'} onclick={() => pickMetric('deep')}>Deep</button>
       <button class="metric-btn" class:active={selectedMetric === 'awake'} onclick={() => pickMetric('awake')}>Awake</button>
-      <button class="metric-btn" class:active={selectedMetric === 'rating'} onclick={() => pickMetric('rating')}>Rating</button>
+      <button class="metric-btn" class:active={selectedMetric === 'my'} onclick={() => pickMetric('my')}>My rating</button>
+      <button class="metric-btn" class:active={selectedMetric === 'samsung'} onclick={() => pickMetric('samsung')}>Samsung</button>
     </div>
   </div>
   <div class="trend-headline">
@@ -148,7 +194,7 @@
       <div class="trend-metric-label">{curMetric.label} · last night</div>
       <div class="trend-metric-value">{curLastFmt}<span class="trend-unit"> {curMetric.unit}</span></div>
     </div>
-    <div class="trend-avg">30-day average <strong>{curAvgVal != null ? (curMetric.unit === '/10' ? curAvgVal.toFixed(1) : curAvgVal.toFixed(1)) : '—'} {curMetric.unit}</strong></div>
+    <div class="trend-avg">{rangeDays}-day average <strong>{curAvgVal != null ? curAvgVal.toFixed(1) : '—'} {curMetric.unit}</strong></div>
   </div>
   <div style="height:200px;">
     <Chart
@@ -207,7 +253,7 @@
   .stage-legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:var(--ts); }
   .legend-swatch { display:inline-block; width:10px; height:10px; border-radius:3px; vertical-align:middle; margin-right:6px; }
 
-  .stat-tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:16px; }
+  .stat-tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:16px; }
   .tile { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:16px 18px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px; }
   .tile-label { font-size:10px; letter-spacing:.06em; text-transform:uppercase; font-weight:800; color:var(--ts); }
   .tile-value { font-family:'Source Serif 4',serif; font-size:24px; font-weight:600; color:var(--tp); }
@@ -218,7 +264,8 @@
   .trend-header { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap; }
   .card-title { font-family:'Source Serif 4',serif; font-size:18px; font-weight:600; color:var(--tp); }
   .card-subtitle { font-size:12.5px; color:var(--ts); margin-top:2px; }
-  .metric-toggle { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; }
+  .seg-range { display:inline-flex; margin-top:10px; background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; }
+  .metric-toggle { display:flex; flex-wrap:wrap; background:var(--inset); border:1px solid var(--border); border-radius:16px; padding:3px; gap:2px; }
   .metric-btn { background:transparent; border:none; border-radius:999px; padding:6px 14px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; color:var(--ts); font-family:inherit; }
   .metric-btn.active { background:var(--accent); color:#fff; }
 

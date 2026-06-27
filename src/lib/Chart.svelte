@@ -5,7 +5,7 @@
 
   let { type = 'line', datasets, labels, options = {}, chartArea = '' } = $props<{
     type?: string;
-    datasets: { label: string; data: number[]; borderColor?: string; backgroundColor?: string; yAxisID?: string }[];
+    datasets: { label: string; data: (number | null)[]; borderColor?: string; backgroundColor?: string; yAxisID?: string }[];
     labels: string[];
     options?: Record<string, any>;
     chartArea?: string;

@@ -94,7 +94,9 @@
   let workedToday = $derived((officeHours + wfhHours).toFixed(1));
 
   function getWeekStart(dateStr: string): string {
-    return shiftISO(dateStr, -weekdayIndex(dateStr));
+    // Week starts on Monday: Mon→0 … Sun→6.
+    const mondayOffset = (weekdayIndex(dateStr) + 6) % 7;
+    return shiftISO(dateStr, -mondayOffset);
   }
 
   let weekGroups = $derived.by(() => {
@@ -222,8 +224,8 @@
 
   <div class="table-card">
     <div class="table-header">
-      <span class="card-heading">Monthly view</span>
-      <span class="table-byweek">by week</span>
+      <span class="card-heading">Weekly view</span>
+      <span class="table-byweek">Mon–Sun</span>
     </div>
     <div class="table-grid header-row">
       <span>Date</span><span>Status</span><span style="text-align:right;">Rost.</span><span style="text-align:right;">Office</span><span style="text-align:right;">WFH</span><span style="text-align:right;">Sick</span>

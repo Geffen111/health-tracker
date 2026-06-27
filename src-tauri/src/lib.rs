@@ -37,6 +37,7 @@ pub fn run() {
             commands::watch_calibration::delete_watch_calibration,
             commands::watch_calibration::days_since_calibration,
             commands::blood_pressure::get_bp_for_date,
+            commands::blood_pressure::get_bp_history,
             commands::blood_pressure::upsert_bp,
             commands::activity::list_activity_categories,
             commands::activity::list_activity_types,

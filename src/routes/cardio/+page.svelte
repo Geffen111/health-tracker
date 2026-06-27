@@ -1,7 +1,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
+  import { formatDateLong, formatDateShort, todayISO, shiftISO } from '$lib/formatDate';
+  import Chart from '$lib/Chart.svelte';
 
   let today = $state(todayISO());
   let nowTime = new Date().toTimeString().slice(0, 5);
@@ -18,10 +19,56 @@
   let nSys = $state('');
   let nDia = $state('');
 
+  // History chart: a couplet selector + range toggle. Each couplet's two series
+  // sit on a left and right y-axis so differing scales read clearly.
+  let histDays = $state(30);
+  let histMetric = $state<'bp' | 'minmax' | 'avg'>('bp');
+  let histLogs = $state<any[]>([]);   // daily_logs (HR fields), oldest first
+  let bpHistory = $state<any[]>([]);  // daily-averaged BP, oldest first
+
+  const HIST: Record<string, { label: string; src: 'bp' | 'hr'; unit: string; a: { key: string; label: string; color: string }; b: { key: string; label: string; color: string } }> = {
+    bp: { label: 'Blood pressure', src: 'bp', unit: 'mmHg', a: { key: 'avg_systolic', label: 'Systolic', color: 'var(--red)' }, b: { key: 'avg_diastolic', label: 'Diastolic', color: 'var(--peri)' } },
+    minmax: { label: 'Min / Max HR', src: 'hr', unit: 'bpm', a: { key: 'hr_min', label: 'Min HR', color: 'var(--peri)' }, b: { key: 'hr_max', label: 'Max HR', color: 'var(--red)' } },
+    avg: { label: 'Avg / Resting HR', src: 'hr', unit: 'bpm', a: { key: 'ave_hr', label: 'Avg HR', color: 'var(--accent)' }, b: { key: 'ave_resting_hr', label: 'Resting HR', color: 'var(--amber)' } },
+  };
+
+  let histCfg = $derived(HIST[histMetric]);
+  let histRows = $derived.by(() => {
+    const src = histCfg.src === 'bp' ? bpHistory : histLogs;
+    const sorted = [...src].sort((a, b) => a.log_date.localeCompare(b.log_date));
+    return sorted.slice(-histDays);
+  });
+  let histLabels = $derived(histRows.map((r: any) => formatDateShort(r.log_date)));
+  let histDatasets = $derived([
+    { label: histCfg.a.label, data: histRows.map((r: any) => r[histCfg.a.key] ?? null), borderColor: histCfg.a.color, backgroundColor: histCfg.a.color, yAxisID: 'y' },
+    { label: histCfg.b.label, data: histRows.map((r: any) => r[histCfg.b.key] ?? null), borderColor: histCfg.b.color, backgroundColor: histCfg.b.color, yAxisID: 'y1' },
+  ]);
+  let histOptions = $derived({
+    elements: { point: { radius: 2, hoverRadius: 5 } },
+    spanGaps: true,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      y: { type: 'linear', position: 'left', grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
+    },
+    plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
+  });
+  let histHasData = $derived(histDatasets.some((d) => d.data.some((v) => v != null)));
+
   onMount(() => { loadAll(); });
 
   async function loadAll() {
-    await Promise.all([loadBP(), loadDailyLog(), loadCal()]);
+    await Promise.all([loadBP(), loadDailyLog(), loadCal(), loadHistory()]);
+  }
+
+  async function loadHistory() {
+    try {
+      [histLogs, bpHistory] = await Promise.all([
+        invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 }),
+        invoke<any[]>('get_bp_history', { days: 60 }),
+      ]);
+    } catch (e) { console.error('Error loading cardio history:', e); }
   }
 
   async function loadBP() {
@@ -206,6 +253,34 @@
   </div>
 </div>
 
+<div class="hist-card">
+  <div class="hist-header">
+    <div>
+      <div class="card-heading">History</div>
+      <div class="card-subtitle">{histCfg.label} · {histDays} days</div>
+    </div>
+    <div class="hist-controls">
+      <div class="seg">
+        <button class="seg-btn" class:active={histMetric === 'bp'} onclick={() => histMetric = 'bp'}>BP</button>
+        <button class="seg-btn" class:active={histMetric === 'minmax'} onclick={() => histMetric = 'minmax'}>Min/Max HR</button>
+        <button class="seg-btn" class:active={histMetric === 'avg'} onclick={() => histMetric = 'avg'}>Avg/Resting</button>
+      </div>
+      <div class="seg">
+        <button class="seg-btn" class:active={histDays === 14} onclick={() => histDays = 14}>14D</button>
+        <button class="seg-btn" class:active={histDays === 30} onclick={() => histDays = 30}>30D</button>
+        <button class="seg-btn" class:active={histDays === 60} onclick={() => histDays = 60}>60D</button>
+      </div>
+    </div>
+  </div>
+  <div style="height:240px;">
+    {#if histHasData}
+      <Chart type="line" labels={histLabels} datasets={histDatasets} options={histOptions} chartArea="240px" />
+    {:else}
+      <div class="hist-empty">No {histCfg.label.toLowerCase()} data in this range.</div>
+    {/if}
+  </div>
+</div>
+
 <div class="cal-card">
   <div class="cal-icon">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg>
@@ -225,7 +300,6 @@
     </div>
   </div>
   <div class="cal-right">
-    <span class="cal-badge" style="color:{overdue ? 'var(--amber-fg)' : 'var(--accent-fg)'};background:{overdue ? 'var(--amber-soft)' : 'var(--accent-soft)'};">{overdue ? 'Recalibration due' : 'On track'}</span>
     <div class="cal-entry">
       <input type="date" bind:value={calDate} max={today} class="cal-input" aria-label="Calibration date" />
       <input type="time" bind:value={calTime} class="cal-input" aria-label="Calibration time" />
@@ -295,8 +369,15 @@
   .cal-bar-track { height:7px; border-radius:999px; background:var(--inset); overflow:hidden; margin-top:11px; max-width:320px; }
   .cal-bar-fill { height:100%; border-radius:999px; }
   .cal-right { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
-  .cal-badge { font-size:11.5px; font-weight:700; padding:4px 11px; border-radius:999px; }
   .cal-due { color:var(--tm); }
+
+  .hist-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:20px 22px; box-shadow:var(--shadow); margin-bottom:16px; display:flex; flex-direction:column; gap:16px; }
+  .hist-header { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap; }
+  .hist-controls { display:flex; gap:8px; flex-wrap:wrap; }
+  .seg { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; }
+  .seg-btn { background:transparent; border:none; color:var(--ts); border-radius:999px; padding:6px 12px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; white-space:nowrap; }
+  .seg-btn.active { background:var(--accent); color:#fff; }
+  .hist-empty { height:100%; display:flex; align-items:center; justify-content:center; color:var(--tm); font-size:13px; }
   .cal-entry { display:flex; align-items:center; gap:8px; }
   .cal-input { background:var(--inset); border:1px solid var(--border); border-radius:9px; padding:8px 10px; font-size:12.5px; color:var(--tp); font-variant-numeric:tabular-nums; }
   .cal-btn { display:inline-flex; align-items:center; gap:7px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; }
