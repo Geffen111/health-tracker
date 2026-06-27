@@ -183,23 +183,6 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-heading">Supplements</div>
-      <div class="toggle-row">
-        <span>Multivitamin</span>
-        <button class="toggle" class:active={log.multivitamin} onclick={() => log.multivitamin = !log.multivitamin} aria-label="Toggle multivitamin">
-          <span class="toggle-knob"></span>
-        </button>
-      </div>
-      <div class="toggle-divider"></div>
-      <div class="toggle-row">
-        <span>Vitamin C</span>
-        <button class="toggle" class:active={log.vitamin_c} onclick={() => log.vitamin_c = !log.vitamin_c} aria-label="Toggle vitamin C">
-          <span class="toggle-knob"></span>
-        </button>
-      </div>
-    </div>
-
     <div class="save-row">
       {#if saved}
         <span class="save-status">
@@ -261,14 +244,6 @@
   .chip-input:focus { outline:none; color:var(--tp); border-color:var(--accent); }
 
   .notes-area { width:100%; min-height:104px; resize:vertical; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:12px 13px; font-size:13.5px; color:var(--tp); line-height:1.55; }
-
-  .toggle-row { display:flex; align-items:center; justify-content:space-between; }
-  .toggle-row span { font-size:13.5px; color:var(--tp); }
-  .toggle { width:46px; height:26px; border-radius:999px; border:none; background:var(--inset); border:1px solid var(--border); position:relative; cursor:pointer; padding:0; flex-shrink:0; }
-  .toggle.active { background:var(--accent); border-color:var(--accent); }
-  .toggle-knob { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:var(--card); box-shadow:0 1px 3px rgba(0,0,0,.12); transition:left .15s; }
-  .toggle.active .toggle-knob { left:22px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); }
-  .toggle-divider { height:1px; background:var(--border); }
 
   .save-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .save-status { font-size:12px; color:var(--tm); display:flex; align-items:center; gap:6px; }

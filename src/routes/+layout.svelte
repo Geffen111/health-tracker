@@ -4,6 +4,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Toast from '$lib/components/Toast.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { theme, initTheme, toggleTheme } from '$lib/stores/theme.svelte';
 
   // Update check: this build is stamped with its git commit (vite define); CI
@@ -52,9 +53,17 @@
     { href: '/settings', label: 'Settings', svg: '<path d="M4 8h16M4 16h16"/><circle cx="14" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/>' },
   ];
 
+  // Collapsed (icons-only) sidebar, remembered across launches.
+  let collapsed = $state(false);
+  function toggleCollapse() {
+    collapsed = !collapsed;
+    localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
+  }
+
   // Best-effort Health Sync auto-import on launch (silent; surfaced in Settings).
   onMount(async () => {
     initTheme();
+    collapsed = localStorage.getItem('sidebarCollapsed') === '1';
     try {
       const s: any = await invoke('get_sync_settings');
       if (s?.auto_import) {
@@ -74,7 +83,7 @@
 </svelte:head>
 
 <div class="app-layout" class:dark={theme.dark}>
-  <aside class="sidebar">
+  <aside class="sidebar" class:collapsed>
     <div class="sidebar-brand">
       <div class="brand-icon">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2-6 3.5 12 2.5-6H21"/></svg>
@@ -88,12 +97,24 @@
         {/if}
       </button>
     </div>
+
+    <button
+      class="collapse-btn"
+      onclick={toggleCollapse}
+      aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      <span class="collapse-label">Collapse</span>
+    </button>
+
     <nav class="sidebar-nav">
       {#each navItems as item}
         <a
           href={item.href}
           class="nav-item"
           class:active={$page.url.pathname === item.href}
+          title={item.label}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             {@html item.svg}
@@ -102,12 +123,24 @@
         </a>
       {/each}
     </nav>
-    {#if updateAvailable}
-      <button class="update-banner" onclick={openLatestRelease}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>
-        <span>Update available</span>
-      </button>
-    {/if}
+    <div class="sidebar-footer">
+      {#if updateAvailable}
+        <button class="update-banner" onclick={openLatestRelease}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>
+          <span>Update available</span>
+        </button>
+      {/if}
+
+      <div class="profile-badge">
+        <span class="profile-avatar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2-6 3.5 12 2.5-6H21"/></svg>
+        </span>
+        <div class="profile-text">
+          <span class="profile-name">My Health</span>
+          <span class="profile-sub">Personal log</span>
+        </div>
+      </div>
+    </div>
   </aside>
   <main class="main-content">
     {@render children()}
@@ -115,6 +148,7 @@
 </div>
 
 <Toast />
+<ConfirmDialog />
 
 <style>
   :global(*) {
@@ -180,7 +214,64 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
+    transition: width 0.18s ease, min-width 0.18s ease, padding 0.18s ease;
   }
+  .sidebar.collapsed {
+    width: 66px;
+    padding: 22px 10px;
+  }
+
+  .collapse-btn {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--tm);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .collapse-btn:hover {
+    background: var(--accent-soft);
+    color: var(--accent-fg);
+  }
+  .collapse-btn svg {
+    flex-shrink: 0;
+    transition: transform 0.18s ease;
+  }
+  .collapsed .collapse-btn {
+    justify-content: center;
+    padding: 8px;
+  }
+  .collapsed .collapse-btn svg {
+    transform: rotate(180deg);
+  }
+
+  /* Collapsed (icons-only) state: hide text, centre the icons. */
+  .collapsed .sidebar-brand {
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 0 18px;
+  }
+  .collapsed .brand-text,
+  .collapsed .collapse-label,
+  .collapsed .nav-label,
+  .collapsed .profile-text {
+    display: none;
+  }
+  .collapsed .theme-toggle { margin-left: 0; }
+  .collapsed .nav-item { justify-content: center; padding: 10px; }
+  .collapsed .profile-badge { justify-content: center; padding: 11px 8px; }
+  .collapsed .update-banner { justify-content: center; padding: 10px 8px; }
+  .collapsed .update-banner span { display: none; }
 
   .sidebar-brand {
     display: flex;
@@ -260,11 +351,16 @@
     font-weight: 700;
   }
 
+  .sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
   .update-banner {
     display: flex;
     align-items: center;
     gap: 9px;
-    margin-top: 8px;
     padding: 10px 12px;
     border-radius: 11px;
     border: 1px solid var(--accent-soft);
@@ -278,6 +374,42 @@
     width: 100%;
   }
   .update-banner:hover { filter: brightness(0.97); }
+
+  .profile-badge {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px;
+    border-radius: 13px;
+    background: var(--accent-soft);
+  }
+  .profile-avatar {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .profile-avatar svg { width: 18px; height: 18px; }
+  .profile-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+    min-width: 0;
+  }
+  .profile-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--tp);
+  }
+  .profile-sub {
+    font-size: 11px;
+    color: var(--ts);
+  }
 
   .main-content {
     flex: 1;

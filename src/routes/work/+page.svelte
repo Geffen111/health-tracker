@@ -112,8 +112,20 @@
       currentGroup.push(log);
     }
     if (currentGroup.length > 0) groups.push({ weekStart: currentWeek, logs: currentGroup });
+    // Most recent week first; days within a week most recent first too.
+    groups.reverse();
+    for (const g of groups) g.logs.reverse();
     return groups;
   });
+
+  // Collapsible weeks: the most recent (index 0) defaults open, the rest closed.
+  let openWeeks = $state<Record<string, boolean>>({});
+  function isWeekOpen(weekStart: string, index: number): boolean {
+    return weekStart in openWeeks ? openWeeks[weekStart] : index === 0;
+  }
+  function toggleWeek(weekStart: string, index: number) {
+    openWeeks[weekStart] = !isWeekOpen(weekStart, index);
+  }
 
   function totalHours(field: string, src: any[]): number {
     return src.reduce((sum: number, l: any) => sum + (l[field] ?? 0), 0);
@@ -125,6 +137,7 @@
     const wfh = log.wfh_hours ?? 0;
     const rostered = log.rostered_hours ?? workHours;
     if (sick > 0) return { label: 'Sick', cls: 'sick' };
+    if (rostered <= 0 && office + wfh <= 0) return { label: 'Day Off', cls: 'off' };
     if (office + wfh >= rostered) return { label: 'Full', cls: 'full' };
     return { label: 'Partial', cls: 'partial' };
   }
@@ -215,26 +228,33 @@
     <div class="table-grid header-row">
       <span>Date</span><span>Status</span><span style="text-align:right;">Rost.</span><span style="text-align:right;">Office</span><span style="text-align:right;">WFH</span><span style="text-align:right;">Sick</span>
     </div>
-    {#each weekGroups as group}
-      <div class="week-label">Week of {formatDate(group.weekStart)}</div>
-      {#each group.logs as log}
-        {@const sb = statusBadge(log)}
-        <div class="table-grid data-row">
-          <span>{formatDate(log.log_date)}</span>
-          <span><span class="status-pill {sb.cls}">{sb.label}</span></span>
-          <span style="text-align:right;">{fmt(log.rostered_hours)}</span>
-          <span style="text-align:right;">{fmt(log.office_hours)}</span>
-          <span style="text-align:right;">{fmt(log.wfh_hours)}</span>
-          <span style="text-align:right;color:var(--tm);">{fmt(log.sick_leave_hours)}</span>
+    {#each weekGroups as group, i}
+      {@const open = isWeekOpen(group.weekStart, i)}
+      <button class="week-label" class:open onclick={() => toggleWeek(group.weekStart, i)}>
+        <svg class="week-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        <span>Week of {formatDate(group.weekStart)}</span>
+        <span class="week-label-summary">{group.logs.length} day{group.logs.length !== 1 ? 's' : ''} · {fmt(totalHours('office_hours', group.logs) + totalHours('wfh_hours', group.logs))} h</span>
+      </button>
+      {#if open}
+        {#each group.logs as log}
+          {@const sb = statusBadge(log)}
+          <div class="table-grid data-row">
+            <span>{formatDate(log.log_date)}</span>
+            <span><span class="status-pill {sb.cls}">{sb.label}</span></span>
+            <span style="text-align:right;">{fmt(log.rostered_hours)}</span>
+            <span style="text-align:right;">{fmt(log.office_hours)}</span>
+            <span style="text-align:right;">{fmt(log.wfh_hours)}</span>
+            <span style="text-align:right;color:var(--tm);">{fmt(log.sick_leave_hours)}</span>
+          </div>
+        {/each}
+        <div class="table-grid data-row week-total">
+          <span>Week total</span><span></span>
+          <span style="text-align:right;">{fmt(totalHours('rostered_hours', group.logs))}</span>
+          <span style="text-align:right;">{fmt(totalHours('office_hours', group.logs))}</span>
+          <span style="text-align:right;">{fmt(totalHours('wfh_hours', group.logs))}</span>
+          <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', group.logs))}</span>
         </div>
-      {/each}
-      <div class="table-grid data-row week-total">
-        <span>Week total</span><span></span>
-        <span style="text-align:right;">{fmt(totalHours('rostered_hours', group.logs))}</span>
-        <span style="text-align:right;">{fmt(totalHours('office_hours', group.logs))}</span>
-        <span style="text-align:right;">{fmt(totalHours('wfh_hours', group.logs))}</span>
-        <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', group.logs))}</span>
-      </div>
+      {/if}
     {/each}
     <div class="table-grid data-row month-total">
       <span style="font-family:'Source Serif 4',serif;">Month to date</span><span></span>
@@ -291,11 +311,16 @@
   .data-row { font-size:12.5px; color:var(--tp); border-top:1px solid var(--border); }
   .data-row span { white-space:nowrap; }
 
-  .week-label { padding:12px 20px 6px; font-size:10.5px; font-weight:800; color:var(--tm); letter-spacing:.04em; }
+  .week-label { display:flex; align-items:center; gap:8px; width:100%; padding:11px 20px; font-size:10.5px; font-weight:800; color:var(--tm); letter-spacing:.04em; text-transform:uppercase; background:transparent; border:none; border-top:1px solid var(--border); cursor:pointer; font-family:inherit; text-align:left; }
+  .week-label:hover { background:var(--inset); color:var(--ts); }
+  .week-chevron { flex-shrink:0; transition:transform .15s; }
+  .week-label.open .week-chevron { transform:rotate(90deg); }
+  .week-label-summary { margin-left:auto; font-weight:700; color:var(--tm); letter-spacing:0; text-transform:none; font-variant-numeric:tabular-nums; }
   .status-pill { font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; }
   .status-pill.full { color:var(--accent-fg);background:var(--accent-soft); }
   .status-pill.partial { color:var(--amber-fg);background:var(--amber-soft); }
   .status-pill.sick { color:var(--red-fg);background:var(--red-soft); }
+  .status-pill.off { color:var(--tm);background:var(--inset); }
 
   .week-total { font-size:12px; font-weight:700; color:var(--ts); background:var(--inset); border-top:1px solid var(--border); }
   .month-total { font-size:13px; font-weight:800; color:var(--tp); border-top:2px solid var(--border); }

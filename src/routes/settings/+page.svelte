@@ -215,10 +215,21 @@
       <div class="card-heading">Watch &amp; health sync</div>
       <div class="card-subtitle">Reads the Samsung Health CSVs that Health Sync writes to Google Drive (steps, heart rate, sleep &amp; energy).</div>
     </div>
+    <div class="expects-box">
+      <div class="expects-title">How this works</div>
+      <ol class="expects-list">
+        <li>The <strong>Health Sync</strong> app (Android) exports Samsung Health data to Google Drive.</li>
+        <li><strong>Google Drive for Desktop</strong> mirrors those files to a local drive on this PC — there's no cloud login here, it just reads the synced folder.</li>
+        <li>Point the root below at that mirrored Drive folder. It must contain these four sub-folders (exact names):
+          <span class="expects-folders">Health Sync Steps · Health Sync Heart rate · Health Sync Sleep · Health Sync Energy burned</span>
+        </li>
+      </ol>
+      <div class="expects-note">Manually-entered values are never overwritten. A missing folder is skipped silently. Use <strong>Full re-sync</strong> the first time, then spot-check a day or two against Samsung Health.</div>
+    </div>
     <div class="text-field">
       <label for="csv-path">Google Drive root folder</label>
       <input id="csv-path" bind:value={csvRoot} onchange={saveSyncSettings} class="mono-input" />
-      <span class="field-hint">Expects subfolders: Health Sync Steps / Heart rate / Sleep / Energy burned.</span>
+      <span class="field-hint">e.g. <code>G:\My Drive</code> — wherever Drive for Desktop mounts. Set this if your Drive uses a different letter or path.</span>
     </div>
     <div class="toggle-card-row">
       <div>
@@ -422,6 +433,16 @@
   .text-field label { font-size:12px; font-weight:700; color:var(--ts); }
   .mono-input { width:100%; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:11px 13px; font-size:13px; color:var(--tp); font-family:'Public Sans',monospace; }
   .field-hint { font-size:11.5px; color:var(--tm); }
+  .field-hint code { background:var(--inset); border:1px solid var(--border); border-radius:5px; padding:1px 5px; font-size:11px; }
+
+  .expects-box { background:var(--inset); border:1px solid var(--border); border-radius:13px; padding:14px 16px; display:flex; flex-direction:column; gap:9px; }
+  .expects-title { font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:800; color:var(--ts); }
+  .expects-list { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:7px; }
+  .expects-list li { font-size:12.5px; color:var(--ts); line-height:1.5; }
+  .expects-list strong { color:var(--tp); font-weight:700; }
+  .expects-folders { display:block; margin-top:5px; font-size:11.5px; color:var(--accent-fg); background:var(--accent-soft); border:1px solid var(--border); border-radius:8px; padding:6px 9px; }
+  .expects-note { font-size:11.5px; color:var(--tm); line-height:1.5; }
+  .expects-note strong { color:var(--ts); font-weight:700; }
   .field-label { font-size:12px; font-weight:700; color:var(--ts); }
   .hours-row { display:flex; align-items:center; gap:10px; }
   .hours-input { width:96px; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:11px 13px; font-size:13.5px; color:var(--tp); text-align:center; font-variant-numeric:tabular-nums; }

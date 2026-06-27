@@ -3,12 +3,16 @@
   import { onMount } from 'svelte';
   import { formatDate, todayISO } from '$lib/formatDate';
   import { showToast } from '$lib/stores/toast.svelte';
+  import { confirmAction } from '$lib/stores/confirm.svelte';
 
   let medications = $state<any[]>([]);
   let schedule = $state<any[]>([]);            // all schedule items, flat
   let history = $state<any[]>([]);
   let todayDoses = $state<any[]>([]);
   let loading = $state(true);
+
+  // Supplements (stored on the daily log) — toggled here, above today's doses.
+  let supplements = $state({ multivitamin: false, vitamin_c: false });
 
   let today = $state(todayISO());
 
@@ -33,26 +37,42 @@
 
   async function loadAll() {
     try {
-      const [meds, sched, hist, doses] = await Promise.all([
+      const [meds, sched, hist, doses, dlog] = await Promise.all([
         invoke<any[]>('list_medications'),
         invoke<any[]>('get_medication_schedule', { medicationId: null }),
         invoke<any[]>('get_medication_history', { medicationId: null }),
         invoke<any[]>('get_doses_for_date', { date: today }),
+        invoke<any>('get_daily_log', { date: today }),
       ]);
       medications = meds;
       schedule = sched;
       history = hist;
       todayDoses = doses;
+      supplements.multivitamin = !!dlog?.multivitamin;
+      supplements.vitamin_c = !!dlog?.vitamin_c;
     } catch (e) {
       console.error('Error loading meds:', e);
     }
   }
 
+  async function toggleSupplement(key: 'multivitamin' | 'vitamin_c') {
+    supplements[key] = !supplements[key];
+    await invoke('upsert_daily_log', {
+      log: {
+        log_date: today,
+        multivitamin: supplements.multivitamin,
+        vitamin_c: supplements.vitamin_c,
+      },
+    });
+  }
+
   function isOccasional(m: any): boolean {
     return m.med_type === 'occasional' || m.category === 'PRN';
   }
-  let regularMeds = $derived(medications.filter((m) => !isOccasional(m)));
-  let occasionalMeds = $derived(medications.filter((m) => isOccasional(m)));
+  // Ceased meds drop off the regular/occasional lists into their own section.
+  let regularMeds = $derived(medications.filter((m) => !isOccasional(m) && m.active));
+  let occasionalMeds = $derived(medications.filter((m) => isOccasional(m) && m.active));
+  let ceasedMeds = $derived(medications.filter((m) => !m.active));
 
   function slotsFor(medId: number): any[] {
     return schedule.filter((s) => s.medication_id === medId).sort((a, b) => a.sort_order - b.sort_order);
@@ -143,7 +163,12 @@
   }
 
   async function removeMed(med: any) {
-    if (!confirm(`Delete ${med.name} and all its doses? This cannot be undone.`)) return;
+    const ok = await confirmAction({
+      title: `Delete ${med.name}?`,
+      message: 'This removes the medication and all its logged doses. This cannot be undone.',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     await invoke('delete_medication', { id: med.id });
     await loadAll();
     showToast(`${med.name} deleted`);
@@ -165,7 +190,12 @@
     showToast('History updated');
   }
   async function deleteHist(id: number) {
-    if (!confirm('Delete this history entry?')) return;
+    const ok = await confirmAction({
+      title: 'Delete history entry?',
+      message: 'This removes this started/ceased record from the medication history.',
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     await invoke('delete_medication_history', { id });
     history = await invoke('get_medication_history', { medicationId: null });
   }
@@ -223,6 +253,7 @@
         </div>
       </div>
       <button class="save-med-btn" onclick={addMedication}>Save</button>
+      <button class="cancel-med-btn" onclick={() => { showAddMed = false; nm = { name: '', dose: '', unit: 'mg', time: '', type: 'regular' }; }}>Cancel</button>
     </div>
   </div>
 {/if}
@@ -232,7 +263,8 @@
 {:else}
   <div class="med-layout">
     <div class="med-list-card">
-      {#each [{ label: 'Regular', meds: regularMeds, dot: 'accent' }, { label: 'Occasional', meds: occasionalMeds, dot: 'peri' }] as section}
+      {#each [{ label: 'Regular', meds: regularMeds, dot: 'accent' }, { label: 'Occasional', meds: occasionalMeds, dot: 'peri' }, { label: 'Ceased', meds: ceasedMeds, dot: 'muted' }] as section}
+        {#if section.label !== 'Ceased' || section.meds.length > 0}
         <div class="section-divider">{section.label}</div>
         {#if section.meds.length === 0}
           <div class="section-empty">No {section.label.toLowerCase()} medications.</div>
@@ -253,12 +285,27 @@
             </div>
           {:else}
             <div class="med-row" class:dimmed={!med.active}>
-              <span class="med-dot {section.dot}"></span>
-              <div class="med-info">
-                <div class="med-name">{med.name}</div>
-                <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
+              <div class="med-top">
+                <span class="med-dot {section.dot}"></span>
+                <div class="med-info">
+                  <div class="med-name">{med.name}</div>
+                  <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
+                </div>
+                {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
+                <button class="icon-btn" onclick={() => startEdit(med)} aria-label="Edit">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                </button>
+                <button class="icon-btn" onclick={() => toggleActive(med)} aria-label={med.active ? 'Cease' : 'Restart'} title={med.active ? 'Cease' : 'Restart'}>
+                  {#if med.active}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                  {:else}
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8Z"/></svg>
+                  {/if}
+                </button>
+                <button class="icon-btn danger" onclick={() => removeMed(med)} aria-label="Delete">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+                </button>
               </div>
-              {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
               {#if med.active}
                 <div class="dose-buttons">
                   {#each slotsFor(med.id) as slot}
@@ -272,19 +319,6 @@
                   </button>
                 </div>
               {/if}
-              <button class="icon-btn" onclick={() => startEdit(med)} aria-label="Edit">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-              </button>
-              <button class="icon-btn" onclick={() => toggleActive(med)} aria-label={med.active ? 'Cease' : 'Restart'} title={med.active ? 'Cease' : 'Restart'}>
-                {#if med.active}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
-                {:else}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8Z"/></svg>
-                {/if}
-              </button>
-              <button class="icon-btn danger" onclick={() => removeMed(med)} aria-label="Delete">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
-              </button>
             </div>
             {#if openId === med.id}
               <div class="dose-inline">
@@ -299,10 +333,27 @@
             {/if}
           {/if}
         {/each}
+        {/if}
       {/each}
     </div>
 
     <div class="right-col">
+      <div class="supplements-card">
+        <div class="card-heading" style="margin-bottom:12px;">Supplements</div>
+        <div class="toggle-row">
+          <span>Multivitamin</span>
+          <button class="toggle" class:active={supplements.multivitamin} onclick={() => toggleSupplement('multivitamin')} aria-label="Toggle multivitamin">
+            <span class="toggle-knob"></span>
+          </button>
+        </div>
+        <div class="toggle-divider"></div>
+        <div class="toggle-row">
+          <span>Vitamin C</span>
+          <button class="toggle" class:active={supplements.vitamin_c} onclick={() => toggleSupplement('vitamin_c')} aria-label="Toggle vitamin C">
+            <span class="toggle-knob"></span>
+          </button>
+        </div>
+      </div>
       <div class="doses-card">
         <div class="doses-header">
           <span class="card-heading">Today's doses</span>
@@ -389,6 +440,8 @@
   .seg-btn { background:transparent; border:none; border-radius:9px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }
   .seg-btn.active { background:var(--accent); color:#fff; }
   .save-med-btn { background:var(--accent);color:#fff;border:none;border-radius:999px;padding:11px 18px;font-size:13px;font-weight:700;cursor:pointer; }
+  .cancel-med-btn { background:var(--inset);color:var(--ts);border:1px solid var(--border);border-radius:999px;padding:11px 18px;font-size:13px;font-weight:700;cursor:pointer; }
+  .cancel-med-btn:hover { background:var(--border); }
 
   .loading-text { color:var(--ts); text-align:center; padding:32px; }
   .empty-text { color:var(--ts); font-size:13px; padding:16px 0; }
@@ -399,17 +452,19 @@
   .section-divider:first-child { border-top:none; }
   .section-empty { font-size:12.5px; color:var(--tm); padding:4px 18px 12px; }
 
-  .med-row { display:flex; align-items:center; gap:10px; padding:12px 18px; border-top:1px solid var(--border); }
-  .med-row.dimmed { opacity:.55; }
+  .med-row { display:flex; flex-direction:column; gap:9px; padding:12px 18px; border-top:1px solid var(--border); }
+  .med-row.dimmed { opacity:.6; }
+  .med-top { display:flex; align-items:center; gap:10px; }
   .med-dot { width:9px;height:9px;border-radius:50%;flex-shrink:0; }
   .med-dot.accent { background:var(--accent); }
   .med-dot.peri { background:var(--peri); }
+  .med-dot.muted { background:var(--tm); }
   .med-info { flex:1; min-width:0; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); }
   .med-detail { font-size:11.5px; color:var(--tm); }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
 
-  .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-start; padding-left:19px; }
   .slot-btn { background:var(--accent-soft); color:var(--accent-fg); border:1px solid var(--border); border-radius:999px; padding:6px 11px; font-size:11.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
   .add-dose-btn { display:inline-flex;align-items:center;gap:4px;background:var(--inset);color:var(--ts);border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap; }
   .icon-btn { width:28px;height:28px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0; }
@@ -429,6 +484,14 @@
   .dose-cancel { background:transparent;border:none;color:var(--ts);font-size:12px;font-weight:600;cursor:pointer; }
 
   .right-col { display:flex; flex-direction:column; gap:16px; }
+  .supplements-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); padding:18px 20px; }
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; }
+  .toggle-row span { font-size:13.5px; color:var(--tp); }
+  .toggle { width:46px; height:26px; border-radius:999px; background:var(--inset); border:1px solid var(--border); position:relative; cursor:pointer; padding:0; flex-shrink:0; }
+  .toggle.active { background:var(--accent); border-color:var(--accent); }
+  .toggle-knob { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:var(--card); box-shadow:0 1px 3px rgba(0,0,0,.12); transition:left .15s; }
+  .toggle.active .toggle-knob { left:22px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); }
+  .toggle-divider { height:1px; background:var(--border); margin:12px 0; }
   .doses-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
   .doses-header { display:flex; justify-content:space-between; align-items:center; padding:16px 18px 12px; }
   .doses-date { font-size:11.5px; color:var(--tm); }
