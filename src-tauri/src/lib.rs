@@ -46,6 +46,11 @@ pub fn run() {
             commands::import_xlsx::import_spreadsheet,
             commands::export::export_csv,
             commands::export::export_json,
+            commands::settings::save_api_key,
+            commands::settings::get_api_key,
+            commands::ask::ask_question,
+            commands::insights::get_insights,
+            commands::insights::refresh_insights,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

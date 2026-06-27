@@ -10,6 +10,10 @@
   let importing = $state(false);
   let lastImportInfo = $state('');
 
+  let apiKey = $state('');
+  let apiKeySaved = $state(false);
+  let savingKey = $state(false);
+
   onMount(async () => {
     try {
       const count: any = await invoke('get_dashboard_summary');
@@ -17,7 +21,23 @@
         lastImportInfo = `${count.date_count} days, ${count.headache_days_30d} with headaches, ${count.crash_count_30d} crashes.`;
       }
     } catch {}
+    try {
+      const k = await invoke<string | null>('get_api_key');
+      if (k) { apiKey = k; apiKeySaved = true; }
+    } catch {}
   });
+
+  async function saveApiKey() {
+    savingKey = true;
+    try {
+      await invoke('save_api_key', { key: apiKey.trim() });
+      apiKeySaved = true;
+    } catch (e) {
+      console.error('Error saving API key:', e);
+    } finally {
+      savingKey = false;
+    }
+  }
 
   function setTheme(isDark: boolean) {
     darkMode = isDark;
@@ -130,6 +150,25 @@
     {/if}
   </div>
 
+  <div class="card">
+    <div>
+      <div class="card-heading">AI assistant</div>
+      <div class="card-subtitle">OpenRouter API key for the <a href="/ask" class="inline-link">Ask</a> page &amp; AI insights. Stored locally with your data.</div>
+    </div>
+    <div class="text-field">
+      <label for="api-key">OpenRouter API key</label>
+      <div class="key-row">
+        <input id="api-key" type="password" bind:value={apiKey} placeholder="sk-or-..." class="mono-input" oninput={() => apiKeySaved = false} />
+        <button class="key-save-btn" onclick={saveApiKey} disabled={savingKey || !apiKey.trim()}>
+          {savingKey ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {#if apiKeySaved}
+        <span class="key-status">Key saved · the Ask page is ready to use.</span>
+      {/if}
+    </div>
+  </div>
+
   <div class="card row-card">
     <div>
       <div class="card-heading">PEM calibration</div>
@@ -218,6 +257,11 @@
   .export-msg.err { color:var(--red-fg); background:var(--red-soft); }
 
   .nav-link { display:inline-flex;align-items:center;gap:7px;background:var(--card);color:var(--tp);border:1px solid var(--border);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;text-decoration:none;white-space:nowrap; }
+  .inline-link { color:var(--accent-fg); font-weight:700; text-decoration:none; }
+  .key-row { display:flex; gap:10px; }
+  .key-save-btn { background:var(--accent); color:#fff; border:none; border-radius:12px; padding:0 18px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .key-save-btn:disabled { opacity:.6; cursor:not-allowed; }
+  .key-status { font-size:12px; color:var(--accent-fg); }
 
   .collapsible-card { background:var(--card);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);overflow:hidden; }
   .collapsible-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:20px 22px; background:transparent; border:none; cursor:pointer; text-align:left; }

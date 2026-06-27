@@ -137,3 +137,39 @@ pub struct PemCalibration {
 }
 
 // PemPrediction is defined in commands/pem.rs
+
+// ── AI: Ask & Insights ──
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AskResponse {
+    /// Plain-English answer for the user.
+    pub answer: String,
+    /// The read-only SQL the model generated and we executed ("the working").
+    pub sql: String,
+    /// What the query computes, in one line.
+    pub explanation: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    /// True if more rows existed than we returned.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthInsights {
+    pub summary: String,
+    pub patterns: Vec<InsightItem>,
+    pub anomalies: Vec<InsightItem>,
+    pub recommendations: Vec<InsightItem>,
+    #[serde(default)]
+    pub period_label: String,
+    #[serde(default)]
+    pub generated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InsightItem {
+    pub title: String,
+    pub detail: String,
+    pub severity: String,
+    pub icon: String,
+}

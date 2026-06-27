@@ -7,3 +7,7 @@ pub mod dashboard;
 pub mod import_xlsx;
 pub mod watch_calibration;
 pub mod export;
+pub mod ai;
+pub mod settings;
+pub mod ask;
+pub mod insights;
