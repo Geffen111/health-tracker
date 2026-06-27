@@ -28,18 +28,20 @@ pub async fn init_db() -> SqlitePool {
     pool
 }
 
-fn get_db_path() -> PathBuf {
-    // Windows OneDrive path (auto-syncs across devices)
+/// The directory holding the database (and other app data such as exports).
+/// Windows OneDrive path when available (auto-syncs across devices); otherwise
+/// the standard local data directory.
+pub fn get_data_dir() -> PathBuf {
     if let Ok(onedrive) = std::env::var("OneDrive") {
-        PathBuf::from(onedrive)
-            .join("Apps")
-            .join("HealthTracker")
-            .join("health.db")
+        PathBuf::from(onedrive).join("Apps").join("HealthTracker")
     } else {
         // Fallback: standard local data directory
         dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("health-tracker")
-            .join("health.db")
     }
+}
+
+fn get_db_path() -> PathBuf {
+    get_data_dir().join("health.db")
 }

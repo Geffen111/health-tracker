@@ -24,6 +24,25 @@
     document.documentElement.classList.toggle('dark', isDark);
   }
 
+  let exporting = $state<'' | 'csv' | 'json'>('');
+  let exportMsg = $state('');
+  let exportErr = $state(false);
+
+  async function runExport(kind: 'csv' | 'json') {
+    exporting = kind;
+    exportMsg = '';
+    exportErr = false;
+    try {
+      const path = await invoke<string>(kind === 'csv' ? 'export_csv' : 'export_json');
+      exportMsg = `Exported to ${path}`;
+    } catch (e) {
+      exportErr = true;
+      exportMsg = 'Export failed: ' + e;
+    } finally {
+      exporting = '';
+    }
+  }
+
   async function runImport() {
     importing = true;
     importResult = '';
@@ -97,15 +116,18 @@
       <div class="card-subtitle">Download every log for backup or analysis.</div>
     </div>
     <div class="export-btns">
-      <button class="export-btn primary">
+      <button class="export-btn primary" onclick={() => runExport('csv')} disabled={exporting !== ''}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 4 5-4M5 20h14"/></svg>
-        Export CSV
+        {exporting === 'csv' ? 'Exporting…' : 'Export CSV'}
       </button>
-      <button class="export-btn secondary">
+      <button class="export-btn secondary" onclick={() => runExport('json')} disabled={exporting !== ''}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 4 5-4M5 20h14"/></svg>
-        Export JSON
+        {exporting === 'json' ? 'Exporting…' : 'Export JSON'}
       </button>
     </div>
+    {#if exportMsg}
+      <div class="export-msg" class:err={exportErr}>{exportMsg}</div>
+    {/if}
   </div>
 
   <div class="card row-card">
@@ -191,6 +213,9 @@
   .export-btn { display:inline-flex;align-items:center;gap:8px;border:none;border-radius:999px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit; }
   .export-btn.primary { background:var(--accent); color:#fff; }
   .export-btn.secondary { background:var(--card); color:var(--tp); border:1px solid var(--border); }
+  .export-btn:disabled { opacity:.6; cursor:not-allowed; }
+  .export-msg { font-size:12px; color:var(--accent-fg); background:var(--accent-soft); border:1px solid var(--border); border-radius:10px; padding:10px 12px; word-break:break-all; font-family:'Public Sans',monospace; }
+  .export-msg.err { color:var(--red-fg); background:var(--red-soft); }
 
   .nav-link { display:inline-flex;align-items:center;gap:7px;background:var(--card);color:var(--tp);border:1px solid var(--border);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;text-decoration:none;white-space:nowrap; }
 
