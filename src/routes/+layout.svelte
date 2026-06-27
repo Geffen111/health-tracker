@@ -8,9 +8,9 @@
 
   // Update check: this build is stamped with its git commit (vite define); CI
   // publishes a build-info.json carrying the latest commit to the rolling
-  // `latest` GitHub release. If they differ, surface a banner that opens the
-  // releases page. Repo must be public for the unauthenticated fetch to work.
-  // Adjust these if the GitHub repo is named differently.
+  // `latest` GitHub release. The marker is fetched in Rust (latest_build_commit)
+  // because the release-asset host sends no CORS header, so a webview fetch is
+  // blocked. If the commits differ, surface a banner that opens the releases page.
   const GH_OWNER = 'Geffen111';
   const GH_REPO = 'health-tracker';
   let updateAvailable = $state(false);
@@ -19,11 +19,11 @@
     // Skip in dev (no real commit stamp).
     if (typeof __APP_COMMIT__ === 'undefined' || __APP_COMMIT__ === 'dev') return;
     try {
-      const url = `https://github.com/${GH_OWNER}/${GH_REPO}/releases/download/latest/build-info.json?t=${Date.now()}`;
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const info = await res.json();
-      if (info?.commit && info.commit !== __APP_COMMIT__) updateAvailable = true;
+      const latest = await invoke<string | null>('latest_build_commit', {
+        owner: GH_OWNER,
+        repo: GH_REPO,
+      });
+      if (latest && latest !== __APP_COMMIT__) updateAvailable = true;
     } catch {}
   }
 

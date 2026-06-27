@@ -64,6 +64,7 @@ pub fn run() {
             commands::settings::get_app_prefs,
             commands::settings::save_app_prefs,
             commands::csv_import::import_health_csv,
+            commands::update::latest_build_commit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
