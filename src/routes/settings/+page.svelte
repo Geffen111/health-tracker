@@ -2,6 +2,19 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { formatDate } from '$lib/formatDate';
+  import { showToast } from '$lib/stores/toast.svelte';
+
+  // Suggested OpenRouter models; the field also accepts any custom model id.
+  const MODEL_SUGGESTIONS = [
+    'deepseek/deepseek-v4-flash',
+    'deepseek/deepseek-chat',
+    'anthropic/claude-haiku-4.5',
+    'anthropic/claude-sonnet-4.6',
+    'google/gemini-2.5-flash',
+    'openai/gpt-5-mini',
+  ];
+  let aiModel = $state('deepseek/deepseek-v4-flash');
+  let savingModel = $state(false);
 
   let darkMode = $state(false);
   let showImport = $state(false);
@@ -31,6 +44,10 @@
     try {
       const k = await invoke<string | null>('get_api_key');
       if (k) { apiKey = k; apiKeySaved = true; }
+    } catch {}
+    try {
+      const m = await invoke<string>('get_ai_model');
+      if (m) aiModel = m;
     } catch {}
     try {
       const s: any = await invoke('get_sync_settings');
@@ -63,10 +80,14 @@
       if (r.errors && r.errors.length) {
         syncErr = true;
         syncMsg += ` · ${r.errors.length} issue(s): ${r.errors.slice(0, 3).join('; ')}`;
+        showToast(`Synced with ${r.errors.length} issue(s)`, 'info');
+      } else {
+        showToast(`Synced ${r.days_updated} day${r.days_updated === 1 ? '' : 's'}`);
       }
     } catch (e) {
       syncErr = true;
       syncMsg = 'Sync failed: ' + e;
+      showToast('Sync failed', 'error');
     } finally {
       syncing = false;
     }
@@ -77,10 +98,25 @@
     try {
       await invoke('save_api_key', { key: apiKey.trim() });
       apiKeySaved = true;
+      showToast('API key saved');
     } catch (e) {
       console.error('Error saving API key:', e);
+      showToast('Could not save API key', 'error');
     } finally {
       savingKey = false;
+    }
+  }
+
+  async function saveAiModel() {
+    savingModel = true;
+    try {
+      await invoke('save_ai_model', { model: aiModel.trim() });
+      showToast('AI model updated');
+    } catch (e) {
+      console.error('Error saving AI model:', e);
+      showToast('Could not save model', 'error');
+    } finally {
+      savingModel = false;
     }
   }
 
@@ -100,9 +136,11 @@
     try {
       const path = await invoke<string>(kind === 'csv' ? 'export_csv' : 'export_json');
       exportMsg = `Exported to ${path}`;
+      showToast(`${kind.toUpperCase()} export complete`);
     } catch (e) {
       exportErr = true;
       exportMsg = 'Export failed: ' + e;
+      showToast('Export failed', 'error');
     } finally {
       exporting = '';
     }
@@ -208,7 +246,7 @@
   <div class="card">
     <div>
       <div class="card-heading">AI assistant</div>
-      <div class="card-subtitle">OpenRouter API key for the <a href="/ask" class="inline-link">Ask</a> page &amp; AI insights. Stored locally with your data.</div>
+      <div class="card-subtitle">Powers the <a href="/ask" class="inline-link">Ask</a> page &amp; AI insights via OpenRouter.</div>
     </div>
     <div class="text-field">
       <label for="api-key">OpenRouter API key</label>
@@ -218,9 +256,23 @@
           {savingKey ? 'Saving…' : 'Save'}
         </button>
       </div>
+      <span class="field-hint">Stored only on this device — the key is never synced to the cloud.</span>
       {#if apiKeySaved}
         <span class="key-status">Key saved · the Ask page is ready to use.</span>
       {/if}
+    </div>
+    <div class="text-field">
+      <label for="ai-model">Model</label>
+      <div class="key-row">
+        <input id="ai-model" list="model-options" bind:value={aiModel} placeholder="deepseek/deepseek-v4-flash" class="mono-input" />
+        <datalist id="model-options">
+          {#each MODEL_SUGGESTIONS as m}<option value={m}></option>{/each}
+        </datalist>
+        <button class="key-save-btn" onclick={saveAiModel} disabled={savingModel || !aiModel.trim()}>
+          {savingModel ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      <span class="field-hint">Any OpenRouter model id works. Default <code>deepseek/deepseek-v4-flash</code> is cheap &amp; fast.</span>
     </div>
   </div>
 

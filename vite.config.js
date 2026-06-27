@@ -8,6 +8,14 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
+  // Stamp the build's git commit into the app so it can detect when a newer
+  // release is available (see the update banner in +layout.svelte). CI sets
+  // GITHUB_SHA; local dev builds report 'dev' and never show the banner.
+  define: {
+    // @ts-expect-error process is a nodejs global
+    __APP_COMMIT__: JSON.stringify(process.env.GITHUB_SHA ?? "dev"),
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

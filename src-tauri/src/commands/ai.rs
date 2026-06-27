@@ -2,18 +2,22 @@
 // Mirrors the Family Finance integration: same provider and model so the user's
 // existing OpenRouter key and expectations carry over.
 
+/// Default model — matches the Family Finance app so an existing key/expectations
+/// carry over. Overridable per-install via the model picker in Settings.
 pub const MODEL: &str = "deepseek/deepseek-v4-flash";
 
 /// POST a single-prompt chat completion to OpenRouter and return the message text.
+/// Uses the model chosen in Settings, falling back to [`MODEL`].
 pub async fn call_openrouter(
     api_key: &str,
     prompt: &str,
     temperature: f64,
     max_tokens: u32,
 ) -> Result<String, String> {
+    let model = crate::commands::settings::model();
     let client = reqwest::Client::new();
     let body = serde_json::json!({
-        "model": MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,

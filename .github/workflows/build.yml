@@ -1,0 +1,94 @@
+name: Build Health Tracker (Windows)
+on:
+  push:
+    branches: [main]
+    # Docs-only changes don't need a full installer build/release.
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+      - .gitignore
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    permissions:
+      contents: write
+    env:
+      # This CI's pnpm re-runs `pnpm install` before every script (e.g. the
+      # nested `pnpm build` Tauri triggers) and that check hard-fails on the
+      # esbuild build-script gate. Turn the pre-run dependency check off.
+      npm_config_verify_deps_before_run: "false"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # Don't turn compiler warnings into hard errors (the action's default)
+          rustflags: ""
+          # x86_64 (host) is already present; add the ARM64 cross target.
+          target: aarch64-pc-windows-msvc
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        shell: powershell
+        run: npm install -g pnpm
+
+      - name: Install frontend deps
+        shell: powershell
+        run: |
+          # pnpm here refuses to run dependency build scripts and exits 1,
+          # but node_modules is fully populated before that error. Tolerate
+          # the exit, then build esbuild explicitly (rebuild bypasses the
+          # build-approval gate). Ending on a success keeps the step green.
+          pnpm install
+          Write-Host "pnpm install finished with exit code $LASTEXITCODE"
+          pnpm rebuild esbuild
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Tauri app (x64)
+        shell: powershell
+        run: pnpm tauri build
+
+      - name: Build Tauri app (ARM64)
+        shell: powershell
+        run: pnpm tauri build --target aarch64-pc-windows-msvc
+
+      - name: Write build marker
+        shell: powershell
+        run: |
+          # Published alongside the installers so the running app can compare the
+          # commit it was built from against the latest release (the in-app
+          # "Update available" banner). Must use the same SHA Vite stamps in.
+          $ver = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $info = [ordered]@{
+            commit  = $env:GITHUB_SHA
+            version = $ver
+            builtAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          } | ConvertTo-Json -Compress
+          Set-Content -Path build-info.json -Value $info -Encoding utf8
+          Write-Host $info
+
+      - name: Publish to "latest" Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Health Tracker (latest build)
+          body: |
+            Latest Windows build of Health Tracker.
+            Download the installer for your CPU and run it:
+            - `*_x64_*` / `*_x64-setup.exe` for normal Intel/AMD PCs
+            - `*_arm64_*` / `*_arm64-setup.exe` for Windows on ARM laptops
+          files: |
+            build-info.json
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*.exe

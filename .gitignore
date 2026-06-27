@@ -8,3 +8,6 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# CI-generated update marker (published to the GitHub release, not committed)
+build-info.json

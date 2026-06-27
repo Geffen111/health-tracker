@@ -48,6 +48,8 @@ pub fn run() {
             commands::export::export_json,
             commands::settings::save_api_key,
             commands::settings::get_api_key,
+            commands::settings::get_ai_model,
+            commands::settings::save_ai_model,
             commands::ask::ask_question,
             commands::insights::get_insights,
             commands::insights::refresh_insights,

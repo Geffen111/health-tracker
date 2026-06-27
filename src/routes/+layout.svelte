@@ -2,6 +2,35 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { openUrl } from '@tauri-apps/plugin-opener';
+  import Toast from '$lib/components/Toast.svelte';
+
+  // Update check: this build is stamped with its git commit (vite define); CI
+  // publishes a build-info.json carrying the latest commit to the rolling
+  // `latest` GitHub release. If they differ, surface a banner that opens the
+  // releases page. Repo must be public for the unauthenticated fetch to work.
+  // Adjust these if the GitHub repo is named differently.
+  const GH_OWNER = 'Geffen111';
+  const GH_REPO = 'health-tracker';
+  let updateAvailable = $state(false);
+
+  async function checkForUpdate() {
+    // Skip in dev (no real commit stamp).
+    if (typeof __APP_COMMIT__ === 'undefined' || __APP_COMMIT__ === 'dev') return;
+    try {
+      const url = `https://github.com/${GH_OWNER}/${GH_REPO}/releases/download/latest/build-info.json?t=${Date.now()}`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const info = await res.json();
+      if (info?.commit && info.commit !== __APP_COMMIT__) updateAvailable = true;
+    } catch {}
+  }
+
+  async function openLatestRelease() {
+    try {
+      await openUrl(`https://github.com/${GH_OWNER}/${GH_REPO}/releases/latest`);
+    } catch {}
+  }
 
   interface NavItem {
     href: string;
@@ -37,6 +66,7 @@
         await invoke('import_health_csv', { root: s.csv_root ?? null, full: false });
       }
     } catch {}
+    checkForUpdate();
   });
 
   let { children }: { children: import('svelte').Snippet } = $props();
@@ -70,11 +100,19 @@
         </a>
       {/each}
     </nav>
+    {#if updateAvailable}
+      <button class="update-banner" onclick={openLatestRelease}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>
+        <span>Update available</span>
+      </button>
+    {/if}
   </aside>
   <main class="main-content">
     {@render children()}
   </main>
 </div>
+
+<Toast />
 
 <style>
   :global(*) {
@@ -198,6 +236,25 @@
     color: var(--accent-fg);
     font-weight: 700;
   }
+
+  .update-banner {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 11px;
+    border: 1px solid var(--accent-soft);
+    background: var(--accent-soft);
+    color: var(--accent-fg);
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+  }
+  .update-banner:hover { filter: brightness(0.97); }
 
   .main-content {
     flex: 1;
