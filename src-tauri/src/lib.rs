@@ -21,6 +21,11 @@ pub fn run() {
             commands::medications::create_medication,
             commands::medications::update_medication,
             commands::medications::archive_medication,
+            commands::medications::delete_medication,
+            commands::medications::get_medication_schedule,
+            commands::medications::add_schedule_item,
+            commands::medications::update_schedule_item,
+            commands::medications::delete_schedule_item,
             commands::medications::get_doses_for_date,
             commands::medications::upsert_dose,
             commands::medications::get_medication_history,
@@ -37,6 +42,7 @@ pub fn run() {
             commands::activity::list_activity_types,
             commands::activity::get_activities_for_date,
             commands::activity::add_activity_entry,
+            commands::activity::set_activity_duration,
             commands::activity::delete_activity_entry,
             commands::pem::get_calibration_params,
             commands::pem::update_calibration_param,
@@ -55,6 +61,8 @@ pub fn run() {
             commands::insights::refresh_insights,
             commands::settings::get_sync_settings,
             commands::settings::save_sync_settings,
+            commands::settings::get_app_prefs,
+            commands::settings::save_app_prefs,
             commands::csv_import::import_health_csv,
         ])
         .run(tauri::generate_context!())

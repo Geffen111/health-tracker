@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { formatDate } from '$lib/formatDate';
   import { showToast } from '$lib/stores/toast.svelte';
+  import { theme, setTheme } from '$lib/stores/theme.svelte';
 
   // Suggested OpenRouter models; the field also accepts any custom model id.
   const MODEL_SUGGESTIONS = [
@@ -16,7 +17,14 @@
   let aiModel = $state('deepseek/deepseek-v4-flash');
   let savingModel = $state(false);
 
-  let darkMode = $state(false);
+  // App preferences (work defaults + activity defaults).
+  const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  let workHours = $state(7.5);
+  let workDays = $state<number[]>([1, 2, 3, 4, 5]);
+  let activityDefaults = $state<string[]>(['Phone', 'Walking']);
+  let activityTypeNames = $state<string[]>([]);
+  let addDefault = $state('');
+
   let showImport = $state(false);
   let importPath = $state('G:\\Health\\Fatigue_Log_V6.xlsx');
   let importResult = $state('');
@@ -55,7 +63,46 @@
       autoImport = s?.auto_import ?? true;
       lastSync = s?.last_sync ?? null;
     } catch {}
+    try {
+      const p: any = await invoke('get_app_prefs');
+      if (p) {
+        workHours = p.work_hours ?? 7.5;
+        if (Array.isArray(p.work_days) && p.work_days.length) workDays = p.work_days;
+        if (Array.isArray(p.activity_defaults)) activityDefaults = p.activity_defaults;
+      }
+      const types: any[] = await invoke('list_activity_types', { categoryId: null });
+      activityTypeNames = types.map((t) => t.name);
+    } catch {}
   });
+
+  async function savePrefs() {
+    try {
+      await invoke('save_app_prefs', { workHours, workDays, activityDefaults });
+      showToast('Preferences saved');
+    } catch (e) {
+      console.error('Error saving prefs:', e);
+      showToast('Could not save preferences', 'error');
+    }
+  }
+
+  function toggleWorkDay(i: number) {
+    workDays = workDays.includes(i) ? workDays.filter((d) => d !== i) : [...workDays, i].sort();
+    savePrefs();
+  }
+
+  function addActivityDefault() {
+    const name = addDefault.trim();
+    if (name && !activityDefaults.includes(name)) {
+      activityDefaults = [...activityDefaults, name];
+      savePrefs();
+    }
+    addDefault = '';
+  }
+
+  function removeActivityDefault(name: string) {
+    activityDefaults = activityDefaults.filter((n) => n !== name);
+    savePrefs();
+  }
 
   async function saveSyncSettings() {
     try {
@@ -120,11 +167,6 @@
     }
   }
 
-  function setTheme(isDark: boolean) {
-    darkMode = isDark;
-    document.documentElement.classList.toggle('dark', isDark);
-  }
-
   let exporting = $state<'' | 'csv' | 'json'>('');
   let exportMsg = $state('');
   let exportErr = $state(false);
@@ -158,11 +200,6 @@
       importing = false;
     }
   }
-
-  function toggleTheme() {
-    darkMode = !darkMode;
-    document.documentElement.classList.toggle('dark', darkMode);
-  }
 </script>
 
 <div class="page-header">
@@ -170,9 +207,6 @@
     <div class="page-title">Settings</div>
     <div class="page-subtitle">Sync, appearance, data &amp; one-time setup</div>
   </div>
-  <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
-  </button>
 </div>
 
 <div class="settings-content">
@@ -206,17 +240,61 @@
     {/if}
   </div>
 
+  <div class="card">
+    <div>
+      <div class="card-heading">Work defaults</div>
+      <div class="card-subtitle">Pre-fills the Work page so a typical day is one click to save.</div>
+    </div>
+    <div class="text-field">
+      <label for="work-hours">Hours for a full work day</label>
+      <div class="hours-row">
+        <input id="work-hours" type="number" step="0.25" min="0" bind:value={workHours} onchange={savePrefs} class="hours-input" />
+        <span class="field-hint">hours</span>
+      </div>
+    </div>
+    <div class="text-field">
+      <span class="field-label">Work days</span>
+      <div class="day-toggle-row">
+        {#each WEEKDAYS as label, i}
+          <button class="day-toggle" class:active={workDays.includes(i)} onclick={() => toggleWorkDay(i)}>{label}</button>
+        {/each}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div>
+      <div class="card-heading">Activity defaults</div>
+      <div class="card-subtitle">Always shown on the Activity page ready for a time. Add the ones you log most days.</div>
+    </div>
+    <div class="def-chips">
+      {#each activityDefaults as name}
+        <span class="def-chip">{name}<button class="chip-x" onclick={() => removeActivityDefault(name)} aria-label="Remove">×</button></span>
+      {/each}
+      {#if activityDefaults.length === 0}
+        <span class="field-hint">None — add one below.</span>
+      {/if}
+    </div>
+    <div class="key-row">
+      <input list="act-type-options" bind:value={addDefault} placeholder="e.g. Walking" class="mono-input" />
+      <datalist id="act-type-options">
+        {#each activityTypeNames as n}<option value={n}></option>{/each}
+      </datalist>
+      <button class="key-save-btn" onclick={addActivityDefault} disabled={!addDefault.trim()}>Add</button>
+    </div>
+  </div>
+
   <div class="card row-card">
     <div>
       <div class="card-heading">Appearance</div>
       <div class="card-subtitle">Theme used across the app.</div>
     </div>
     <div class="theme-seg">
-      <button class="theme-seg-btn" class:active={!darkMode} onclick={() => setTheme(false)}>
+      <button class="theme-seg-btn" class:active={!theme.dark} onclick={() => setTheme(false)}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6 19 19M19 5l-1.4 1.4M6.4 17.6 5 19"/></svg>
         Light
       </button>
-      <button class="theme-seg-btn" class:active={darkMode} onclick={() => setTheme(true)}>
+      <button class="theme-seg-btn" class:active={theme.dark} onclick={() => setTheme(true)}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
         Dark
       </button>
@@ -332,7 +410,6 @@
   .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:24px; }
   .page-title { font-family:'Source Serif 4',serif; font-size:30px; font-weight:600; color:var(--tp); letter-spacing:-.01em; }
   .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
-  .theme-btn { width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
 
   .settings-content { max-width:760px; display:flex; flex-direction:column; gap:16px; }
 
@@ -345,6 +422,15 @@
   .text-field label { font-size:12px; font-weight:700; color:var(--ts); }
   .mono-input { width:100%; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:11px 13px; font-size:13px; color:var(--tp); font-family:'Public Sans',monospace; }
   .field-hint { font-size:11.5px; color:var(--tm); }
+  .field-label { font-size:12px; font-weight:700; color:var(--ts); }
+  .hours-row { display:flex; align-items:center; gap:10px; }
+  .hours-input { width:96px; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:11px 13px; font-size:13.5px; color:var(--tp); text-align:center; font-variant-numeric:tabular-nums; }
+  .day-toggle-row { display:flex; gap:6px; flex-wrap:wrap; }
+  .day-toggle { width:42px; padding:9px 0; border:1px solid var(--border); background:var(--inset); color:var(--ts); border-radius:11px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .day-toggle.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .def-chips { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .def-chip { display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--accent-fg); background:var(--accent-soft); border:1px solid var(--border); padding:6px 12px; border-radius:999px; }
+  .chip-x { border:none; background:transparent; color:var(--tm); cursor:pointer; font-size:15px; line-height:1; padding:0; }
   .sync-actions { display:flex; gap:10px; }
   .sync-full-btn { background:var(--card); color:var(--tp); border:1px solid var(--border); border-radius:999px; padding:11px 18px; font-size:13px; font-weight:700; cursor:pointer; }
   .sync-full-btn:disabled, .run-import-btn:disabled { opacity:.6; cursor:not-allowed; }

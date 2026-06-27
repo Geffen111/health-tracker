@@ -1,14 +1,13 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDateLong } from '$lib/formatDate';
+  import { formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
 
-  let today = $state(new Date().toISOString().split('T')[0]);
+  let today = $state(todayISO());
   let nowTime = new Date().toTimeString().slice(0, 5);
   let selectedDate = $state(today);
   let bpReadings = $state<any[]>([]);
   let dailyLog = $state<any>(null);
-  let darkMode = $state(false);
   let banner = $state(false);
   let calDays = $state<number | null>(null);
   let lastCal = $state<any>(null);
@@ -46,24 +45,8 @@
     } catch {}
   }
 
-  function toggleTheme() {
-    darkMode = !darkMode;
-    document.documentElement.classList.toggle('dark', darkMode);
-  }
-
-  function prevDay() {
-    const d = new Date(selectedDate + 'T00:00:00');
-    d.setDate(d.getDate() - 1);
-    selectedDate = d.toISOString().split('T')[0];
-    loadBP();
-  }
-
-  function nextDay() {
-    const d = new Date(selectedDate + 'T00:00:00');
-    d.setDate(d.getDate() + 1);
-    selectedDate = d.toISOString().split('T')[0];
-    loadBP();
-  }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadBP(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadBP(); }
 
   async function addReading() {
     if (!nSys || !nDia) return;
@@ -146,9 +129,6 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>
     </div>
-    <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
-    </button>
   </div>
 </div>
 
@@ -203,7 +183,6 @@
   <div class="hr-card">
     <div class="hr-header">
       <span class="card-heading">Heart rate</span>
-      <span class="hr-badge">Watch-synced</span>
     </div>
     <div class="hr-grid">
       <div class="hr-tile">
@@ -267,7 +246,6 @@
   .day-arrow { width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
   .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
   .day-label { font-weight:700; font-size:13px; padding:0 6px; min-width:108px; text-align:center; }
-  .theme-btn { width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
 
   .banner { display:flex;align-items:center;gap:11px;background:var(--accent-soft);border:1px solid var(--border);border-radius:14px;padding:12px 16px;margin-bottom:16px; }
   .banner span { font-size:13px;color:var(--accent-fg);font-weight:600;flex:1; }
@@ -303,7 +281,6 @@
 
   .hr-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:16px; }
   .hr-header { display:flex; justify-content:space-between; align-items:center; }
-  .hr-badge { font-size:10.5px; font-weight:700; color:var(--accent-fg); background:var(--accent-soft); padding:3px 9px; border-radius:999px; }
   .hr-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .hr-tile { background:var(--inset); border-radius:13px; padding:13px 14px; }
   .hr-tile-label { font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--ts); }

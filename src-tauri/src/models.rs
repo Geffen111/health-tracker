@@ -52,6 +52,21 @@ pub struct Medication {
     pub category: Option<String>,
     pub active: Option<bool>,
     pub notes: Option<String>,
+    /// Typical time of day, "07:00". Used to pre-fill the dose form.
+    pub default_time: Option<String>,
+    /// 'regular' (daily, scheduled) or 'occasional' (PRN / as-needed).
+    pub med_type: Option<String>,
+}
+
+/// One slot in a medication's default dose schedule (e.g. Dexamphetamine has 3).
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct MedicationScheduleItem {
+    pub id: i64,
+    pub medication_id: i64,
+    pub sort_order: i64,
+    pub label: Option<String>,
+    pub dose_amount: Option<f64>,
+    pub time_of_day: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]

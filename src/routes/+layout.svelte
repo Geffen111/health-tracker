@@ -4,6 +4,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Toast from '$lib/components/Toast.svelte';
+  import { theme, initTheme, toggleTheme } from '$lib/stores/theme.svelte';
 
   // Update check: this build is stamped with its git commit (vite define); CI
   // publishes a build-info.json carrying the latest commit to the rolling
@@ -51,15 +52,9 @@
     { href: '/settings', label: 'Settings', svg: '<path d="M4 8h16M4 16h16"/><circle cx="14" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/>' },
   ];
 
-  let darkMode = $state(false);
-
-  function toggleTheme() {
-    darkMode = !darkMode;
-    document.documentElement.classList.toggle('dark', darkMode);
-  }
-
   // Best-effort Health Sync auto-import on launch (silent; surfaced in Settings).
   onMount(async () => {
+    initTheme();
     try {
       const s: any = await invoke('get_sync_settings');
       if (s?.auto_import) {
@@ -78,13 +73,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
 </svelte:head>
 
-<div class="app-layout" class:dark={darkMode}>
+<div class="app-layout" class:dark={theme.dark}>
   <aside class="sidebar">
     <div class="sidebar-brand">
       <div class="brand-icon">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2-6 3.5 12 2.5-6H21"/></svg>
       </div>
       <span class="brand-text">Health Tracker</span>
+      <button class="theme-toggle" onclick={toggleTheme} aria-label="Toggle dark mode" title="Toggle dark mode">
+        {#if theme.dark}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        {:else}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
+        {/if}
+      </button>
     </div>
     <nav class="sidebar-nav">
       {#each navItems as item}
@@ -163,7 +165,8 @@
 
   .app-layout {
     display: flex;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
     background: var(--page);
     color: var(--tp);
   }
@@ -184,6 +187,26 @@
     align-items: center;
     gap: 11px;
     padding: 4px 8px 20px;
+  }
+
+  .theme-toggle {
+    margin-left: auto;
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    border-radius: 50%;
+    color: var(--ts);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .theme-toggle:hover {
+    background: var(--accent-soft);
+    color: var(--accent-fg);
   }
 
   .brand-icon {

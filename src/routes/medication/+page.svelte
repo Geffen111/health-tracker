@@ -1,96 +1,74 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate } from '$lib/formatDate';
+  import { formatDate, todayISO } from '$lib/formatDate';
+  import { showToast } from '$lib/stores/toast.svelte';
 
   let medications = $state<any[]>([]);
-  let dosing: Record<number, { amount: string; time: string }> = $state({});
-  let openId = $state<number | null>(null);
+  let schedule = $state<any[]>([]);            // all schedule items, flat
   let history = $state<any[]>([]);
   let todayDoses = $state<any[]>([]);
   let loading = $state(true);
-  let darkMode = $state(false);
-  let banner = $state(false);
-  let bannerText = $state('');
 
+  let today = $state(todayISO());
+
+  // Inline "log a dose" form, keyed by medication id.
+  let openId = $state<number | null>(null);
+  let dosing = $state<Record<number, { amount: string; time: string }>>({});
+
+  // Add / edit medication forms.
   let showAddMed = $state(false);
-  let nmName = $state('');
-  let nmDose = $state('');
-  let nmUnit = $state('mg');
-  let nmType = $state('regular');
+  let nm = $state({ name: '', dose: '', unit: 'mg', time: '', type: 'regular' });
+  let editId = $state<number | null>(null);
+  let edit = $state({ name: '', dose: '', unit: 'mg', time: '', type: 'regular' });
 
-  let today = $state(new Date().toISOString().split('T')[0]);
+  // Inline history edit.
+  let histEditId = $state<number | null>(null);
+  let histEdit = $state({ event_date: '', detail: '' });
 
   onMount(async () => {
+    await loadAll();
+    loading = false;
+  });
+
+  async function loadAll() {
     try {
-      const [meds, hist, doses] = await Promise.all([
+      const [meds, sched, hist, doses] = await Promise.all([
         invoke<any[]>('list_medications'),
-        invoke<any[]>('get_medication_history', { medication_id: null }),
+        invoke<any[]>('get_medication_schedule', { medicationId: null }),
+        invoke<any[]>('get_medication_history', { medicationId: null }),
         invoke<any[]>('get_doses_for_date', { date: today }),
       ]);
       medications = meds;
+      schedule = sched;
       history = hist;
       todayDoses = doses;
     } catch (e) {
       console.error('Error loading meds:', e);
-    } finally {
-      loading = false;
     }
-  });
-
-  function toggleTheme() {
-    darkMode = !darkMode;
-    document.documentElement.classList.toggle('dark', darkMode);
   }
 
-  async function addMedication() {
-    if (!nmName.trim()) return;
-    const med = await invoke('create_medication', {
-      name: nmName.trim(),
-      shortCode: null,
-      defaultDose: nmDose ? parseFloat(nmDose) : null,
-      doseUnit: nmUnit || 'mg',
-      category: nmType === 'prn' ? 'PRN' : null,
-    });
-    medications = [...medications, med];
-    const h = await invoke<any[]>('get_medication_history', { medication_id: null });
-    history = h;
-    bannerText = `History updated — ${nmName} started.`;
-    banner = true;
-    setTimeout(() => banner = false, 4000);
-    nmName = ''; nmDose = ''; nmUnit = 'mg'; nmType = 'regular';
-    showAddMed = false;
+  function isOccasional(m: any): boolean {
+    return m.med_type === 'occasional' || m.category === 'PRN';
+  }
+  let regularMeds = $derived(medications.filter((m) => !isOccasional(m)));
+  let occasionalMeds = $derived(medications.filter((m) => isOccasional(m)));
+
+  function slotsFor(medId: number): any[] {
+    return schedule.filter((s) => s.medication_id === medId).sort((a, b) => a.sort_order - b.sort_order);
   }
 
-  async function toggleActive(med: any) {
-    const nowActive = !med.active;
-    await invoke('update_medication', {
-      id: med.id,
-      active: nowActive,
-    });
-    medications = medications.map((m: any) => m.id === med.id ? { ...m, active: nowActive } : m);
-    const h = await invoke<any[]>('get_medication_history', { medication_id: null });
-    history = h;
-    bannerText = `History updated — ${med.name} marked ${nowActive ? 'restarted' : 'ceased'}.`;
-    banner = true;
-    setTimeout(() => banner = false, 4000);
-  }
-
-  function openDoseForm(medId: number) {
-    const med = medications.find((m: any) => m.id === medId);
-    if (!med) return;
-    openId = medId;
+  // Open the dose form pre-filled from a schedule slot (or the med's own default).
+  function openDose(med: any, slot: any | null) {
+    openId = med.id;
     const now = new Date();
-    const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    dosing[medId] = {
-      amount: med.default_dose != null ? String(med.default_dose) : '',
-      time: timeStr,
-    };
+    const nowStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    const amount = slot?.dose_amount ?? med.default_dose;
+    const time = slot?.time_of_day ?? med.default_time ?? nowStr;
+    dosing[med.id] = { amount: amount != null ? String(amount) : '', time };
   }
 
-  function cancelDose() {
-    openId = null;
-  }
+  function cancelDose() { openId = null; }
 
   async function saveDose(medId: number) {
     const d = dosing[medId];
@@ -106,25 +84,98 @@
     });
     openId = null;
     todayDoses = await invoke('get_doses_for_date', { date: today });
+    showToast('Dose logged');
   }
 
   async function deleteDose(medId: number, time: string) {
     await invoke('upsert_dose', {
-      dose: { medication_id: medId, log_date: today, time_taken: time, dose_amount: null, notes: null },
+      dose: { medication_id: medId, log_date: today, time_taken: time, dose_amount: null, notes: 'DELETED' },
     });
     todayDoses = await invoke('get_doses_for_date', { date: today });
   }
 
+  async function addMedication() {
+    if (!nm.name.trim()) return;
+    await invoke('create_medication', {
+      name: nm.name.trim(),
+      shortCode: null,
+      defaultDose: nm.dose ? parseFloat(nm.dose) : null,
+      doseUnit: nm.unit || 'mg',
+      category: null,
+      defaultTime: nm.time || null,
+      medType: nm.type,
+    });
+    nm = { name: '', dose: '', unit: 'mg', time: '', type: 'regular' };
+    showAddMed = false;
+    await loadAll();
+    showToast('Medication added');
+  }
+
+  function startEdit(med: any) {
+    editId = med.id;
+    edit = {
+      name: med.name,
+      dose: med.default_dose != null ? String(med.default_dose) : '',
+      unit: med.dose_unit || 'mg',
+      time: med.default_time || '',
+      type: isOccasional(med) ? 'occasional' : 'regular',
+    };
+  }
+
+  async function saveEdit(medId: number) {
+    await invoke('update_medication', {
+      id: medId,
+      name: edit.name.trim() || null,
+      defaultDose: edit.dose ? parseFloat(edit.dose) : null,
+      doseUnit: edit.unit || null,
+      defaultTime: edit.time || null,
+      medType: edit.type,
+    });
+    editId = null;
+    await loadAll();
+    showToast('Medication updated');
+  }
+
+  async function toggleActive(med: any) {
+    const banner = await invoke<string | null>('update_medication', { id: med.id, active: !med.active });
+    await loadAll();
+    if (banner) showToast(banner);
+  }
+
+  async function removeMed(med: any) {
+    if (!confirm(`Delete ${med.name} and all its doses? This cannot be undone.`)) return;
+    await invoke('delete_medication', { id: med.id });
+    await loadAll();
+    showToast(`${med.name} deleted`);
+  }
+
+  // ── History editing (dates / notes on started/ceased entries) ──
+  function startHistEdit(h: any) {
+    histEditId = h.id;
+    histEdit = { event_date: h.event_date, detail: h.detail ?? '' };
+  }
+  async function saveHistEdit(id: number) {
+    await invoke('update_medication_history', {
+      id,
+      eventDate: histEdit.event_date || null,
+      detail: histEdit.detail || null,
+    });
+    histEditId = null;
+    history = await invoke('get_medication_history', { medicationId: null });
+    showToast('History updated');
+  }
+  async function deleteHist(id: number) {
+    if (!confirm('Delete this history entry?')) return;
+    await invoke('delete_medication_history', { id });
+    history = await invoke('get_medication_history', { medicationId: null });
+  }
+
   function getMedName(medId: number): string {
-    return medications.find((m: any) => m.id === medId)?.name ?? '';
+    return medications.find((m) => m.id === medId)?.name ?? '';
   }
-
   function getMedUnit(medId: number): string {
-    return medications.find((m: any) => m.id === medId)?.dose_unit ?? 'mg';
+    return medications.find((m) => m.id === medId)?.dose_unit ?? 'mg';
   }
-
-  let regularMeds = $derived(medications.filter((m: any) => !m.category || m.category !== 'PRN'));
-  let prnMeds = $derived(medications.filter((m: any) => m.category === 'PRN'));
 
   let eventMeta: Record<string, { label: string; style: string }> = {
     started: { label: 'Started', style: 'color:var(--accent-fg);background:var(--accent-soft);' },
@@ -137,47 +188,38 @@
 <div class="page-header">
   <div>
     <div class="page-title">Medication</div>
-    <div class="page-subtitle">Current medications, today's doses &amp; history</div>
+    <div class="page-subtitle">Regular &amp; occasional meds, today's doses &amp; history</div>
   </div>
-  <div class="header-actions">
-    <button class="add-med-btn" onclick={() => showAddMed = !showAddMed}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      Add medication
-    </button>
-    <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
-    </button>
-  </div>
+  <button class="add-med-btn" onclick={() => showAddMed = !showAddMed}>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    Add medication
+  </button>
 </div>
-
-{#if banner}
-  <div class="banner">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
-    <span>{bannerText}</span>
-    <button class="banner-dismiss" onclick={() => banner = false}>Dismiss</button>
-  </div>
-{/if}
 
 {#if showAddMed}
   <div class="add-form">
     <div class="card-heading">New medication</div>
     <div class="add-form-grid">
-      <div class="text-field">
+      <div class="text-field grow">
         <label for="nm-name">Name</label>
-        <input id="nm-name" bind:value={nmName} placeholder="e.g. Sumatriptan" />
+        <input id="nm-name" bind:value={nm.name} placeholder="e.g. Sumatriptan" />
       </div>
       <div class="text-field">
         <label for="nm-dose">Dose</label>
-        <input id="nm-dose" bind:value={nmDose} placeholder="50" class="center-input" />
+        <input id="nm-dose" bind:value={nm.dose} placeholder="50" class="center-input" />
       </div>
       <div class="text-field">
         <label for="nm-unit">Unit</label>
-        <input id="nm-unit" bind:value={nmUnit} placeholder="mg" class="center-input" />
+        <input id="nm-unit" bind:value={nm.unit} placeholder="mg" class="center-input" />
+      </div>
+      <div class="text-field">
+        <label for="nm-time">Usual time</label>
+        <input id="nm-time" type="time" bind:value={nm.time} class="center-input" />
       </div>
       <div class="seg-field" role="radiogroup" aria-label="Medication type">
         <div class="seg-control">
-          <button class="seg-btn" class:active={nmType === 'regular'} onclick={() => nmType = 'regular'}>Regular</button>
-          <button class="seg-btn" class:active={nmType === 'prn'} onclick={() => nmType = 'prn'}>PRN</button>
+          <button class="seg-btn" class:active={nm.type === 'regular'} onclick={() => nm.type = 'regular'}>Regular</button>
+          <button class="seg-btn" class:active={nm.type === 'occasional'} onclick={() => nm.type = 'occasional'}>Occasional</button>
         </div>
       </div>
       <button class="save-med-btn" onclick={addMedication}>Save</button>
@@ -190,69 +232,73 @@
 {:else}
   <div class="med-layout">
     <div class="med-list-card">
-      <div class="card-heading" style="padding:16px 18px 6px;">Current medications</div>
-      <div class="section-divider" style="padding:6px 18px;">Regular</div>
-      {#each regularMeds as med}
-        <div class="med-row" class:dimmed={!med.active}>
-          <span class="med-dot accent"></span>
-          <div class="med-info">
-            <div class="med-name">{med.name} <span class="med-freq">{med.short_code ?? ''}</span></div>
-            <div class="med-detail">{med.category ?? ''}{med.default_dose != null ? ` · usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}</div>
-          </div>
-          {#if !med.active}
-            <span class="ceased-badge">Ceased</span>
-          {/if}
-          <button class="toggle-active-btn" onclick={() => toggleActive(med)}>{med.active ? 'Cease' : 'Restart'}</button>
-          {#if med.active}
-            <button class="add-dose-btn" onclick={() => openDoseForm(med.id)}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-              Add dose
-            </button>
-          {/if}
-        </div>
-        {#if openId === med.id}
-          <div class="dose-inline">
-            <span class="dose-label">Amount</span>
-            <input value={dosing[med.id]?.amount ?? ''} oninput={(e) => { const t = e.target as HTMLInputElement; if (!dosing[med.id]) dosing[med.id] = { amount: '', time: '' }; dosing[med.id].amount = t.value; }} class="dose-input" />
-            <span class="dose-unit">{med.dose_unit || 'mg'}</span>
-            <span class="dose-label" style="margin-left:6px;">at</span>
-            <input value={dosing[med.id]?.time ?? ''} oninput={(e) => { const t = e.target as HTMLInputElement; if (!dosing[med.id]) dosing[med.id] = { amount: '', time: '' }; dosing[med.id].time = t.value; }} class="dose-input" />
-            <button class="dose-save" onclick={() => saveDose(med.id)}>Log dose</button>
-            <button class="dose-cancel" onclick={cancelDose}>Cancel</button>
-          </div>
+      {#each [{ label: 'Regular', meds: regularMeds, dot: 'accent' }, { label: 'Occasional', meds: occasionalMeds, dot: 'peri' }] as section}
+        <div class="section-divider">{section.label}</div>
+        {#if section.meds.length === 0}
+          <div class="section-empty">No {section.label.toLowerCase()} medications.</div>
         {/if}
-      {/each}
-
-      <div class="section-divider">As needed (PRN)</div>
-      {#each prnMeds as med}
-        <div class="med-row" class:dimmed={!med.active}>
-          <span class="med-dot peri"></span>
-          <div class="med-info">
-            <div class="med-name">{med.name}</div>
-            <div class="med-detail">{med.category ?? ''}{med.default_dose != null ? ` · usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}</div>
-          </div>
-          {#if !med.active}
-            <span class="ceased-badge">Ceased</span>
+        {#each section.meds as med}
+          {#if editId === med.id}
+            <div class="med-edit">
+              <input class="edit-name" bind:value={edit.name} placeholder="Name" />
+              <input class="edit-sm" bind:value={edit.dose} placeholder="Dose" />
+              <input class="edit-sm" bind:value={edit.unit} placeholder="mg" />
+              <input class="edit-sm" type="time" bind:value={edit.time} />
+              <div class="seg-control sm">
+                <button class="seg-btn" class:active={edit.type === 'regular'} onclick={() => edit.type = 'regular'}>Reg</button>
+                <button class="seg-btn" class:active={edit.type === 'occasional'} onclick={() => edit.type = 'occasional'}>Occ</button>
+              </div>
+              <button class="dose-save" onclick={() => saveEdit(med.id)}>Save</button>
+              <button class="dose-cancel" onclick={() => editId = null}>Cancel</button>
+            </div>
+          {:else}
+            <div class="med-row" class:dimmed={!med.active}>
+              <span class="med-dot {section.dot}"></span>
+              <div class="med-info">
+                <div class="med-name">{med.name}</div>
+                <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
+              </div>
+              {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
+              {#if med.active}
+                <div class="dose-buttons">
+                  {#each slotsFor(med.id) as slot}
+                    <button class="slot-btn" onclick={() => openDose(med, slot)}>
+                      {slot.label ?? slot.time_of_day ?? 'Dose'}{slot.dose_amount != null ? ` ${slot.dose_amount}${med.dose_unit || 'mg'}` : ''}
+                    </button>
+                  {/each}
+                  <button class="add-dose-btn" onclick={() => openDose(med, null)}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                    Dose
+                  </button>
+                </div>
+              {/if}
+              <button class="icon-btn" onclick={() => startEdit(med)} aria-label="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+              <button class="icon-btn" onclick={() => toggleActive(med)} aria-label={med.active ? 'Cease' : 'Restart'} title={med.active ? 'Cease' : 'Restart'}>
+                {#if med.active}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                {:else}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8Z"/></svg>
+                {/if}
+              </button>
+              <button class="icon-btn danger" onclick={() => removeMed(med)} aria-label="Delete">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+              </button>
+            </div>
+            {#if openId === med.id}
+              <div class="dose-inline">
+                <span class="dose-label">Amount</span>
+                <input bind:value={dosing[med.id].amount} class="dose-input" />
+                <span class="dose-unit">{med.dose_unit || 'mg'}</span>
+                <span class="dose-label" style="margin-left:6px;">at</span>
+                <input type="time" bind:value={dosing[med.id].time} class="dose-input wide" />
+                <button class="dose-save" onclick={() => saveDose(med.id)}>Log dose</button>
+                <button class="dose-cancel" onclick={cancelDose}>Cancel</button>
+              </div>
+            {/if}
           {/if}
-          <button class="toggle-active-btn" onclick={() => toggleActive(med)}>{med.active ? 'Cease' : 'Restart'}</button>
-          {#if med.active}
-            <button class="add-dose-btn" onclick={() => openDoseForm(med.id)}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-              Add dose
-            </button>
-          {/if}
-        </div>
-        {#if openId === med.id}
-          <div class="dose-inline">
-            <span class="dose-label">Amount</span>
-            <input value={dosing[med.id]?.amount ?? ''} oninput={(e) => { const t = e.target as HTMLInputElement; if (!dosing[med.id]) dosing[med.id] = { amount: '', time: '' }; dosing[med.id].amount = t.value; }} class="dose-input" />
-            <span class="dose-unit">{med.dose_unit || 'mg'}</span>
-            <span class="dose-label" style="margin-left:6px;">at</span>
-            <input value={dosing[med.id]?.time ?? ''} oninput={(e) => { const t = e.target as HTMLInputElement; if (!dosing[med.id]) dosing[med.id] = { amount: '', time: '' }; dosing[med.id].time = t.value; }} class="dose-input" />
-            <button class="dose-save" onclick={() => saveDose(med.id)}>Log dose</button>
-            <button class="dose-cancel" onclick={cancelDose}>Cancel</button>
-          </div>
-        {/if}
+        {/each}
       {/each}
     </div>
 
@@ -289,12 +335,34 @@
         <div class="hist-row">
           <div class="hist-badge-col">
             <span class="hist-badge" style={eventMeta[h.event_type]?.style ?? ''}>{eventMeta[h.event_type]?.label ?? h.event_type}</span>
-            <span class="hist-date">{formatDate(h.event_date)}</span>
+            {#if histEditId === h.id}
+              <input type="date" bind:value={histEdit.event_date} class="hist-date-input" />
+            {:else}
+              <span class="hist-date">{formatDate(h.event_date)}</span>
+            {/if}
           </div>
           <div class="hist-info">
             <div class="hist-med">{h.medication_name}</div>
-            <div class="hist-note">{h.detail ?? ''}</div>
+            {#if histEditId === h.id}
+              <input bind:value={histEdit.detail} placeholder="Add a note…" class="hist-note-input" />
+              <div class="hist-actions">
+                <button class="dose-save" onclick={() => saveHistEdit(h.id)}>Save</button>
+                <button class="dose-cancel" onclick={() => histEditId = null}>Cancel</button>
+              </div>
+            {:else}
+              <div class="hist-note">{h.detail ?? ''}</div>
+            {/if}
           </div>
+          {#if histEditId !== h.id}
+            <div class="hist-row-actions">
+              <button class="icon-btn" onclick={() => startHistEdit(h)} aria-label="Edit history">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              </button>
+              <button class="icon-btn danger" onclick={() => deleteHist(h.id)} aria-label="Delete history">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+          {/if}
         </div>
       {/each}
     {/if}
@@ -305,53 +373,59 @@
   .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px; gap:16px; flex-wrap:wrap; }
   .page-title { font-family:'Source Serif 4',serif; font-size:30px; font-weight:600; color:var(--tp); letter-spacing:-.01em; }
   .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
-  .header-actions { display:flex; align-items:center; gap:10px; }
   .add-med-btn { display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#fff;border:none;border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer; }
-  .theme-btn { width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
-
-  .banner { display:flex;align-items:center;gap:11px;background:var(--amber-soft);border:1px solid var(--border);border-radius:14px;padding:12px 16px;margin-bottom:16px; }
-  .banner span { font-size:13px;color:var(--amber-fg);font-weight:600;flex:1; }
-  .banner-dismiss { border:none;background:transparent;color:var(--ts);cursor:pointer;font-size:13px;font-weight:700; }
 
   .add-form { background:var(--card);border:1px solid var(--border);border-radius:18px;padding:20px;box-shadow:var(--shadow);margin-bottom:16px;display:flex;flex-direction:column;gap:14px; }
   .card-heading { font-family:'Source Serif 4',serif; font-size:17px; font-weight:600; color:var(--tp); }
   .add-form-grid { display:flex; gap:12px; flex-wrap:wrap; align-items:end; }
   .text-field { display:flex; flex-direction:column; gap:6px; }
+  .text-field.grow { flex:1; min-width:160px; }
   .text-field label { font-size:12px; font-weight:700; color:var(--ts); }
   .text-field input { background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:10px 12px; font-size:13.5px; color:var(--tp); }
-  .center-input { text-align:center; }
+  .center-input { text-align:center; width:96px; }
   .seg-field { display:flex; flex-direction:column; gap:6px; }
   .seg-control { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:3px; gap:2px; }
-  .seg-btn { flex:1; background:transparent; border:none; border-radius:9px; padding:8px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }
+  .seg-control.sm { padding:2px; }
+  .seg-btn { background:transparent; border:none; border-radius:9px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }
   .seg-btn.active { background:var(--accent); color:#fff; }
   .save-med-btn { background:var(--accent);color:#fff;border:none;border-radius:999px;padding:11px 18px;font-size:13px;font-weight:700;cursor:pointer; }
 
   .loading-text { color:var(--ts); text-align:center; padding:32px; }
   .empty-text { color:var(--ts); font-size:13px; padding:16px 0; }
 
-  .med-layout { display:grid; grid-template-columns:1.6fr 1fr; gap:16px; align-items:start; }
-
+  .med-layout { display:grid; grid-template-columns:1.7fr 1fr; gap:16px; align-items:start; }
   .med-list-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
-  .section-divider { font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; font-weight:800; color:var(--tm); border-top:1px solid var(--border); }
+  .section-divider { font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; font-weight:800; color:var(--tm); border-top:1px solid var(--border); padding:10px 18px 6px; }
+  .section-divider:first-child { border-top:none; }
+  .section-empty { font-size:12.5px; color:var(--tm); padding:4px 18px 12px; }
 
-  .med-row { display:flex; align-items:center; gap:12px; padding:12px 18px; border-top:1px solid var(--border); }
-  .med-row.dimmed { opacity:.5; }
+  .med-row { display:flex; align-items:center; gap:10px; padding:12px 18px; border-top:1px solid var(--border); }
+  .med-row.dimmed { opacity:.55; }
   .med-dot { width:9px;height:9px;border-radius:50%;flex-shrink:0; }
   .med-dot.accent { background:var(--accent); }
   .med-dot.peri { background:var(--peri); }
   .med-info { flex:1; min-width:0; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); }
-  .med-freq { font-size:11px; font-weight:600; color:var(--accent-fg); }
   .med-detail { font-size:11.5px; color:var(--tm); }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
-  .toggle-active-btn { border:none;background:transparent;color:var(--tm);font-size:12px;font-weight:600;cursor:pointer; }
-  .add-dose-btn { display:inline-flex;align-items:center;gap:5px;background:var(--accent-soft);color:var(--accent-fg);border:1px solid var(--border);border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0; }
 
-  .dose-inline { display:flex;align-items:center;gap:9px;padding:12px 18px;background:var(--inset);border-top:1px solid var(--border); }
+  .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .slot-btn { background:var(--accent-soft); color:var(--accent-fg); border:1px solid var(--border); border-radius:999px; padding:6px 11px; font-size:11.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .add-dose-btn { display:inline-flex;align-items:center;gap:4px;background:var(--inset);color:var(--ts);border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap; }
+  .icon-btn { width:28px;height:28px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0; }
+  .icon-btn.danger { color:var(--red-fg); }
+  .icon-btn:hover { background:var(--inset); }
+
+  .med-edit { display:flex; align-items:center; gap:8px; padding:12px 18px; border-top:1px solid var(--border); background:var(--inset); flex-wrap:wrap; }
+  .edit-name { flex:1; min-width:120px; background:var(--card); border:1px solid var(--border); border-radius:9px; padding:8px; font-size:13px; color:var(--tp); }
+  .edit-sm { width:70px; background:var(--card); border:1px solid var(--border); border-radius:9px; padding:8px; font-size:12.5px; color:var(--tp); text-align:center; }
+
+  .dose-inline { display:flex;align-items:center;gap:9px;padding:12px 18px;background:var(--inset);border-top:1px solid var(--border);flex-wrap:wrap; }
   .dose-label { font-size:11.5px; color:var(--ts); font-weight:600; }
   .dose-input { width:64px;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:7px;font-size:12.5px;color:var(--tp);text-align:center;font-variant-numeric:tabular-nums; }
+  .dose-input.wide { width:96px; }
   .dose-unit { font-size:12px; color:var(--tm); }
-  .dose-save { margin-left:auto;background:var(--accent);color:#fff;border:none;border-radius:999px;padding:8px 15px;font-size:12px;font-weight:700;cursor:pointer; }
+  .dose-save { background:var(--accent);color:#fff;border:none;border-radius:999px;padding:8px 15px;font-size:12px;font-weight:700;cursor:pointer; }
   .dose-cancel { background:transparent;border:none;color:var(--ts);font-size:12px;font-weight:600;cursor:pointer; }
 
   .right-col { display:flex; flex-direction:column; gap:16px; }
@@ -359,7 +433,6 @@
   .doses-header { display:flex; justify-content:space-between; align-items:center; padding:16px 18px 12px; }
   .doses-date { font-size:11.5px; color:var(--tm); }
   .empty-doses { color:var(--ts); text-align:center; padding:24px; font-size:13px; }
-
   .dose-row { display:flex; align-items:center; gap:11px; padding:11px 18px; border-top:1px solid var(--border); }
   .dose-time { font-size:12px; color:var(--ts); font-variant-numeric:tabular-nums; width:42px; font-weight:600; }
   .dose-med-name { flex:1; min-width:0; font-size:13px; color:var(--tp); }
@@ -368,11 +441,15 @@
   .doses-footer { padding:12px 18px; border-top:1px solid var(--border); font-size:12px; color:var(--tm); }
 
   .history-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); margin-top:16px; display:flex; flex-direction:column; gap:4px; }
-  .hist-row { display:flex; gap:14px; padding:12px 0; border-top:1px solid var(--border); }
-  .hist-badge-col { width:96px; flex-shrink:0; display:flex; flex-direction:column; gap:5px; }
+  .hist-row { display:flex; gap:14px; padding:12px 0; border-top:1px solid var(--border); align-items:flex-start; }
+  .hist-badge-col { width:104px; flex-shrink:0; display:flex; flex-direction:column; gap:5px; }
   .hist-badge { font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:999px; text-align:center; }
   .hist-date { font-size:11.5px; color:var(--tm); font-variant-numeric:tabular-nums; text-align:center; }
-  .hist-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:5px; }
+  .hist-date-input { font-size:11.5px; border:1px solid var(--border); border-radius:8px; padding:5px; background:var(--inset); color:var(--tp); }
+  .hist-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
   .hist-med { font-size:13.5px; font-weight:600; color:var(--tp); }
   .hist-note { font-size:12.5px; color:var(--ts); }
+  .hist-note-input { width:100%; font-size:12.5px; border:1px solid var(--border); border-radius:9px; padding:8px 10px; background:var(--inset); color:var(--tp); }
+  .hist-actions { display:flex; gap:8px; }
+  .hist-row-actions { display:flex; gap:6px; flex-shrink:0; }
 </style>

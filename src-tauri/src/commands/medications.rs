@@ -1,4 +1,4 @@
-use crate::models::{Medication, MedicationDose, MedicationHistoryEntry};
+use crate::models::{Medication, MedicationDose, MedicationHistoryEntry, MedicationScheduleItem};
 use chrono::Local;
 use sqlx::SqlitePool;
 use tauri::State;
@@ -41,12 +41,15 @@ pub async fn create_medication(
     default_dose: Option<f64>,
     dose_unit: Option<String>,
     category: Option<String>,
+    default_time: Option<String>,
+    med_type: Option<String>,
 ) -> Result<Medication, String> {
     let med = sqlx::query_as::<_, Medication>(
-        "INSERT INTO medications (name, short_code, default_dose, dose_unit, category)
-         VALUES (?, ?, ?, ?, ?) RETURNING *"
+        "INSERT INTO medications (name, short_code, default_dose, dose_unit, category, default_time, med_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *"
     )
     .bind(&name).bind(&short_code).bind(default_dose).bind(&dose_unit).bind(&category)
+    .bind(&default_time).bind(med_type.as_deref().unwrap_or("regular"))
     .fetch_one(&*pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -68,6 +71,8 @@ pub async fn update_medication(
     dose_unit: Option<String>,
     category: Option<String>,
     active: Option<bool>,
+    default_time: Option<String>,
+    med_type: Option<String>,
 ) -> Result<Option<String>, String> {
     // Snapshot the current state so we can detect notable changes.
     let before = sqlx::query_as::<_, Medication>("SELECT * FROM medications WHERE id = ?")
@@ -110,6 +115,14 @@ pub async fn update_medication(
     }
     if let Some(val) = category {
         sqlx::query("UPDATE medications SET category = ? WHERE id = ?")
+            .bind(&val).bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    }
+    if let Some(val) = default_time {
+        sqlx::query("UPDATE medications SET default_time = ? WHERE id = ?")
+            .bind(&val).bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    }
+    if let Some(val) = med_type {
+        sqlx::query("UPDATE medications SET med_type = ? WHERE id = ?")
             .bind(&val).bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
     }
     if let Some(val) = active {
@@ -205,6 +218,76 @@ pub async fn update_medication_history(
 #[tauri::command]
 pub async fn delete_medication_history(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM medication_history WHERE id = ?")
+        .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Permanently remove a medication and its doses/schedule (cascade). Use
+/// `update_medication(active=false)` to merely cease one while keeping history.
+#[tauri::command]
+pub async fn delete_medication(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
+    sqlx::query("DELETE FROM medication_schedule WHERE medication_id = ?")
+        .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM medications WHERE id = ?")
+        .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ── Medication dose schedule (default dose+time slots, e.g. Dex morning/midday/arvo) ──
+
+#[tauri::command]
+pub async fn get_medication_schedule(
+    pool: State<'_, SqlitePool>,
+    medication_id: Option<i64>,
+) -> Result<Vec<MedicationScheduleItem>, String> {
+    let rows = match medication_id {
+        Some(mid) => sqlx::query_as::<_, MedicationScheduleItem>(
+            "SELECT * FROM medication_schedule WHERE medication_id = ? ORDER BY sort_order")
+            .bind(mid).fetch_all(&*pool).await,
+        None => sqlx::query_as::<_, MedicationScheduleItem>(
+            "SELECT * FROM medication_schedule ORDER BY medication_id, sort_order")
+            .fetch_all(&*pool).await,
+    };
+    rows.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_schedule_item(
+    pool: State<'_, SqlitePool>,
+    medication_id: i64,
+    label: Option<String>,
+    dose_amount: Option<f64>,
+    time_of_day: Option<String>,
+) -> Result<i64, String> {
+    // Next free slot for this medication.
+    let next: (i64,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM medication_schedule WHERE medication_id = ?")
+        .bind(medication_id).fetch_one(&*pool).await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "INSERT INTO medication_schedule (medication_id, sort_order, label, dose_amount, time_of_day)
+         VALUES (?, ?, ?, ?, ?)")
+        .bind(medication_id).bind(next.0).bind(&label).bind(dose_amount).bind(&time_of_day)
+        .execute(&*pool).await.map(|r| r.last_insert_rowid()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_schedule_item(
+    pool: State<'_, SqlitePool>,
+    id: i64,
+    label: Option<String>,
+    dose_amount: Option<f64>,
+    time_of_day: Option<String>,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE medication_schedule SET label = ?, dose_amount = ?, time_of_day = ? WHERE id = ?")
+        .bind(&label).bind(dose_amount).bind(&time_of_day).bind(id)
+        .execute(&*pool).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_schedule_item(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
+    sqlx::query("DELETE FROM medication_schedule WHERE id = ?")
         .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
     Ok(())
 }

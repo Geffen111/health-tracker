@@ -37,6 +37,33 @@ export function formatDateShort(dateStr: string | null | undefined): string {
   return `${dd}/${mm}`;
 }
 
+/** Format a Date to YYYY-MM-DD using LOCAL date parts (no UTC round-trip). */
 export function formatISODate(date: Date): string {
-  return date.toISOString().split('T')[0];
+  const yy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+/** Today's date as YYYY-MM-DD in the user's local timezone. */
+export function todayISO(): string {
+  return formatISODate(new Date());
+}
+
+/**
+ * Shift a YYYY-MM-DD string by `delta` days, staying in local time.
+ * Avoids the toISOString() UTC round-trip that silently broke "next day"
+ * for users east of UTC (e.g. AEST), where it could land on the same date.
+ */
+export function shiftISO(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  return formatISODate(dt);
+}
+
+/** Weekday index for a YYYY-MM-DD string (0=Sun … 6=Sat), in local time. */
+export function weekdayIndex(dateStr: string): number {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d).getDay();
 }

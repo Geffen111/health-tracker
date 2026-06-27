@@ -190,3 +190,56 @@ pub async fn save_sync_settings(csv_root: Option<String>, auto_import: bool) -> 
     put_setting("auto_import", serde_json::json!(auto_import))?;
     Ok(())
 }
+
+// ── App preferences (work defaults, activity defaults) ──
+
+#[derive(Serialize)]
+pub struct AppPrefs {
+    /// Default hours for a full work day (rostered/office prefill).
+    pub work_hours: f64,
+    /// Weekday indices that are work days (0=Sun … 6=Sat). Default Mon–Fri.
+    pub work_days: Vec<i64>,
+    /// Activity names always shown ready for time entry. Default Phone, Walking.
+    pub activity_defaults: Vec<String>,
+}
+
+fn default_work_days() -> Vec<i64> {
+    vec![1, 2, 3, 4, 5]
+}
+fn default_activity_defaults() -> Vec<String> {
+    vec!["Phone".to_string(), "Walking".to_string()]
+}
+
+#[tauri::command]
+pub async fn get_app_prefs() -> Result<AppPrefs, String> {
+    let s = read_settings();
+    let work_hours = s.get("work_hours").and_then(|v| v.as_f64()).unwrap_or(7.5);
+    let work_days = s
+        .get("work_days")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(default_work_days);
+    let activity_defaults = s
+        .get("activity_defaults")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(default_activity_defaults);
+    Ok(AppPrefs { work_hours, work_days, activity_defaults })
+}
+
+#[tauri::command]
+pub async fn save_app_prefs(
+    work_hours: f64,
+    work_days: Vec<i64>,
+    activity_defaults: Vec<String>,
+) -> Result<(), String> {
+    put_setting("work_hours", serde_json::json!(work_hours))?;
+    put_setting("work_days", serde_json::json!(work_days))?;
+    put_setting("activity_defaults", serde_json::json!(activity_defaults))?;
+    Ok(())
+}

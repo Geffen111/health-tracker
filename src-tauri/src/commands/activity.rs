@@ -59,6 +59,52 @@ pub async fn add_activity_entry(pool: State<'_, SqlitePool>, entry: ActivityEntr
     .map_err(|e| e.to_string())
 }
 
+/// Upsert a single day's duration for one activity type. Energy cost is taken
+/// from the activity type's default (auto-detected — the UI no longer asks).
+/// A duration of 0 (or less) clears any existing entry for that day+type.
+#[tauri::command]
+pub async fn set_activity_duration(
+    pool: State<'_, SqlitePool>,
+    log_date: String,
+    activity_type_id: i64,
+    duration_hours: f64,
+) -> Result<(), String> {
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM activity_log WHERE log_date = ? AND activity_type_id = ?")
+        .bind(&log_date).bind(activity_type_id)
+        .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
+
+    if duration_hours <= 0.0 {
+        if let Some((id,)) = existing {
+            sqlx::query("DELETE FROM activity_log WHERE id = ?")
+                .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+
+    let energy: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT default_energy_cost FROM activity_types WHERE id = ?")
+        .bind(activity_type_id)
+        .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
+    let energy_cost = energy.and_then(|r| r.0).unwrap_or_else(|| "Medium".to_string());
+
+    match existing {
+        Some((id,)) => {
+            sqlx::query("UPDATE activity_log SET duration_hours = ?, energy_cost = ? WHERE id = ?")
+                .bind(duration_hours).bind(&energy_cost).bind(id)
+                .execute(&*pool).await.map_err(|e| e.to_string())?;
+        }
+        None => {
+            sqlx::query(
+                "INSERT INTO activity_log (log_date, activity_type_id, duration_hours, energy_cost)
+                 VALUES (?, ?, ?, ?)")
+                .bind(&log_date).bind(activity_type_id).bind(duration_hours).bind(&energy_cost)
+                .execute(&*pool).await.map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn delete_activity_entry(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM activity_log WHERE id = ?")

@@ -1,12 +1,11 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate } from '$lib/formatDate';
+  import { formatDate, todayISO } from '$lib/formatDate';
 
   let params = $state<any[]>([]);
   let predictions = $state<any[]>([]);
   let loading = $state(true);
-  let darkMode = $state(false);
   let showAdvanced = $state(false);
 
   onMount(async () => {
@@ -20,13 +19,8 @@
     }
   });
 
-  function toggleTheme() {
-    darkMode = !darkMode;
-    document.documentElement.classList.toggle('dark', darkMode);
-  }
-
   async function runModel() {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayISO();
     try {
       await invoke('run_pem_model', { date: today });
       predictions = await invoke('get_pem_predictions', { limit: 14 });
@@ -40,7 +34,7 @@
     params = params.map((p: any) => p.param_name === name ? { ...p, param_value: value } : p);
   }
 
-  let todayPrediction = $derived(predictions.find((p: any) => p.log_date === new Date().toISOString().split('T')[0]));
+  let todayPrediction = $derived(predictions.find((p: any) => p.log_date === todayISO()));
 
   function bandColor(band: string | null): string {
     if (band === 'High') return 'var(--red-fg)';
@@ -73,13 +67,10 @@
 <div class="page-header">
   <div>
     <div class="page-title">PEM Model</div>
-    <div class="page-subtitle">What's driving today's crash risk · {formatDate(new Date().toISOString().split('T')[0])}</div>
+    <div class="page-subtitle">What's driving today's crash risk · {formatDate(todayISO())}</div>
   </div>
   <div class="header-actions">
     <button class="run-btn" onclick={runModel}>Run PEM Model for Today</button>
-    <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
-    </button>
   </div>
 </div>
 
@@ -221,7 +212,6 @@
   .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
   .header-actions { display:flex; align-items:center; gap:10px; }
   .run-btn { display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#fff;border:none;border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer; }
-  .theme-btn { width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
   .loading-text { color:var(--ts); text-align:center; padding:32px; }
 
   .hero-row { display:grid; grid-template-columns:1fr 1.6fr; gap:16px; margin-bottom:16px; }

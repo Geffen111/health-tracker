@@ -1,63 +1,72 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate, formatDateLong } from '$lib/formatDate';
+  import { formatDate, formatDateLong, todayISO, shiftISO, weekdayIndex } from '$lib/formatDate';
 
-  let today = $state(new Date().toISOString().split('T')[0]);
+  let today = $state(todayISO());
   let selectedDate = $state(today);
   let saved = $state(false);
-  let darkMode = $state(false);
+
+  // Defaults from Settings (full work day hours + which weekdays are work days).
+  let workHours = $state(7.5);
+  let workDays = $state<number[]>([1, 2, 3, 4, 5]);
 
   let status = $state('full');
-  let rosteredHours = $state(7.6);
+  let rosteredHours = $state(7.5);
   let sickLeaveHours = $state(0);
-  let officeHours = $state(7.6);
+  let officeHours = $state(7.5);
   let wfhHours = $state(0);
 
   let logs = $state<any[]>([]);
 
   onMount(async () => {
+    try {
+      const p: any = await invoke('get_app_prefs');
+      if (p) {
+        workHours = p.work_hours ?? 7.5;
+        if (Array.isArray(p.work_days) && p.work_days.length) workDays = p.work_days;
+      }
+    } catch {}
     await loadDate(selectedDate);
     await loadMonthly();
   });
 
   async function loadDate(date: string) {
+    // Prefill with the default for this weekday so a typical day is one click to
+    // save; a public holiday or odd day can just be edited before saving.
+    const isWorkDay = workDays.includes(weekdayIndex(date));
+    rosteredHours = isWorkDay ? workHours : 0;
+    officeHours = isWorkDay ? workHours : 0;
+    wfhHours = 0;
+    sickLeaveHours = 0;
     try {
       const existing: any = await invoke('get_daily_log', { date });
       if (existing) {
-        rosteredHours = existing.rostered_hours ?? 7.6;
-        sickLeaveHours = existing.sick_leave_hours ?? 0;
-        officeHours = existing.office_hours ?? 7.6;
-        wfhHours = existing.wfh_hours ?? 0;
-        if (sickLeaveHours > 0) status = 'sick';
-        else if ((officeHours + wfhHours) < rosteredHours) status = 'partial';
-        else status = 'full';
+        if (existing.rostered_hours != null) rosteredHours = existing.rostered_hours;
+        if (existing.sick_leave_hours != null) sickLeaveHours = existing.sick_leave_hours;
+        if (existing.office_hours != null) officeHours = existing.office_hours;
+        if (existing.wfh_hours != null) wfhHours = existing.wfh_hours;
       }
     } catch {}
-  }
-
-  function onDateChange() {
-    loadDate(selectedDate);
+    if (sickLeaveHours > 0) status = 'sick';
+    else if ((officeHours + wfhHours) < rosteredHours) status = 'partial';
+    else status = 'full';
   }
 
   function prevDay() {
-    const d = new Date(selectedDate + 'T00:00:00');
-    d.setDate(d.getDate() - 1);
-    selectedDate = d.toISOString().split('T')[0];
+    selectedDate = shiftISO(selectedDate, -1);
     loadDate(selectedDate);
   }
 
   function nextDay() {
-    const d = new Date(selectedDate + 'T00:00:00');
-    d.setDate(d.getDate() + 1);
-    selectedDate = d.toISOString().split('T')[0];
+    selectedDate = shiftISO(selectedDate, 1);
     loadDate(selectedDate);
   }
 
   function pickStatus(s: string) {
     status = s;
-    if (s === 'sick') { sickLeaveHours = 7.6; officeHours = 0; wfhHours = 0; }
-    else if (s === 'partial') { sickLeaveHours = 0; }
+    if (s === 'sick') { sickLeaveHours = workHours; officeHours = 0; wfhHours = 0; }
+    else if (s === 'full') { sickLeaveHours = 0; officeHours = workHours; wfhHours = 0; }
     else { sickLeaveHours = 0; }
   }
 
@@ -85,9 +94,7 @@
   let workedToday = $derived((officeHours + wfhHours).toFixed(1));
 
   function getWeekStart(dateStr: string): string {
-    const d = new Date(dateStr + 'T00:00:00');
-    d.setDate(d.getDate() - d.getDay());
-    return d.toISOString().split('T')[0];
+    return shiftISO(dateStr, -weekdayIndex(dateStr));
   }
 
   let weekGroups = $derived.by(() => {
@@ -116,15 +123,10 @@
     const sick = log.sick_leave_hours ?? 0;
     const office = log.office_hours ?? 0;
     const wfh = log.wfh_hours ?? 0;
-    const rostered = log.rostered_hours ?? 7.6;
+    const rostered = log.rostered_hours ?? workHours;
     if (sick > 0) return { label: 'Sick', cls: 'sick' };
     if (office + wfh >= rostered) return { label: 'Full', cls: 'full' };
     return { label: 'Partial', cls: 'partial' };
-  }
-
-  function toggleTheme() {
-    darkMode = !darkMode;
-    document.documentElement.classList.toggle('dark', darkMode);
   }
 
   function fmt(val: number | null | undefined): string {
@@ -148,9 +150,6 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>
     </div>
-    <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
-    </button>
   </div>
 </div>
 
@@ -256,7 +255,6 @@
   .day-arrow { width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
   .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
   .day-label { font-weight:700; font-size:13px; padding:0 6px; min-width:108px; text-align:center; }
-  .theme-btn { width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
 
   .two-col { display:grid; grid-template-columns:1fr 1.7fr; gap:16px; align-items:start; }
   .entry-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:20px; }
