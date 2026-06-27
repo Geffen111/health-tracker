@@ -39,17 +39,18 @@
     return sorted.slice(-histDays);
   });
   let histLabels = $derived(histRows.map((r: any) => formatDateShort(r.log_date)));
+  // Both series of a couplet share one axis so they're directly comparable
+  // (a right-hand axis can make resting HR look higher than average HR, etc.).
   let histDatasets = $derived([
-    { label: histCfg.a.label, data: histRows.map((r: any) => r[histCfg.a.key] ?? null), borderColor: histCfg.a.color, backgroundColor: histCfg.a.color, yAxisID: 'y' },
-    { label: histCfg.b.label, data: histRows.map((r: any) => r[histCfg.b.key] ?? null), borderColor: histCfg.b.color, backgroundColor: histCfg.b.color, yAxisID: 'y1' },
+    { label: histCfg.a.label, data: histRows.map((r: any) => r[histCfg.a.key] ?? null), borderColor: histCfg.a.color, backgroundColor: histCfg.a.color },
+    { label: histCfg.b.label, data: histRows.map((r: any) => r[histCfg.b.key] ?? null), borderColor: histCfg.b.color, backgroundColor: histCfg.b.color },
   ]);
   let histOptions = $derived({
     elements: { point: { radius: 2, hoverRadius: 5 } },
     spanGaps: true,
     interaction: { mode: 'index', intersect: false },
     scales: {
-      y: { type: 'linear', position: 'left', grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
-      y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      y: { type: 'linear', grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
       x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
     },
     plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
