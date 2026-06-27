@@ -71,13 +71,19 @@ Decided with the user (see `PLAN.md` "Feature backlog" for the full grouped list
 4. **Section C — cross-cutting** ✅ DONE — DD/MM/YY format, a11y cleanup.
 5. **Phase 9 — Chart.js integration** ✅ DONE — Dashboard + Sleep interactive charts.
 
-**What remains:**
-- **Phase 7 — Google Drive CSV auto-import.** Backend not yet started. The `csv` crate is already
-  in `Cargo.toml`. Needs: new `commands/csv_import.rs`, a settings store (JSON file in data dir),
-  a scheduled/polling mechanism, and wiring in the Settings page (CSV path input, auto-import
-  toggle, last-synced display).
+**What remains:** nothing major outstanding — Phases 1–10 are implemented. Next steps are
+verification against live data (run on Windows) and any tuning that surfaces.
 
 **Recently done (2026-06-27, Claude Code):**
+- **Phase 7 — Samsung Health (Health Sync) CSV auto-import.** `commands/csv_import.rs` reads the
+  four Drive folders (`Health Sync Steps`/`Heart rate`/`Sleep`/`Energy burned`, root default
+  `G:\My Drive`), aggregates per day (steps SUM; HR mean/min/max; active calories; sleep stages →
+  asleep/rem/deep/awake/on-pillow hours, attributed to the **wake day**) and COALESCE-upserts into
+  `daily_logs`. Files reprocessed when modified since last sync (or via "Full re-sync"). Sync
+  settings (`csv_root`/`auto_import`/`last_sync`) in `settings.json`; resting HR left untouched.
+  UI: "Watch & health sync" card wired (folder, toggle, Sync now / Full re-sync, last-synced) +
+  silent auto-import on launch from the root layout. ⚠️ Not yet run against live data — verify the
+  steps total (a `00:00:00` row can carry a large value) and sleep day attribution on first run.
 - **Data export** — `commands/export.rs` adds `export_csv` (one CSV per table in a timestamped
   folder) and `export_json` (full pretty-printed dump), both written to `<data_dir>/exports/`
   (OneDrive-synced). Settings buttons wired; `db::get_data_dir()` exposed for the shared path.

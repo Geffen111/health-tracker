@@ -29,6 +29,13 @@ PEM Model → risk predictions → Dashboard
 - **Migrations** are embedded via `sqlx::migrate!("./migrations")` — never read from disk
   at runtime.
 - **Source spreadsheet:** `%OneDrive%\Health\Fatigue_Log_V6.xlsx` (V6 is current, not V4/V5).
+- **Health Sync CSVs (Phase 7):** four folders under a Drive root (default `G:\My Drive`):
+  `Health Sync Steps` (`Date,Time,Steps` → SUM/day), `Health Sync Heart rate`
+  (`Date,Time,Heart rate,Source` → mean/min/max → `ave_hr`/`hr_min`/`hr_max`),
+  `Health Sync Energy burned` (`Date,Time,Active/Resting/Total calories` → active → `activity_calories`),
+  `Health Sync Sleep` (`Date,Time,Duration in seconds,Sleep stage` → asleep/rem/deep/awake/on-pillow
+  hours, attributed to the **wake day**). COALESCE-upsert; resting HR left untouched. Reprocess by
+  file mtime > last sync. See `commands/csv_import.rs`.
 
 ## Status
 
@@ -40,7 +47,7 @@ PEM Model → risk predictions → Dashboard
 | 4 | PEM model rewrite to match spreadsheet formulas exactly (33 calibration params) | ✅ Done |
 | 5 | Token-based CSS overhaul (adopt Meridian design system) | ✅ Done — full Meridian theme implemented 2026-06-27 |
 | 6 | Settings page — Google Drive CSV path, calibration viewer, data export (CSV/JSON), collapsible import | ✅ Done 2026-06-27 |
-| 7 | Google Drive CSV auto-import (poll Samsung Health CSV, parse steps/HR/sleep) | ⬜ TODO |
+| 7 | Google Drive CSV auto-import (Samsung Health via Health Sync — steps/HR/sleep/energy) | ✅ Done 2026-06-27 — `commands/csv_import.rs`, on-launch + Sync now |
 | 8 | Dose-logging UI (frontend for `get_doses_for_date` / `upsert_dose`) | ⬜ TODO |
 | 9 | Chart.js integration (replace static SVG trends with interactive charts) | ✅ Done 2026-06-27 — Chart.svelte wrapper, Dashboard compare-signals dual-line chart, Sleep 30-day selectable-metric chart, Dashboard sleep sparkline |
 
