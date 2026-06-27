@@ -44,8 +44,14 @@ PEM Model → risk predictions → Dashboard
 | 8 | Dose-logging UI (frontend for `get_doses_for_date` / `upsert_dose`) | ⬜ TODO |
 | 9 | Chart.js integration (replace static SVG trends with interactive charts) | ✅ Done 2026-06-27 — Chart.svelte wrapper, Dashboard compare-signals dual-line chart, Sleep 30-day selectable-metric chart, Dashboard sleep sparkline |
 
-(An OpenRouter AI integration like Family Finance's was proposed; `reqwest` is already a
-dependency but no AI command file exists yet.)
+| 10 | AI Ask + Insights (OpenRouter, like Family Finance) | ✅ Done 2026-06-27 — `/ask` route, NL→SQL `ask_question`, `get_insights`/`refresh_insights`, API key in Settings |
+
+**AI integration (Phase 10):** OpenRouter (`deepseek/deepseek-v4-flash`), mirroring Family
+Finance. `commands/ai.rs` (shared client), `commands/ask.rs` (hybrid text-to-SQL — schema sent,
+not data; SELECT-only validation), `commands/insights.rs` (aggregates → model → cached in
+`ai_insights`, migration 20240611), `commands/settings.rs` (API key in `<data_dir>/settings.json`).
+Key is entered on the Settings page. Privacy: only the schema + small aggregated results are sent
+to the model, never raw row-level health data.
 
 **2026-06-27 (Claude Code), smaller wins after the OpenCode handover:** data export is now
 genuinely wired (`commands/export.rs` → `export_csv`/`export_json`, writing to

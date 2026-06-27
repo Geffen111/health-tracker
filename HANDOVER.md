@@ -87,6 +87,13 @@ Decided with the user (see `PLAN.md` "Feature backlog" for the full grouped list
   "Watch synced / 2 hours ago" sidebar block was removed. (Backend `log_watch_calibration` already
   accepted `cal_date`/`cal_time`; the `watch_calibration` table name is kept to avoid a migration.)
 - **Removed the orphaned `/import` route** — import lives in Settings now.
+- **AI Ask + Insights (Phase 10)** — OpenRouter (`deepseek-v4-flash`), mirroring Family Finance.
+  New `/ask` route + nav item: natural-language Q&A (`ask_question` does hybrid text-to-SQL —
+  schema sent, not data; SELECT-only validation + run locally + phrase answer) and an AI insights
+  report (`get_insights`/`refresh_insights` aggregate fatigue/sleep/PEM/activity, cached in
+  `ai_insights`, migration 20240611). API key entered in Settings, stored in
+  `<data_dir>/settings.json`. Files: `commands/{ai,ask,insights,settings}.rs`. Only schema +
+  aggregated figures are sent to the model — never raw rows.
 
 ## 6. Section A — what was added (backend API surface for the UI to use)
 Migrations `20240608`–`20240610`; all commands registered in `src-tauri/src/lib.rs`.
