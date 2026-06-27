@@ -4,12 +4,16 @@
   import { formatDateLong } from '$lib/formatDate';
 
   let today = $state(new Date().toISOString().split('T')[0]);
+  let nowTime = new Date().toTimeString().slice(0, 5);
   let selectedDate = $state(today);
   let bpReadings = $state<any[]>([]);
   let dailyLog = $state<any>(null);
   let darkMode = $state(false);
   let banner = $state(false);
   let calDays = $state<number | null>(null);
+  let lastCal = $state<any>(null);
+  let calDate = $state(today);
+  let calTime = $state(nowTime);
 
   let nTime = $state('');
   let nSys = $state('');
@@ -18,7 +22,7 @@
   onMount(() => { loadAll(); });
 
   async function loadAll() {
-    await Promise.all([loadBP(), loadDailyLog(), loadCalDays()]);
+    await Promise.all([loadBP(), loadDailyLog(), loadCal()]);
   }
 
   async function loadBP() {
@@ -34,9 +38,11 @@
     } catch (e) { console.error('Error loading daily logs:', e); }
   }
 
-  async function loadCalDays() {
+  async function loadCal() {
     try {
       calDays = await invoke('days_since_calibration');
+      const recent: any[] = await invoke('list_watch_calibrations', { limit: 1 });
+      lastCal = recent.length > 0 ? recent[0] : null;
     } catch {}
   }
 
@@ -114,8 +120,11 @@
 
   async function logCalibration() {
     try {
-      await invoke('log_watch_calibration', {});
-      calDays = 0;
+      await invoke('log_watch_calibration', {
+        calDate: calDate || null,
+        calTime: calTime || null,
+      });
+      await loadCal();
       banner = true;
       setTimeout(() => banner = false, 3000);
     } catch (e) { console.error('Error logging calibration:', e); }
@@ -125,7 +134,7 @@
 <div class="page-header">
   <div>
     <div class="page-title">Cardio</div>
-    <div class="page-subtitle">Blood pressure, heart rate &amp; watch calibration</div>
+    <div class="page-subtitle">Blood pressure, heart rate &amp; monitor calibration</div>
   </div>
   <div class="header-actions">
     <div class="day-nav">
@@ -146,7 +155,7 @@
 {#if banner}
   <div class="banner">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-    <span>Watch calibration logged — recorded just now.</span>
+    <span>Blood pressure monitor calibration logged.</span>
     <button class="banner-dismiss" onclick={() => banner = false}>Dismiss</button>
   </div>
 {/if}
@@ -223,9 +232,14 @@
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg>
   </div>
   <div class="cal-info">
-    <div class="card-heading">Watch calibration</div>
+    <div class="card-heading">Blood pressure monitor calibration</div>
     <div class="cal-status">
-      {calDays != null ? `Last logged ${calDays} day${calDays === 1 ? '' : 's'} ago${overdue ? ' — overdue' : ` · next due in ${30 - calDays} days`}` : 'No calibration logged yet'}
+      {#if lastCal}
+        Last calibrated: {formatDateLong(lastCal.cal_date)}{lastCal.cal_time ? ` · ${lastCal.cal_time}` : ''}
+        {#if calDays != null}<span class="cal-due"> — {overdue ? 'recalibration overdue' : `next due in ${30 - calDays} days`}</span>{/if}
+      {:else}
+        No calibration logged yet — recommended every 30 days
+      {/if}
     </div>
     <div class="cal-bar-track">
       <div class="cal-bar-fill" style="width:{calPct}%;background:{overdue ? 'var(--amber)' : 'var(--accent)'};"></div>
@@ -233,10 +247,14 @@
   </div>
   <div class="cal-right">
     <span class="cal-badge" style="color:{overdue ? 'var(--amber-fg)' : 'var(--accent-fg)'};background:{overdue ? 'var(--amber-soft)' : 'var(--accent-soft)'};">{overdue ? 'Recalibration due' : 'On track'}</span>
-    <button class="cal-btn" onclick={logCalibration}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-      Log calibration
-    </button>
+    <div class="cal-entry">
+      <input type="date" bind:value={calDate} max={today} class="cal-input" aria-label="Calibration date" />
+      <input type="time" bind:value={calTime} class="cal-input" aria-label="Calibration time" />
+      <button class="cal-btn" onclick={logCalibration}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        Log
+      </button>
+    </div>
   </div>
 </div>
 
@@ -301,5 +319,8 @@
   .cal-bar-fill { height:100%; border-radius:999px; }
   .cal-right { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
   .cal-badge { font-size:11.5px; font-weight:700; padding:4px 11px; border-radius:999px; }
+  .cal-due { color:var(--tm); }
+  .cal-entry { display:flex; align-items:center; gap:8px; }
+  .cal-input { background:var(--inset); border:1px solid var(--border); border-radius:9px; padding:8px 10px; font-size:12.5px; color:var(--tp); font-variant-numeric:tabular-nums; }
   .cal-btn { display:inline-flex; align-items:center; gap:7px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; }
 </style>

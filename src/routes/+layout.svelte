@@ -57,15 +57,6 @@
         </a>
       {/each}
     </nav>
-    <div class="sidebar-footer">
-      <div class="watch-status">
-        <span class="watch-dot"></span>
-        <div>
-          <div class="watch-label">Watch synced</div>
-          <div class="watch-sub">2 hours ago</div>
-        </div>
-      </div>
-    </div>
   </aside>
   <main class="main-content">
     {@render children()}
@@ -193,39 +184,6 @@
     background: var(--accent-soft);
     color: var(--accent-fg);
     font-weight: 700;
-  }
-
-  .sidebar-footer {
-    margin-top: auto;
-  }
-
-  .watch-status {
-    background: var(--inset);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 10px 12px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-  }
-
-  .watch-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--accent);
-    flex-shrink: 0;
-  }
-
-  .watch-label {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--tp);
-  }
-
-  .watch-sub {
-    font-size: 11px;
-    color: var(--tm);
   }
 
   .main-content {
