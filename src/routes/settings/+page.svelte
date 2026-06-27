@@ -38,6 +38,9 @@
   let csvRoot = $state('G:\\My Drive');
   let autoImport = $state(true);
   let lastSync = $state<string | null>(null);
+
+  // Health Records vault (read-only Obsidian browser).
+  let vaultRoot = $state('C:\\Users\\gavin\\OneDrive\\Obsidian\\Health-Records');
   let syncing = $state(false);
   let syncMsg = $state('');
   let syncErr = $state(false);
@@ -62,6 +65,10 @@
       if (s?.csv_root) csvRoot = s.csv_root;
       autoImport = s?.auto_import ?? true;
       lastSync = s?.last_sync ?? null;
+    } catch {}
+    try {
+      const v: any = await invoke('get_vault_settings');
+      if (v?.vault_root) vaultRoot = v.vault_root;
     } catch {}
     try {
       const p: any = await invoke('get_app_prefs');
@@ -108,6 +115,13 @@
     try {
       await invoke('save_sync_settings', { csvRoot, autoImport });
     } catch (e) { console.error('Error saving sync settings:', e); }
+  }
+
+  async function saveVaultSettings() {
+    try {
+      await invoke('save_vault_settings', { vaultRoot });
+      showToast('Records vault folder saved');
+    } catch (e) { console.error('Error saving vault settings:', e); }
   }
 
   async function toggleAutoImport() {
@@ -249,6 +263,18 @@
     {#if syncMsg}
       <div class="export-msg" class:err={syncErr}>{syncMsg}</div>
     {/if}
+  </div>
+
+  <div class="card">
+    <div>
+      <div class="card-heading">Health Records vault</div>
+      <div class="card-subtitle">Folder of your Obsidian "Health Records" vault. The <a href="/records" class="inline-link">Records</a> page reads these notes (pathology, topics, timeline…) read-only — it never writes to the vault.</div>
+    </div>
+    <div class="text-field">
+      <label for="vault-path">Vault folder</label>
+      <input id="vault-path" bind:value={vaultRoot} onchange={saveVaultSettings} class="mono-input" />
+      <span class="field-hint">e.g. <code>C:\Users\gavin\OneDrive\Obsidian\Health-Records</code> — the folder Obsidian opens as the vault.</span>
+    </div>
   </div>
 
   <div class="card">

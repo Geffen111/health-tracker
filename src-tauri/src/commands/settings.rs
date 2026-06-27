@@ -191,6 +191,26 @@ pub async fn save_sync_settings(csv_root: Option<String>, auto_import: bool) -> 
     Ok(())
 }
 
+// ── Health Records vault (read-only Obsidian browser) ──
+
+#[derive(Serialize)]
+pub struct VaultSettings {
+    /// Folder of the Obsidian "Health Records" vault, or None to use the default.
+    pub vault_root: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_vault_settings() -> Result<VaultSettings, String> {
+    Ok(VaultSettings { vault_root: setting_str("vault_root") })
+}
+
+#[tauri::command]
+pub async fn save_vault_settings(vault_root: Option<String>) -> Result<(), String> {
+    let cleaned = vault_root.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    put_setting("vault_root", serde_json::json!(cleaned))?;
+    Ok(())
+}
+
 // ── App preferences (work defaults, activity defaults) ──
 
 #[derive(Serialize)]

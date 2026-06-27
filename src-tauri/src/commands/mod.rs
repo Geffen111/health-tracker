@@ -13,3 +13,4 @@ pub mod ask;
 pub mod insights;
 pub mod csv_import;
 pub mod update;
+pub mod vault;
