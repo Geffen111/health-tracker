@@ -7,6 +7,9 @@
 //
 // "On each sync a file is (re)created for that day", so files are reprocessed when
 // their modification time is newer than the last successful sync (or when `full`).
+//
+// The per-metric aggregation is pure (agg_steps/agg_hr/agg_energy/agg_sleep) and
+// unit-tested at the bottom; the command just does file IO, merging and upsert.
 
 use crate::commands::settings;
 use serde::Serialize;
@@ -72,30 +75,24 @@ pub async fn import_health_csv(
     let mut files_processed = 0i64;
     let mut files_skipped = 0i64;
 
-    // Intermediate per-date accumulators.
+    // Cross-file per-date accumulators.
     let mut steps: HashMap<String, i64> = HashMap::new();
     let mut energy: HashMap<String, f64> = HashMap::new();
-    // (sum, count, min, max)
-    let mut hr: HashMap<String, (i64, i64, i64, i64)> = HashMap::new();
-    // (asleep, rem, deep, awake) seconds
-    let mut sleep: HashMap<String, (f64, f64, f64, f64)> = HashMap::new();
+    let mut hr: HashMap<String, (i64, i64, i64, i64)> = HashMap::new(); // sum, count, min, max
+    let mut sleep: HashMap<String, (f64, f64, f64, f64)> = HashMap::new(); // asleep, rem, deep, awake (secs)
 
     // ── Steps ──
     for path in &collect_files(&root.join(STEPS_DIR), last_sync_unix, &mut files_skipped) {
         match read_csv(path) {
-            Ok((headers, records)) => {
-                files_processed += 1;
-                let (di, si) = (col(&headers, "Date"), col(&headers, "Steps"));
-                if let (Some(di), Some(si)) = (di, si) {
-                    for r in &records {
-                        if let (Some(date), Some(n)) = (r.get(di).and_then(date_part), r.get(si).and_then(parse_i64)) {
-                            *steps.entry(date).or_insert(0) += n;
-                        }
+            Ok((h, recs)) => match agg_steps(&h, &recs) {
+                Ok(m) => {
+                    files_processed += 1;
+                    for (d, n) in m {
+                        *steps.entry(d).or_insert(0) += n;
                     }
-                } else {
-                    errors.push(format!("{}: missing Date/Steps columns", file_label(path)));
                 }
-            }
+                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            },
             Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
         }
     }
@@ -103,19 +100,15 @@ pub async fn import_health_csv(
     // ── Energy burned (active calories) ──
     for path in &collect_files(&root.join(ENERGY_DIR), last_sync_unix, &mut files_skipped) {
         match read_csv(path) {
-            Ok((headers, records)) => {
-                files_processed += 1;
-                let (di, ai) = (col(&headers, "Date"), col(&headers, "Active calories"));
-                if let (Some(di), Some(ai)) = (di, ai) {
-                    for r in &records {
-                        if let (Some(date), Some(c)) = (r.get(di).and_then(date_part), r.get(ai).and_then(parse_f64)) {
-                            *energy.entry(date).or_insert(0.0) += c;
-                        }
+            Ok((h, recs)) => match agg_energy(&h, &recs) {
+                Ok(m) => {
+                    files_processed += 1;
+                    for (d, c) in m {
+                        *energy.entry(d).or_insert(0.0) += c;
                     }
-                } else {
-                    errors.push(format!("{}: missing Date/Active calories columns", file_label(path)));
                 }
-            }
+                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            },
             Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
         }
     }
@@ -123,61 +116,39 @@ pub async fn import_health_csv(
     // ── Heart rate ──
     for path in &collect_files(&root.join(HR_DIR), last_sync_unix, &mut files_skipped) {
         match read_csv(path) {
-            Ok((headers, records)) => {
-                files_processed += 1;
-                let (di, hi) = (col(&headers, "Date"), col(&headers, "Heart rate"));
-                if let (Some(di), Some(hi)) = (di, hi) {
-                    for r in &records {
-                        if let (Some(date), Some(bpm)) = (r.get(di).and_then(date_part), r.get(hi).and_then(parse_i64)) {
-                            let e = hr.entry(date).or_insert((0, 0, i64::MAX, i64::MIN));
-                            e.0 += bpm;
-                            e.1 += 1;
-                            e.2 = e.2.min(bpm);
-                            e.3 = e.3.max(bpm);
-                        }
+            Ok((h, recs)) => match agg_hr(&h, &recs) {
+                Ok(m) => {
+                    files_processed += 1;
+                    for (d, (sum, count, min, max)) in m {
+                        let e = hr.entry(d).or_insert((0, 0, i64::MAX, i64::MIN));
+                        e.0 += sum;
+                        e.1 += count;
+                        e.2 = e.2.min(min);
+                        e.3 = e.3.max(max);
                     }
-                } else {
-                    errors.push(format!("{}: missing Date/Heart rate columns", file_label(path)));
                 }
-            }
+                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            },
             Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
         }
     }
 
-    // ── Sleep (attribute the whole session to its wake day) ──
+    // ── Sleep (attributed to wake day) ──
     for path in &collect_files(&root.join(SLEEP_DIR), last_sync_unix, &mut files_skipped) {
         match read_csv(path) {
-            Ok((headers, records)) => {
-                files_processed += 1;
-                let (di, dur, st) = (
-                    col(&headers, "Date"),
-                    col(&headers, "Duration in seconds"),
-                    col(&headers, "Sleep stage"),
-                );
-                if let (Some(di), Some(dur), Some(st)) = (di, dur, st) {
-                    // Wake day = date of the latest row (timestamps sort lexically).
-                    let wake_date = records
-                        .iter()
-                        .filter_map(|r| r.get(di).map(|s| s.to_string()))
-                        .max()
-                        .and_then(|s| date_part(&s));
-                    if let Some(date) = wake_date {
-                        let e = sleep.entry(date).or_insert((0.0, 0.0, 0.0, 0.0));
-                        for r in &records {
-                            let secs = r.get(dur).and_then(parse_f64).unwrap_or(0.0);
-                            match r.get(st).map(|s| s.trim().to_lowercase()).as_deref() {
-                                Some("rem") => { e.0 += secs; e.1 += secs; }
-                                Some("deep") => { e.0 += secs; e.2 += secs; }
-                                Some("light") | Some("sleeping") => { e.0 += secs; }
-                                Some("awake") | Some("awake_in_bed") => { e.3 += secs; }
-                                _ => {}
-                            }
-                        }
+            Ok((h, recs)) => match agg_sleep(&h, &recs) {
+                Ok(m) => {
+                    files_processed += 1;
+                    for (d, (a, r, dp, aw)) in m {
+                        let e = sleep.entry(d).or_insert((0.0, 0.0, 0.0, 0.0));
+                        e.0 += a;
+                        e.1 += r;
+                        e.2 += dp;
+                        e.3 += aw;
                     }
-                } else {
-                    errors.push(format!("{}: missing Date/Duration/Sleep stage columns", file_label(path)));
                 }
-            }
+                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            },
             Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
         }
     }
@@ -239,6 +210,85 @@ pub async fn import_health_csv(
     })
 }
 
+// ── Pure per-metric aggregation (unit-tested) ──
+
+/// SUM step counts per day.
+fn agg_steps(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, i64>, &'static str> {
+    let di = col(headers, "Date").ok_or("missing Date column")?;
+    let si = col(headers, "Steps").ok_or("missing Steps column")?;
+    let mut out: HashMap<String, i64> = HashMap::new();
+    for r in records {
+        if let (Some(date), Some(n)) = (r.get(di).and_then(date_part), r.get(si).and_then(parse_i64)) {
+            *out.entry(date).or_insert(0) += n;
+        }
+    }
+    Ok(out)
+}
+
+/// SUM active calories per day.
+fn agg_energy(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, f64>, &'static str> {
+    let di = col(headers, "Date").ok_or("missing Date column")?;
+    let ai = col(headers, "Active calories").ok_or("missing Active calories column")?;
+    let mut out: HashMap<String, f64> = HashMap::new();
+    for r in records {
+        if let (Some(date), Some(c)) = (r.get(di).and_then(date_part), r.get(ai).and_then(parse_f64)) {
+            *out.entry(date).or_insert(0.0) += c;
+        }
+    }
+    Ok(out)
+}
+
+/// Per day: (sum, count, min, max) of bpm.
+fn agg_hr(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, (i64, i64, i64, i64)>, &'static str> {
+    let di = col(headers, "Date").ok_or("missing Date column")?;
+    let hi = col(headers, "Heart rate").ok_or("missing Heart rate column")?;
+    let mut out: HashMap<String, (i64, i64, i64, i64)> = HashMap::new();
+    for r in records {
+        if let (Some(date), Some(bpm)) = (r.get(di).and_then(date_part), r.get(hi).and_then(parse_i64)) {
+            let e = out.entry(date).or_insert((0, 0, i64::MAX, i64::MIN));
+            e.0 += bpm;
+            e.1 += 1;
+            e.2 = e.2.min(bpm);
+            e.3 = e.3.max(bpm);
+        }
+    }
+    Ok(out)
+}
+
+/// Sum sleep-stage seconds for the session, attributed to its wake day (the date
+/// of the latest row). Returns (asleep, rem, deep, awake) seconds.
+fn agg_sleep(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, (f64, f64, f64, f64)>, &'static str> {
+    let di = col(headers, "Date").ok_or("missing Date column")?;
+    let dur = col(headers, "Duration in seconds").ok_or("missing Duration in seconds column")?;
+    let st = col(headers, "Sleep stage").ok_or("missing Sleep stage column")?;
+    let mut out: HashMap<String, (f64, f64, f64, f64)> = HashMap::new();
+
+    // Timestamps "YYYY.MM.DD HH:MM:SS" sort lexically = chronologically.
+    let wake = records
+        .iter()
+        .filter_map(|r| r.get(di).map(|s| s.to_string()))
+        .max()
+        .and_then(|s| date_part(&s));
+    let date = match wake {
+        Some(d) => d,
+        None => return Ok(out),
+    };
+
+    let mut e = (0.0, 0.0, 0.0, 0.0);
+    for r in records {
+        let secs = r.get(dur).and_then(parse_f64).unwrap_or(0.0);
+        match r.get(st).map(|s| s.trim().to_lowercase()).as_deref() {
+            Some("rem") => { e.0 += secs; e.1 += secs; }
+            Some("deep") => { e.0 += secs; e.2 += secs; }
+            Some("light") | Some("sleeping") => { e.0 += secs; }
+            Some("awake") | Some("awake_in_bed") => { e.3 += secs; }
+            _ => {}
+        }
+    }
+    out.insert(date, e);
+    Ok(out)
+}
+
 async fn upsert_day(pool: &SqlitePool, date: &str, a: &DayAgg) -> Result<(), String> {
     sqlx::query(
         "INSERT INTO daily_logs (log_date, steps, activity_calories, ave_hr, hr_min, hr_max,
@@ -279,7 +329,7 @@ fn collect_files(dir: &Path, last_sync_unix: Option<i64>, skipped: &mut i64) -> 
     let mut out = Vec::new();
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return out, // folder missing → just nothing to import from it
+        Err(_) => return out, // folder missing → nothing to import from it
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -338,7 +388,6 @@ fn date_part(s: &str) -> Option<String> {
 
 fn parse_i64(s: &str) -> Option<i64> {
     let t = s.trim().trim_matches('"');
-    // Tolerate decimals like "6705.0".
     t.parse::<i64>().ok().or_else(|| t.parse::<f64>().ok().map(|f| f.round() as i64))
 }
 
@@ -356,4 +405,102 @@ fn round1(v: f64) -> f64 {
 
 fn file_label(path: &Path) -> String {
     path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(items: &[&str]) -> csv::StringRecord {
+        csv::StringRecord::from(items.to_vec())
+    }
+
+    #[test]
+    fn date_part_converts_dotted_to_iso() {
+        assert_eq!(date_part("2026.06.25 00:00:00").as_deref(), Some("2026-06-25"));
+        assert_eq!(date_part("2026.06.25").as_deref(), Some("2026-06-25"));
+        assert_eq!(date_part("garbage"), None);
+        assert_eq!(date_part(""), None);
+    }
+
+    #[test]
+    fn parse_numbers_tolerates_quotes_and_decimals() {
+        assert_eq!(parse_i64("6705"), Some(6705));
+        assert_eq!(parse_i64("\"6705.0\""), Some(6705));
+        assert_eq!(parse_i64("bad"), None);
+        assert_eq!(parse_f64("\"0.0\""), Some(0.0));
+        assert_eq!(parse_f64("12.5"), Some(12.5));
+    }
+
+    #[test]
+    fn hours_converts_and_rounds() {
+        assert_eq!(hours(3600.0), 1.0);
+        assert_eq!(hours(900.0), 0.3); // 0.25h rounds to 0.3 at 1dp (half away from zero)
+        assert_eq!(hours(1800.0), 0.5);
+        assert_eq!(hours(0.0), 0.0);
+    }
+
+    #[test]
+    fn steps_sum_all_rows_for_the_day() {
+        let h = rec(&["Date", "Time", "Steps"]);
+        let recs = vec![
+            rec(&["2026.06.26 00:00:00", "00:00:00", "6705"]),
+            rec(&["2026.06.26 06:41:09", "06:41:09", "6"]),
+            rec(&["2026.06.26 06:41:21", "06:41:21", "8"]),
+        ];
+        let m = agg_steps(&h, &recs).unwrap();
+        // Current behaviour: the 00:00:00 row is included in the SUM.
+        assert_eq!(m.get("2026-06-26"), Some(&6719));
+    }
+
+    #[test]
+    fn hr_computes_sum_count_min_max() {
+        let h = rec(&["Date", "Time", "Heart rate", "Source"]);
+        let recs = vec![
+            rec(&["2026.06.26 00:00:00", "00:00:00", "70", "x"]),
+            rec(&["2026.06.26 00:01:00", "00:01:00", "66", "x"]),
+            rec(&["2026.06.26 00:02:00", "00:02:00", "80", "x"]),
+        ];
+        let m = agg_hr(&h, &recs).unwrap();
+        assert_eq!(m["2026-06-26"], (216, 3, 66, 80));
+    }
+
+    #[test]
+    fn energy_sums_active_calories_only() {
+        let h = rec(&["Date", "Time", "Active calories", "Resting calories", "Total calories"]);
+        let recs = vec![
+            rec(&["2026.06.25 00:00:00", "00:00:00", "0.0", "0.0", "0.0"]),
+            rec(&["2026.06.25 10:00:00", "10:00:00", "12.5", "60", "72.5"]),
+        ];
+        let m = agg_energy(&h, &recs).unwrap();
+        assert!((m["2026-06-25"] - 12.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sleep_attributed_to_wake_day_and_stages_summed() {
+        let h = rec(&["Date", "Time", "Duration in seconds", "Sleep stage"]);
+        let recs = vec![
+            rec(&["2026.06.25 22:44:00", "22:44:00", "900", "light"]),
+            rec(&["2026.06.25 23:25:00", "23:25:00", "2460", "deep"]),
+            rec(&["2026.06.26 00:06:00", "00:06:00", "60", "awake"]),
+            rec(&["2026.06.26 01:59:30", "01:59:30", "930", "rem"]),
+        ];
+        let m = agg_sleep(&h, &recs).unwrap();
+        // The whole session lands on the wake day, not the bed day.
+        assert!(!m.contains_key("2026-06-25"));
+        let (asleep, rem, deep, awake) = m["2026-06-26"];
+        assert_eq!(rem, 930.0);
+        assert_eq!(deep, 2460.0);
+        assert_eq!(asleep, 900.0 + 2460.0 + 930.0); // light + deep + rem
+        assert_eq!(awake, 60.0);
+    }
+
+    #[test]
+    fn missing_columns_returns_error() {
+        let h = rec(&["Date", "Time"]);
+        assert!(agg_steps(&h, &[]).is_err());
+        assert!(agg_hr(&h, &[]).is_err());
+        assert!(agg_energy(&h, &[]).is_err());
+        assert!(agg_sleep(&h, &[]).is_err());
+    }
 }
