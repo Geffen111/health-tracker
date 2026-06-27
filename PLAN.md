@@ -47,6 +47,13 @@ PEM Model → risk predictions → Dashboard
 (An OpenRouter AI integration like Family Finance's was proposed; `reqwest` is already a
 dependency but no AI command file exists yet.)
 
+**2026-06-27 (Claude Code), smaller wins after the OpenCode handover:** data export is now
+genuinely wired (`commands/export.rs` → `export_csv`/`export_json`, writing to
+`<data_dir>/exports/`); the `watch_calibration` table/commands are now surfaced as
+**blood-pressure-monitor calibration** (every ~30 days) on the Cardio page with manual
+date/time entry + a "Last calibrated: …" note — the misleading "Watch synced" sidebar block
+was removed; the orphaned `/import` route was deleted (import lives in Settings).
+
 ## Import status (verified 2026-06-26)
 
 Source `Copy of Fatigue_Log_V5 26 June.xlsx` (misnamed — actually V6) imported into

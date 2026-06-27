@@ -76,9 +76,17 @@ Decided with the user (see `PLAN.md` "Feature backlog" for the full grouped list
   in `Cargo.toml`. Needs: new `commands/csv_import.rs`, a settings store (JSON file in data dir),
   a scheduled/polling mechanism, and wiring in the Settings page (CSV path input, auto-import
   toggle, last-synced display).
-- **Data export** (Settings CSV/JSON buttons) — no backend commands exist yet.
-- **Sidebar "Watch synced"** — currently hardcoded placeholder text; wire to real
-  `list_watch_calibrations` / `days_since_calibration` data.
+
+**Recently done (2026-06-27, Claude Code):**
+- **Data export** — `commands/export.rs` adds `export_csv` (one CSV per table in a timestamped
+  folder) and `export_json` (full pretty-printed dump), both written to `<data_dir>/exports/`
+  (OneDrive-synced). Settings buttons wired; `db::get_data_dir()` exposed for the shared path.
+- **Blood-pressure monitor calibration** — the calibration log is now framed as BP-monitor
+  calibration (every ~30 days), not a generic "watch sync". Cardio page takes manual date + time
+  and shows "Last calibrated: …" from the latest record. The misleading hardcoded
+  "Watch synced / 2 hours ago" sidebar block was removed. (Backend `log_watch_calibration` already
+  accepted `cal_date`/`cal_time`; the `watch_calibration` table name is kept to avoid a migration.)
+- **Removed the orphaned `/import` route** — import lives in Settings now.
 
 ## 6. Section A — what was added (backend API surface for the UI to use)
 Migrations `20240608`–`20240610`; all commands registered in `src-tauri/src/lib.rs`.
@@ -162,11 +170,7 @@ Key implementation notes:
      stages like `sleep_actual_asleep`, `sleep_rem`, `sleep_deep`, `sleep_awake`).
    - Frontend wiring: the Settings page CSV path input and auto-import toggle both exist in the
      UI but call no backend commands yet. The last-synced timestamp is also placeholder.
-3. Smaller items if time permits:
-   - **Data export** — simple backend commands (`export_csv`, `export_json`) that query all
-     tables and write to a file path.
-   - **Sidebar "Watch synced"** — replace hardcoded text with real data from
-     `days_since_calibration()` and `list_watch_calibrations()`.
-   - **Remove old `/import` route** — no longer linked from nav; the import UI is in Settings now.
+3. Smaller items — ✅ all done 2026-06-27 (data export, BP calibration manual logging +
+   sidebar cleanup, `/import` route removal). See "Recently done" under §5.
 4. Keep `PLAN.md` updated as work progresses.
 5. Commit per coherent unit. No remote — no pushing needed.
