@@ -1,52 +1,30 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-
-  interface ActivityCategory {
-    id: number;
-    name: string;
-    energy_weight: number;
-  }
-
-  interface ActivityType {
-    id: number;
-    name: string;
-    category_id: number;
-    default_energy_cost: string | null;
-  }
-
-  interface ActivityEntry {
-    id: number;
-    log_date: string;
-    activity_type_id: number;
-    duration_hours: number;
-    energy_cost: string;
-    notes: string | null;
-  }
+  import { formatDateLong } from '$lib/formatDate';
 
   let today = $state(new Date().toISOString().split('T')[0]);
   let selectedDate = $state(today);
-
-  let categories = $state<ActivityCategory[]>([]);
-  let activityTypes = $state<ActivityType[]>([]);
-  let entries = $state<ActivityEntry[]>([]);
+  let categories = $state<any[]>([]);
+  let activityTypes = $state<any[]>([]);
+  let entries = $state<any[]>([]);
   let loading = $state(true);
+  let darkMode = $state(false);
 
   let formCategoryId = $state<number | null>(null);
   let formActivityTypeId = $state<number | null>(null);
   let formDurationHours = $state(0.5);
   let formEnergyCost = $state('Medium');
-  let formNotes = $state('');
 
-  let totalHours = $derived(entries.reduce((s, e) => s + e.duration_hours, 0));
+  let totalHours = $derived(entries.reduce((s: number, e: any) => s + e.duration_hours, 0));
 
   let totalEnergyImpact = $derived.by(() => {
     let t = 0;
     for (const entry of entries) {
-      const type = activityTypes.find(at => at.id === entry.activity_type_id);
+      const type = activityTypes.find((at: any) => at.id === entry.activity_type_id);
       if (!type) continue;
-      const cat = categories.find(c => c.id === type.category_id);
-      if (cat) t += entry.duration_hours * cat.energy_weight;
+      const cat = categories.find((c: any) => c.id === type.category_id);
+      if (cat) t += entry.duration_hours * (cat.energy_weight ?? 1);
     }
     return Math.round(t * 100) / 100;
   });
@@ -71,26 +49,22 @@
     entries = await invoke('get_activities_for_date', { date: selectedDate });
   }
 
-  async function onDateChange() {
-    await loadTypes(null);
+  function onDateChange() {
+    loadTypes(null);
     formCategoryId = null;
     formActivityTypeId = null;
-    await loadEntries();
+    loadEntries();
   }
 
-  async function onCategoryChange() {
+  function onCategoryChange() {
     formActivityTypeId = null;
     formEnergyCost = 'Medium';
-    await loadTypes(formCategoryId);
+    loadTypes(formCategoryId);
   }
 
   function onTypeChange() {
-    const t = activityTypes.find(at => at.id === formActivityTypeId);
-    if (t?.default_energy_cost) {
-      formEnergyCost = t.default_energy_cost;
-    } else {
-      formEnergyCost = 'Medium';
-    }
+    const t = activityTypes.find((at: any) => at.id === formActivityTypeId);
+    if (t?.default_energy_cost) formEnergyCost = t.default_energy_cost;
   }
 
   async function addActivity() {
@@ -101,10 +75,14 @@
         activity_type_id: formActivityTypeId,
         duration_hours: formDurationHours,
         energy_cost: formEnergyCost,
-        notes: formNotes || null,
+        notes: null,
       },
     });
-    resetForm();
+    formCategoryId = null;
+    formActivityTypeId = null;
+    formDurationHours = 0.5;
+    formEnergyCost = 'Medium';
+    await loadTypes(null);
     await loadEntries();
   }
 
@@ -113,280 +91,265 @@
     await loadEntries();
   }
 
-  function resetForm() {
-    formCategoryId = null;
-    formActivityTypeId = null;
-    formDurationHours = 0.5;
-    formEnergyCost = 'Medium';
-    formNotes = '';
-    loadTypes(null);
-  }
-
   function getCategoryName(catId: number): string {
-    return categories.find(c => c.id === catId)?.name ?? '';
+    return categories.find((c: any) => c.id === catId)?.name ?? '';
   }
 
   function getTypeName(typeId: number): string {
-    return activityTypes.find(t => t.id === typeId)?.name ?? 'Unknown';
+    return activityTypes.find((t: any) => t.id === typeId)?.name ?? 'Unknown';
   }
 
   function getTypeCategoryId(typeId: number): number | null {
-    return activityTypes.find(t => t.id === typeId)?.category_id ?? null;
+    return activityTypes.find((t: any) => t.id === typeId)?.category_id ?? null;
   }
 
-  function energyCostClass(cost: string): string {
-    if (cost === 'Low') return 'cost-low';
-    if (cost === 'High') return 'cost-high';
-    return 'cost-medium';
+  let loadBuckets = $derived.by(() => {
+    let phys = 0, cog = 0, sens = 0;
+    for (const entry of entries) {
+      const type = activityTypes.find((at: any) => at.id === entry.activity_type_id);
+      if (!type) continue;
+      const cat = categories.find((c: any) => c.id === type.category_id);
+      if (!cat) continue;
+      const weight = entry.energy_cost === 'Low' ? 0.7 : entry.energy_cost === 'High' ? 2.0 : 1.0;
+      const v = entry.duration_hours * (cat.energy_weight ?? 1) * weight;
+      const name = (cat.name ?? '').toLowerCase();
+      if (name.includes('physical') || name.includes('domestic') || name === 'active') phys += v;
+      else if (name.includes('cognitive') || name.includes('hobby')) cog += v;
+      else sens += v;
+    }
+    const total = phys + cog + sens;
+    const scale = Math.max(total > 0 ? Math.max(phys, cog, sens) : 1, 0.001);
+    const pct = (v: number) => Math.round((v / scale) * 100) + '%';
+    return { phys, cog, sens, total, physPct: pct(phys), cogPct: pct(cog), sensPct: pct(sens) };
+  });
+
+  function prevDay() {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    selectedDate = d.toISOString().split('T')[0];
+    onDateChange();
+  }
+
+  function nextDay() {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    selectedDate = d.toISOString().split('T')[0];
+    onDateChange();
+  }
+
+  function toggleTheme() {
+    darkMode = !darkMode;
+    document.documentElement.classList.toggle('dark', darkMode);
   }
 </script>
 
-<h1>Activity</h1>
-
-<div class="toolbar">
-  <label class="date-label">
-    Date
-    <input type="date" class="date-input" bind:value={selectedDate} onchange={onDateChange} />
-  </label>
-</div>
-
-<div class="summary-card">
-  <span>Total hours: <strong>{totalHours.toFixed(1)}</strong></span>
-  <span>Energy impact: <strong>{totalEnergyImpact}</strong></span>
-</div>
-
-<div class="add-form">
-  <h3>Add Activity</h3>
-  <div class="form-row">
-    <select bind:value={formCategoryId} onchange={onCategoryChange}>
-      <option value={null}>All categories</option>
-      {#each categories as cat}
-        <option value={cat.id}>{cat.name}</option>
-      {/each}
-    </select>
-    <select bind:value={formActivityTypeId} onchange={onTypeChange}>
-      <option value={null}>Select type</option>
-      {#each activityTypes as t}
-        <option value={t.id}>{t.name}</option>
-      {/each}
-    </select>
-    <input
-      type="number"
-      step="0.25"
-      min="0"
-      bind:value={formDurationHours}
-      placeholder="Hours"
-    />
-    <select bind:value={formEnergyCost}>
-      <option value="Low">Low</option>
-      <option value="Medium">Medium</option>
-      <option value="High">High</option>
-    </select>
-    <textarea
-      bind:value={formNotes}
-      placeholder="Notes (optional)"
-      rows="1"
-    ></textarea>
-    <button class="add-btn" onclick={addActivity}>Add Activity</button>
+<div class="page-header">
+  <div>
+    <div class="page-title">Activity</div>
+    <div class="page-subtitle">Log what you did — it feeds today's load in the PEM model</div>
+  </div>
+  <div class="header-actions">
+    <div class="day-nav">
+      <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <span class="day-label">{formatDateLong(selectedDate)}</span>
+      <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+    <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
+    </button>
   </div>
 </div>
 
-{#if loading}
-  <p>Loading...</p>
-{:else if entries.length === 0}
-  <p class="empty">No activities logged for this date.</p>
-{:else}
-  <div class="entry-list">
-    {#each entries as entry}
-      <div class="entry-card">
-        <div class="entry-info">
-          <span class="entry-name">{getTypeName(entry.activity_type_id)}</span>
-          <span class="category-badge">{getCategoryName(getTypeCategoryId(entry.activity_type_id) ?? 0)}</span>
-          <span class="duration">{entry.duration_hours}h</span>
-          <span class="energy-badge {energyCostClass(entry.energy_cost)}">{entry.energy_cost}</span>
-          {#if entry.notes}
-            <span class="entry-notes">{entry.notes}</span>
-          {/if}
+<div class="two-col">
+  <div class="col">
+    <div class="card">
+      <div class="card-heading">Add an activity</div>
+      <div class="add-grid">
+        <div class="select-field">
+          <label for="cat">Category</label>
+          <div class="select-wrap">
+            <select id="cat" bind:value={formCategoryId} onchange={onCategoryChange}>
+              <option value={null}>All categories</option>
+              {#each categories as cat}
+                <option value={cat.id}>{cat.name}</option>
+              {/each}
+            </select>
+            <span class="select-chevron">▾</span>
+          </div>
         </div>
-        <button class="delete-btn" onclick={() => deleteEntry(entry.id)} title="Delete">🗑️</button>
+        <div class="select-field">
+          <label for="type">Type</label>
+          <div class="select-wrap">
+            <select id="type" bind:value={formActivityTypeId} onchange={onTypeChange}>
+              <option value={null}>Select type</option>
+              {#each activityTypes as t}
+                <option value={t.id}>{t.name}</option>
+              {/each}
+            </select>
+            <span class="select-chevron">▾</span>
+          </div>
+        </div>
       </div>
-    {/each}
+      <div class="add-grid">
+        <div class="text-field">
+          <label for="dur">Duration</label>
+          <div class="input-unit">
+            <input id="dur" type="number" step="0.25" min="0" bind:value={formDurationHours} />
+            <span class="unit-label">hrs</span>
+          </div>
+        </div>
+        <div class="seg-field" role="radiogroup" aria-label="Energy cost">
+          <div class="seg-control">
+            <button class="seg-btn" class:active={formEnergyCost === 'Low'} onclick={() => formEnergyCost = 'Low'}>Low</button>
+            <button class="seg-btn" class:active={formEnergyCost === 'Medium'} onclick={() => formEnergyCost = 'Medium'}>Medium</button>
+            <button class="seg-btn" class:active={formEnergyCost === 'High'} onclick={() => formEnergyCost = 'High'}>High</button>
+          </div>
+        </div>
+      </div>
+      <button class="add-btn" onclick={addActivity}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        Add activity
+      </button>
+    </div>
+
+    <div class="list-card">
+      <div class="list-header">
+        <span class="card-heading">Today's activities</span>
+        <span class="list-count">{entries.length} logged</span>
+      </div>
+      {#if entries.length === 0}
+        <p class="empty-list">No activities logged for this date.</p>
+      {:else}
+        {#each entries as entry}
+          <div class="list-row">
+            <span class="list-dot" style="background:var(--accent);"></span>
+            <div class="list-info">
+              <div class="list-type">{getTypeName(entry.activity_type_id)}</div>
+              <div class="list-cat">{getCategoryName(getTypeCategoryId(entry.activity_type_id) ?? 0)}</div>
+            </div>
+            <span class="list-dur">{entry.duration_hours}h</span>
+            <span class="energy-badge" class:low={entry.energy_cost === 'Low'} class:med={entry.energy_cost === 'Medium'} class:high={entry.energy_cost === 'High'}>{entry.energy_cost ?? 'Medium'}</span>
+            <button class="delete-btn" onclick={() => deleteEntry(entry.id)} aria-label="Delete">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+        {/each}
+      {/if}
+    </div>
   </div>
-{/if}
+
+  <div class="col">
+    <div class="card">
+      <div>
+        <div class="card-heading">Today's load</div>
+        <div class="card-subtitle">From the activities logged above</div>
+      </div>
+      <div class="load-bars">
+        <div class="load-item">
+          <div class="load-header">
+            <span class="load-name"><span class="load-swatch" style="background:var(--accent);"></span>Physical</span>
+            <span class="load-val">{loadBuckets.phys.toFixed(1)}</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill" style="width:{loadBuckets.physPct};background:var(--accent);"></div></div>
+        </div>
+        <div class="load-item">
+          <div class="load-header">
+            <span class="load-name"><span class="load-swatch" style="background:var(--peri);"></span>Cognitive</span>
+            <span class="load-val">{loadBuckets.cog.toFixed(1)}</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill" style="width:{loadBuckets.cogPct};background:var(--peri);"></div></div>
+        </div>
+        <div class="load-item">
+          <div class="load-header">
+            <span class="load-name"><span class="load-swatch" style="background:var(--amber);"></span>Sensory / social</span>
+            <span class="load-val">{loadBuckets.sens.toFixed(1)}</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill" style="width:{loadBuckets.sensPct};background:var(--amber);"></div></div>
+        </div>
+      </div>
+      <div class="total-box">
+        <div>
+          <div class="total-label">Total load</div>
+          <div class="total-val">{loadBuckets.total.toFixed(1)}</div>
+        </div>
+        <span class="total-tag">{loadBuckets.cog > loadBuckets.phys ? 'Cognitive-heavy' : loadBuckets.phys > 0 ? 'Physically active' : 'Light day'}</span>
+      </div>
+      <div class="load-note">Activities contribute to today's PEM risk calculation on the PEM Model screen.</div>
+    </div>
+  </div>
+</div>
 
 <style>
-  h1 { margin-bottom: 16px; }
+  .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px; gap:16px; flex-wrap:wrap; }
+  .page-title { font-family:'Source Serif 4',serif; font-size:30px; font-weight:600; color:var(--tp); letter-spacing:-.01em; }
+  .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
+  .header-actions { display:flex; align-items:center; gap:10px; }
+  .day-nav { display:flex; align-items:center; gap:2px; background:var(--card); border:1px solid var(--border); border-radius:999px; padding:4px; box-shadow:var(--shadow); }
+  .day-arrow { width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
+  .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
+  .day-label { font-weight:700; font-size:13px; padding:0 6px; min-width:108px; text-align:center; }
+  .theme-btn { width:36px; height:36px; border-radius:50%; border:1px solid var(--border); background:var(--card); color:var(--ts); display:flex; align-items:center; justify-content:center; cursor:pointer; }
 
-  .toolbar { margin-bottom: 16px; }
+  .two-col { display:grid; grid-template-columns:1.5fr 1fr; gap:16px; align-items:start; }
+  .col { display:flex; flex-direction:column; gap:16px; }
 
-  .date-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: #555;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  :global(.dark) .date-label { color: #bbb; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:16px; }
+  .card-heading { font-family:'Source Serif 4',serif; font-size:17px; font-weight:600; color:var(--tp); }
+  .card-subtitle { font-size:12.5px; color:var(--ts); margin-top:2px; }
 
-  .date-input {
-    padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-size: 14px;
-    font-family: inherit;
-    background: #fff;
-  }
-  :global(.dark) .date-input {
-    background: #2a3a5c;
-    border-color: #444;
-    color: #e0e0e0;
-  }
+  .add-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .select-field { display:flex; flex-direction:column; gap:7px; }
+  .select-field label { font-size:12px; font-weight:700; color:var(--ts); }
+  .select-wrap { position:relative; }
+  .select-wrap select { width:100%; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:11px 34px 11px 13px; font-size:13.5px; color:var(--tp); cursor:pointer; appearance:none; }
+  .select-chevron { position:absolute; right:13px; top:50%; transform:translateY(-50%); color:var(--tm); pointer-events:none; font-size:11px; }
 
-  .summary-card {
-    display: flex;
-    gap: 24px;
-    padding: 14px 18px;
-    background: #fff;
-    border-radius: 12px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    margin-bottom: 20px;
-    font-size: 14px;
-  }
-  :global(.dark) .summary-card { background: #1e2a45; color: #e0e0e0; }
+  .text-field { display:flex; flex-direction:column; gap:7px; }
+  .text-field label { font-size:12px; font-weight:700; color:var(--ts); }
+  .input-unit { display:flex; align-items:center; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:4px 6px; }
+  .input-unit input { width:100%; background:transparent; border:none; padding:7px; font-size:13.5px; color:var(--tp); font-variant-numeric:tabular-nums; }
+  .unit-label { font-size:12px; color:var(--tm); padding-right:8px; }
 
-  .add-form {
-    padding: 18px;
-    background: #fff;
-    border-radius: 12px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    margin-bottom: 20px;
-  }
-  :global(.dark) .add-form { background: #1e2a45; }
+  .seg-field { display:flex; flex-direction:column; gap:7px; }
+  .seg-control { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:3px; gap:2px; }
+  .seg-btn { flex:1; background:transparent; border:none; border-radius:9px; padding:8px 6px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }
+  .seg-btn.active { background:var(--accent); color:#fff; }
 
-  .add-form h3 {
-    margin: 0 0 12px 0;
-    font-size: 15px;
-  }
+  .add-btn { align-self:flex-start; display:inline-flex; align-items:center; gap:7px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; }
 
-  .form-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    align-items: flex-start;
-  }
+  .list-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:8px 0; box-shadow:var(--shadow); }
+  .list-header { display:flex; justify-content:space-between; align-items:center; padding:14px 20px 12px; }
+  .list-count { font-size:12px; color:var(--tm); font-weight:600; }
+  .empty-list { color:var(--ts); text-align:center; padding:24px; font-size:13px; }
 
-  .form-row select,
-  .form-row input,
-  .form-row textarea {
-    padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-size: 14px;
-    font-family: inherit;
-  }
-  :global(.dark) .form-row select,
-  :global(.dark) .form-row input,
-  :global(.dark) .form-row textarea {
-    background: #2a3a5c;
-    border-color: #444;
-    color: #e0e0e0;
-  }
+  .list-row { display:flex; align-items:center; gap:14px; padding:13px 20px; border-top:1px solid var(--border); }
+  .list-dot { width:10px; height:10px; border-radius:3px; flex-shrink:0; }
+  .list-info { flex:1; min-width:0; }
+  .list-type { font-size:13.5px; font-weight:600; color:var(--tp); }
+  .list-cat { font-size:11.5px; color:var(--tm); }
+  .list-dur { font-size:13px; color:var(--ts); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .energy-badge { font-size:11px; font-weight:700; padding:3px 10px; border-radius:999px; white-space:nowrap; }
+  .energy-badge.low { color:var(--accent-fg); background:var(--accent-soft); }
+  .energy-badge.med { color:var(--ts); background:var(--inset); border:1px solid var(--border); }
+  .energy-badge.high { color:var(--amber-fg); background:var(--amber-soft); }
+  .delete-btn { width:28px;height:28px;border-radius:50%;border:none;background:transparent;color:var(--tm);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0; }
 
-  .form-row textarea {
-    min-width: 200px;
-    resize: vertical;
-  }
+  .load-bars { display:flex; flex-direction:column; gap:14px; }
+  .load-item { display:flex; flex-direction:column; gap:7px; }
+  .load-header { display:flex; justify-content:space-between; font-size:12.5px; }
+  .load-name { color:var(--tp); font-weight:600; display:inline-flex; align-items:center; gap:7px; }
+  .load-swatch { width:9px; height:9px; border-radius:3px; flex-shrink:0; }
+  .load-val { color:var(--ts); font-variant-numeric:tabular-nums; font-weight:700; }
+  .bar-track { height:9px; border-radius:999px; background:var(--inset); overflow:hidden; }
+  .bar-fill { height:100%; border-radius:999px; }
 
-  .add-btn {
-    padding: 8px 18px;
-    background: #1976d2;
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 14px;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .add-btn:hover { background: #1565c0; }
-
-  .empty { color: #888; padding: 24px; text-align: center; }
-
-  .entry-list {
-    display: grid;
-    gap: 8px;
-  }
-
-  .entry-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: #fff;
-    border-radius: 10px;
-    padding: 12px 16px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-  }
-  :global(.dark) .entry-card { background: #1e2a45; }
-
-  .entry-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .entry-name { font-weight: 600; font-size: 15px; }
-
-  .category-badge {
-    font-size: 11px;
-    color: #1976d2;
-    background: #e3f2fd;
-    padding: 2px 8px;
-    border-radius: 4px;
-    white-space: nowrap;
-  }
-  :global(.dark) .category-badge {
-    background: #1a3a5c;
-    color: #64b5f6;
-  }
-
-  .duration {
-    font-size: 14px;
-    color: #555;
-    white-space: nowrap;
-  }
-  :global(.dark) .duration { color: #aaa; }
-
-  .energy-badge {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  .cost-low { background: #e8f5e9; color: #2e7d32; }
-  .cost-medium { background: #fff3e0; color: #e65100; }
-  .cost-high { background: #fbe9e7; color: #c62828; }
-  :global(.dark) .cost-low { background: #1b3a1b; color: #81c784; }
-  :global(.dark) .cost-medium { background: #3a2a1b; color: #ffb74d; }
-  :global(.dark) .cost-high { background: #3a1b1b; color: #ef9a9a; }
-
-  .entry-notes {
-    font-size: 12px;
-    color: #888;
-    font-style: italic;
-  }
-  :global(.dark) .entry-notes { color: #999; }
-
-  .delete-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 16px;
-    padding: 4px;
-    opacity: 0.5;
-    transition: opacity 0.15s;
-  }
-  .delete-btn:hover { opacity: 1; }
+  .total-box { background:var(--inset); border-radius:14px; padding:14px 16px; display:flex; justify-content:space-between; align-items:center; }
+  .total-label { font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:800; color:var(--ts); }
+  .total-val { font-family:'Source Serif 4',serif; font-size:26px; font-weight:600; color:var(--tp); }
+  .total-tag { font-size:11.5px; font-weight:700; color:var(--amber-fg); background:var(--amber-soft); padding:4px 11px; border-radius:999px; }
+  .load-note { font-size:11.5px; color:var(--ts); line-height:1.5; }
 </style>

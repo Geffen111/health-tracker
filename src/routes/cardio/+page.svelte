@@ -1,393 +1,305 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-
-  interface BPReading {
-    id?: number;
-    log_date: string;
-    reading_num: number;
-    time_taken: string;
-    systolic: number | null;
-    diastolic: number | null;
-    notes: string;
-  }
-
-  interface TrendDay {
-    date: string;
-    readings: BPReading[];
-    restingHr: number | null;
-  }
+  import { formatDateLong } from '$lib/formatDate';
 
   let today = $state(new Date().toISOString().split('T')[0]);
   let selectedDate = $state(today);
-
-  let bpForms = $state<BPReading[]>([
-    { log_date: today, reading_num: 1, time_taken: '', systolic: null, diastolic: null, notes: '' },
-    { log_date: today, reading_num: 2, time_taken: '', systolic: null, diastolic: null, notes: '' },
-    { log_date: today, reading_num: 3, time_taken: '', systolic: null, diastolic: null, notes: '' },
-  ]);
-
-  let savedStates = $state([false, false, false]);
+  let bpReadings = $state<any[]>([]);
   let dailyLog = $state<any>(null);
-  let trendDays = $state<TrendDay[]>([]);
+  let darkMode = $state(false);
+  let banner = $state(false);
+  let calDays = $state<number | null>(null);
 
-  onMount(() => {
-    loadAll();
-  });
+  let nTime = $state('');
+  let nSys = $state('');
+  let nDia = $state('');
+
+  onMount(() => { loadAll(); });
 
   async function loadAll() {
-    await Promise.all([loadBP(), loadDailyLog(), loadTrend()]);
+    await Promise.all([loadBP(), loadDailyLog(), loadCalDays()]);
   }
 
   async function loadBP() {
     try {
-      const readings: BPReading[] = await invoke<BPReading[]>('get_bp_for_date', { date: selectedDate });
-      for (let i = 0; i < 3; i++) {
-        const num = i + 1;
-        const existing = readings.find(r => r.reading_num === num);
-        bpForms[i] = {
-          log_date: selectedDate,
-          reading_num: num,
-          time_taken: existing?.time_taken ?? '',
-          systolic: existing?.systolic ?? null,
-          diastolic: existing?.diastolic ?? null,
-          notes: existing?.notes ?? '',
-        };
-      }
-    } catch (e) {
-      console.error('Error loading BP readings:', e);
-    }
+      bpReadings = await invoke('get_bp_for_date', { date: selectedDate });
+    } catch (e) { console.error('Error loading BP:', e); }
   }
 
   async function loadDailyLog() {
     try {
-      const logs: any[] = await invoke<any[]>('list_daily_logs', { limit: 30, offset: 0 });
-      dailyLog = logs.find(l => l.log_date === selectedDate) || null;
-    } catch (e) {
-      console.error('Error loading daily logs:', e);
-    }
+      const logs: any[] = await invoke('list_daily_logs', { limit: 30, offset: 0 });
+      dailyLog = logs.find((l: any) => l.log_date === selectedDate) || null;
+    } catch (e) { console.error('Error loading daily logs:', e); }
   }
 
-  async function loadTrend() {
+  async function loadCalDays() {
     try {
-      const dates: string[] = [];
-      const baseDate = new Date();
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(baseDate);
-        d.setDate(d.getDate() - i);
-        dates.push(d.toISOString().split('T')[0]);
-      }
-
-      const bpResults: BPReading[][] = await Promise.all(
-        dates.map(date => invoke<BPReading[]>('get_bp_for_date', { date }))
-      );
-
-      const logs: any[] = await invoke<any[]>('list_daily_logs', { limit: 30, offset: 0 });
-
-      trendDays = dates.map((date, i) => ({
-        date,
-        readings: bpResults[i],
-        restingHr: logs.find(l => l.log_date === date)?.ave_resting_hr ?? null,
-      }));
-    } catch (e) {
-      console.error('Error loading trend:', e);
-    }
+      calDays = await invoke('days_since_calibration');
+    } catch {}
   }
 
-  function onDateChange() {
-    for (const form of bpForms) {
-      form.log_date = selectedDate;
-    }
+  function toggleTheme() {
+    darkMode = !darkMode;
+    document.documentElement.classList.toggle('dark', darkMode);
+  }
+
+  function prevDay() {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    selectedDate = d.toISOString().split('T')[0];
     loadBP();
-    loadDailyLog();
   }
 
-  async function saveReading(num: number) {
-    const form = bpForms.find(f => f.reading_num === num);
-    if (!form) return;
+  function nextDay() {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    selectedDate = d.toISOString().split('T')[0];
+    loadBP();
+  }
+
+  async function addReading() {
+    if (!nSys || !nDia) return;
+    try {
+      const nextNum = bpReadings.length > 0 ? Math.max(...bpReadings.map((r: any) => r.reading_num)) + 1 : 1;
+      await invoke('upsert_bp', {
+        bp: {
+          log_date: selectedDate,
+          reading_num: nextNum,
+          time_taken: nTime || null,
+          systolic: parseInt(nSys),
+          diastolic: parseInt(nDia),
+          notes: null,
+        },
+      });
+      nTime = ''; nSys = ''; nDia = '';
+      await loadBP();
+    } catch (e) { console.error('Error saving BP:', e); }
+  }
+
+  async function deleteReading(readingNum: number) {
     try {
       await invoke('upsert_bp', {
         bp: {
           log_date: selectedDate,
-          reading_num: num,
-          time_taken: form.time_taken,
-          systolic: form.systolic,
-          diastolic: form.diastolic,
-          notes: form.notes,
+          reading_num: readingNum,
+          time_taken: null,
+          systolic: null,
+          diastolic: null,
+          notes: 'DELETED',
         },
       });
-      savedStates[num - 1] = true;
-      setTimeout(() => savedStates[num - 1] = false, 2000);
-      loadDailyLog();
-    } catch (e) {
-      console.error('Error saving BP reading:', e);
-    }
+      await loadBP();
+    } catch (e) { console.error('Error deleting BP:', e); }
   }
 
-  function avgSystolic(): number | null {
-    const saved = bpForms.filter(f => f.systolic != null && f.diastolic != null);
-    if (saved.length === 0) return null;
-    const sum = saved.reduce((a, f) => a + (f.systolic ?? 0), 0);
-    return Math.round(sum / saved.length);
+  let avgSys = $derived.by(() => {
+    const valid = bpReadings.filter((r: any) => r.systolic != null && r.diastolic != null);
+    return valid.length > 0 ? Math.round(valid.reduce((a: number, r: any) => a + r.systolic, 0) / valid.length) : null;
+  });
+  let avgDia = $derived.by(() => {
+    const valid = bpReadings.filter((r: any) => r.systolic != null && r.diastolic != null);
+    return valid.length > 0 ? Math.round(valid.reduce((a: number, r: any) => a + r.diastolic, 0) / valid.length) : null;
+  });
+
+  function tagFor(sys: number, dia: number): { tag: string; dot: string } {
+    if (sys >= 140 || dia >= 90) return { tag: 'Elevated', dot: 'var(--amber)' };
+    if (sys < 100 || dia < 65) return { tag: 'Low', dot: 'var(--peri)' };
+    return { tag: 'Normal', dot: 'var(--accent)' };
   }
 
-  function avgDiastolic(): number | null {
-    const saved = bpForms.filter(f => f.systolic != null && f.diastolic != null);
-    if (saved.length === 0) return null;
-    const sum = saved.reduce((a, f) => a + (f.diastolic ?? 0), 0);
-    return Math.round(sum / saved.length);
-  }
+  let overdue = $derived(calDays != null && calDays >= 30);
+  let calPct = $derived(calDays != null ? Math.min(100, Math.round((calDays / 30) * 100)) : 0);
 
-  function formatReading(readings: BPReading[], num: number): string {
-    const r = readings.find(r => r.reading_num === num);
-    if (!r || r.systolic == null || r.diastolic == null) return '---';
-    return `${r.systolic}/${r.diastolic}`;
-  }
-
-  function formatDate(dateStr: string): string {
-    const d = new Date(dateStr + 'T00:00:00');
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  async function logCalibration() {
+    try {
+      await invoke('log_watch_calibration', {});
+      calDays = 0;
+      banner = true;
+      setTimeout(() => banner = false, 3000);
+    } catch (e) { console.error('Error logging calibration:', e); }
   }
 </script>
 
-<h1>Cardio</h1>
-
-<div class="date-picker">
-  <label for="date">Date</label>
-  <input type="date" id="date" bind:value={selectedDate} onchange={onDateChange} />
-</div>
-
-<div class="reading-cards">
-  {#each bpForms as form, i}
-    <div class="card reading-card">
-      <h3>Reading #{form.reading_num}</h3>
-
-      <div class="field">
-        <label>Time (24h)</label>
-        <input type="text" bind:value={form.time_taken} placeholder="e.g. 07:30" />
-      </div>
-
-      <div class="bp-inputs">
-        <div class="field">
-          <label>Systolic</label>
-          <input type="number" bind:value={form.systolic} placeholder="120" />
-        </div>
-        <div class="field">
-          <label>Diastolic</label>
-          <input type="number" bind:value={form.diastolic} placeholder="80" />
-        </div>
-      </div>
-
-      <div class="field">
-        <label>Notes</label>
-        <input type="text" bind:value={form.notes} placeholder="Optional notes" />
-      </div>
-
-      <button class="save-btn" onclick={() => saveReading(form.reading_num)}>
-        {savedStates[i] ? '✓ Saved!' : 'Save Reading'}
+<div class="page-header">
+  <div>
+    <div class="page-title">Cardio</div>
+    <div class="page-subtitle">Blood pressure, heart rate &amp; watch calibration</div>
+  </div>
+  <div class="header-actions">
+    <div class="day-nav">
+      <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <span class="day-label">{formatDateLong(selectedDate)}</span>
+      <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>
     </div>
-  {/each}
-</div>
-
-<div class="card summary-card">
-  <h3>Today's BP Average</h3>
-  <div class="bp-average">
-    <span class="sys">{avgSystolic() ?? '---'}</span>
-    <span class="separator">/</span>
-    <span class="dia">{avgDiastolic() ?? '---'}</span>
-    <span class="unit">mmHg</span>
+    <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
+    </button>
   </div>
-  {#if bpForms.some(f => f.systolic != null && f.diastolic != null)}
-    <p class="reading-count">Average of {bpForms.filter(f => f.systolic != null && f.diastolic != null).length} reading(s)</p>
-  {:else}
-    <p class="reading-count">No readings saved yet</p>
-  {/if}
 </div>
 
-<h2>Heart Rate</h2>
-<div class="hr-section">
-  <div class="card metric-card">
-    <h4>Resting HR</h4>
-    <div class="metric-value">
-      <span class="value">{dailyLog?.ave_resting_hr ?? '---'}</span>
-      <span class="unit">bpm</span>
+{#if banner}
+  <div class="banner">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+    <span>Watch calibration logged — recorded just now.</span>
+    <button class="banner-dismiss" onclick={() => banner = false}>Dismiss</button>
+  </div>
+{/if}
+
+<div class="bp-hr-row">
+  <div class="bp-card">
+    <div class="bp-header">
+      <div>
+        <div class="card-heading">Blood pressure</div>
+        <div class="card-subtitle">{bpReadings.length} reading{bpReadings.length !== 1 ? 's' : ''} today · daily average</div>
+      </div>
+      <div class="bp-avg">
+        <span class="bp-avg-sys">{avgSys ?? '---'}</span>
+        <span class="bp-avg-sep">/</span>
+        <span class="bp-avg-dia">{avgDia ?? '---'}</span>
+        <span class="bp-avg-unit">mmHg</span>
+      </div>
     </div>
-  </div>
-  <div class="card metric-card">
-    <h4>Average HR</h4>
-    <div class="metric-value">
-      <span class="value">{dailyLog?.ave_hr ?? '---'}</span>
-      <span class="unit">bpm</span>
-    </div>
-  </div>
-</div>
-
-<h2>7-Day Trend</h2>
-<div class="trend-table-wrapper">
-  <table class="trend-table">
-    <thead>
-      <tr>
-        <th>Date</th>
-        <th>Reading 1</th>
-        <th>Reading 2</th>
-        <th>Reading 3</th>
-        <th>Resting HR</th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each trendDays as day, i}
-        <tr>
-          <td class="date-cell">{formatDate(day.date)}</td>
-          <td>{formatReading(day.readings, 1)}</td>
-          <td>{formatReading(day.readings, 2)}</td>
-          <td>{formatReading(day.readings, 3)}</td>
-          <td class="hr-cell">{day.restingHr ?? '---'}</td>
-        </tr>
-        {#if i < trendDays.length - 1}
-          <tr class="divider-row"><td colspan="5"><div class="divider"></div></td></tr>
-        {/if}
+    <div class="bp-list">
+      {#each bpReadings as r}
+        {@const t = tagFor(r.systolic, r.diastolic)}
+        <div class="bp-row">
+          <span class="bp-time">{r.time_taken ?? '--:--'}</span>
+          <span class="bp-dot" style="background:{t.dot};"></span>
+          <span class="bp-values"><strong>{r.systolic}/{r.diastolic}</strong> <span class="bp-unit">mmHg</span></span>
+          <span class="bp-tag">{t.tag}</span>
+          <button class="bp-delete" onclick={() => deleteReading(r.reading_num)} aria-label="Delete reading">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
       {/each}
-    </tbody>
-  </table>
+      <div class="bp-add">
+        <input bind:value={nTime} placeholder="HH:MM" class="bp-input sm" />
+        <input bind:value={nSys} placeholder="Sys" class="bp-input xs" />
+        <span class="bp-slash">/</span>
+        <input bind:value={nDia} placeholder="Dia" class="bp-input xs" />
+        <button class="add-reading-btn" onclick={addReading}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Add reading
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="hr-card">
+    <div class="hr-header">
+      <span class="card-heading">Heart rate</span>
+      <span class="hr-badge">Watch-synced</span>
+    </div>
+    <div class="hr-grid">
+      <div class="hr-tile">
+        <div class="hr-tile-label">Resting</div>
+        <div class="hr-tile-val">{dailyLog?.ave_resting_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
+      </div>
+      <div class="hr-tile">
+        <div class="hr-tile-label">Average</div>
+        <div class="hr-tile-val">{dailyLog?.ave_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
+      </div>
+      <div class="hr-tile">
+        <div class="hr-tile-label">Daily min</div>
+        <div class="hr-tile-val">{dailyLog?.hr_min ?? '—'}<span class="hr-unit"> bpm</span></div>
+      </div>
+      <div class="hr-tile">
+        <div class="hr-tile-label">Daily max</div>
+        <div class="hr-tile-val">{dailyLog?.hr_max ?? '—'}<span class="hr-unit"> bpm</span></div>
+      </div>
+    </div>
+    <div class="hr-note">Min &amp; max come from the watch's continuous monitoring; resting and average are the daily figures.</div>
+  </div>
+</div>
+
+<div class="cal-card">
+  <div class="cal-icon">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg>
+  </div>
+  <div class="cal-info">
+    <div class="card-heading">Watch calibration</div>
+    <div class="cal-status">
+      {calDays != null ? `Last logged ${calDays} day${calDays === 1 ? '' : 's'} ago${overdue ? ' — overdue' : ` · next due in ${30 - calDays} days`}` : 'No calibration logged yet'}
+    </div>
+    <div class="cal-bar-track">
+      <div class="cal-bar-fill" style="width:{calPct}%;background:{overdue ? 'var(--amber)' : 'var(--accent)'};"></div>
+    </div>
+  </div>
+  <div class="cal-right">
+    <span class="cal-badge" style="color:{overdue ? 'var(--amber-fg)' : 'var(--accent-fg)'};background:{overdue ? 'var(--amber-soft)' : 'var(--accent-soft)'};">{overdue ? 'Recalibration due' : 'On track'}</span>
+    <button class="cal-btn" onclick={logCalibration}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      Log calibration
+    </button>
+  </div>
 </div>
 
 <style>
-  h1 { margin-bottom: 4px; }
-  h2 { margin-top: 32px; margin-bottom: 12px; font-size: 18px; }
+  .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px; gap:16px; flex-wrap:wrap; }
+  .page-title { font-family:'Source Serif 4',serif; font-size:30px; font-weight:600; color:var(--tp); letter-spacing:-.01em; }
+  .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
+  .header-actions { display:flex; align-items:center; gap:10px; }
+  .day-nav { display:flex; align-items:center; gap:2px; background:var(--card); border:1px solid var(--border); border-radius:999px; padding:4px; box-shadow:var(--shadow); }
+  .day-arrow { width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
+  .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
+  .day-label { font-weight:700; font-size:13px; padding:0 6px; min-width:108px; text-align:center; }
+  .theme-btn { width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
 
-  .date-picker {
-    margin-bottom: 24px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .date-picker label { font-size: 13px; font-weight: 600; color: #555; }
-  :global(.dark) .date-picker label { color: #bbb; }
-  .date-picker input {
-    padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    font-size: 14px;
-    font-family: inherit;
-    background: #fff;
-    color: #333;
-  }
-  :global(.dark) .date-picker input { background: #1e2a45; border-color: #444; color: #e0e0e0; }
+  .banner { display:flex;align-items:center;gap:11px;background:var(--accent-soft);border:1px solid var(--border);border-radius:14px;padding:12px 16px;margin-bottom:16px; }
+  .banner span { font-size:13px;color:var(--accent-fg);font-weight:600;flex:1; }
+  .banner-dismiss { border:none;background:transparent;color:var(--ts);cursor:pointer;font-size:13px;font-weight:700; }
 
-  .reading-cards {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-    margin-bottom: 24px;
-  }
+  .bp-hr-row { display:grid; grid-template-columns:1.5fr 1fr; gap:16px; margin-bottom:16px; }
 
-  .card {
-    background: #fff;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  }
-  :global(.dark) .card { background: #1e2a45; }
+  .bp-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:18px; }
+  .bp-header { display:flex; justify-content:space-between; align-items:flex-end; }
+  .card-heading { font-family:'Source Serif 4',serif; font-size:17px; font-weight:600; color:var(--tp); }
+  .card-subtitle { font-size:12px; color:var(--ts); margin-top:2px; }
+  .bp-avg { text-align:right; }
+  .bp-avg-sys, .bp-avg-dia { font-family:'Source Serif 4',serif; font-size:34px; font-weight:600; color:var(--tp); letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+  .bp-avg-sep { color:var(--ts); font-size:24px; }
+  .bp-avg-unit { font-size:13px; color:var(--tm); }
 
-  .reading-card h3 { margin: 0 0 16px 0; font-size: 15px; }
+  .bp-list { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+  .bp-row { display:flex; align-items:center; gap:14px; padding:12px 16px; border-bottom:1px solid var(--border); }
+  .bp-time { font-size:12.5px; color:var(--ts); font-variant-numeric:tabular-nums; width:48px; font-weight:600; }
+  .bp-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+  .bp-values { flex:1; font-size:14px; color:var(--tp); font-variant-numeric:tabular-nums; }
+  .bp-values strong { font-weight:600; }
+  .bp-unit { color:var(--tm); font-size:12px; font-weight:400; }
+  .bp-tag { font-size:11.5px; color:var(--tm); }
+  .bp-delete { width:26px;height:26px;border-radius:50%;border:none;background:transparent;color:var(--tm);display:flex;align-items:center;justify-content:center;cursor:pointer; }
 
-  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-  .field label { font-size: 12px; font-weight: 600; color: #555; }
-  :global(.dark) .field label { color: #bbb; }
-  .field input {
-    padding: 8px 10px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-size: 14px;
-    font-family: inherit;
-    background: #fff;
-    color: #333;
-    width: 100%;
-    box-sizing: border-box;
-  }
-  :global(.dark) .field input { background: #2a3a5c; border-color: #444; color: #e0e0e0; }
+  .bp-add { display:flex; align-items:center; gap:8px; padding:12px 14px; background:var(--inset); }
+  .bp-input { background:var(--card); border:1px solid var(--border); border-radius:9px; padding:8px; font-size:12.5px; color:var(--tp); text-align:center; font-variant-numeric:tabular-nums; }
+  .bp-input.sm { width:64px; }
+  .bp-input.xs { width:56px; }
+  .bp-slash { color:var(--tm); }
+  .add-reading-btn { margin-left:auto; display:inline-flex; align-items:center; gap:6px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:8px 15px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
 
-  .bp-inputs {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
+  .hr-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:16px; }
+  .hr-header { display:flex; justify-content:space-between; align-items:center; }
+  .hr-badge { font-size:10.5px; font-weight:700; color:var(--accent-fg); background:var(--accent-soft); padding:3px 9px; border-radius:999px; }
+  .hr-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .hr-tile { background:var(--inset); border-radius:13px; padding:13px 14px; }
+  .hr-tile-label { font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--ts); }
+  .hr-tile-val { font-family:'Source Serif 4',serif; font-size:25px; font-weight:600; color:var(--tp); }
+  .hr-unit { font-size:12px; color:var(--tm); }
+  .hr-note { font-size:11.5px; color:var(--ts); line-height:1.5; }
 
-  .save-btn {
-    padding: 10px 20px;
-    background: #1976d2;
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s;
-    width: 100%;
-    margin-top: 4px;
-  }
-  .save-btn:hover { background: #1565c0; }
-
-  .summary-card { margin-bottom: 8px; max-width: 400px; }
-  .summary-card h3 { margin: 0 0 12px 0; font-size: 15px; }
-
-  .bp-average {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-  }
-  .bp-average .sys { font-size: 36px; font-weight: 700; }
-  .bp-average .separator { font-size: 28px; color: #888; }
-  .bp-average .dia { font-size: 36px; font-weight: 700; }
-  .bp-average .unit { font-size: 14px; color: #888; margin-left: 4px; }
-
-  .reading-count { font-size: 13px; color: #888; margin-top: 8px; }
-
-  .hr-section {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    max-width: 400px;
-  }
-
-  .metric-card h4 { margin: 0 0 8px 0; font-size: 13px; color: #555; }
-  :global(.dark) .metric-card h4 { color: #bbb; }
-
-  .metric-value { display: flex; align-items: baseline; gap: 6px; }
-  .metric-value .value { font-size: 32px; font-weight: 700; }
-  .metric-value .unit { font-size: 14px; color: #888; }
-
-  .trend-table-wrapper { overflow-x: auto; }
-
-  .trend-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-  }
-  .trend-table th {
-    text-align: left;
-    padding: 10px 12px;
-    font-size: 12px;
-    font-weight: 600;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 2px solid #eee;
-  }
-  :global(.dark) .trend-table th { border-bottom-color: #333; color: #999; }
-  .trend-table td {
-    padding: 10px 12px;
-    color: #333;
-  }
-  :global(.dark) .trend-table td { color: #e0e0e0; }
-  .trend-table .date-cell { font-weight: 600; }
-  .trend-table .hr-cell { color: #888; }
-
-  .divider-row td { padding: 0 12px; }
-  .divider {
-    height: 1px;
-    background: #eee;
-  }
-  :global(.dark) .divider { background: #333; }
+  .cal-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; align-items:center; gap:24px; flex-wrap:wrap; }
+  .cal-icon { width:46px;height:46px;border-radius:13px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--accent); }
+  .cal-info { flex:1; min-width:200px; }
+  .cal-status { font-size:12.5px; color:var(--ts); margin-top:2px; }
+  .cal-bar-track { height:7px; border-radius:999px; background:var(--inset); overflow:hidden; margin-top:11px; max-width:320px; }
+  .cal-bar-fill { height:100%; border-radius:999px; }
+  .cal-right { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
+  .cal-badge { font-size:11.5px; font-weight:700; padding:4px 11px; border-radius:999px; }
+  .cal-btn { display:inline-flex; align-items:center; gap:7px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; }
 </style>

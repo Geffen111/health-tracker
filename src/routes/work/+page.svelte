@@ -1,18 +1,20 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { formatDate, formatDateLong } from '$lib/formatDate';
 
   let today = $state(new Date().toISOString().split('T')[0]);
   let selectedDate = $state(today);
   let saved = $state(false);
+  let darkMode = $state(false);
 
-  let rosteredHours = $state<number>(7.6);
-  let sickLeaveHours = $state<number>(0);
-  let officeHours = $state<number>(7.6);
-  let wfhHours = $state<number>(0);
+  let status = $state('full');
+  let rosteredHours = $state(7.6);
+  let sickLeaveHours = $state(0);
+  let officeHours = $state(7.6);
+  let wfhHours = $state(0);
 
   let logs = $state<any[]>([]);
-  let monthlyLoading = $state(true);
 
   onMount(async () => {
     await loadDate(selectedDate);
@@ -27,82 +29,64 @@
         sickLeaveHours = existing.sick_leave_hours ?? 0;
         officeHours = existing.office_hours ?? 7.6;
         wfhHours = existing.wfh_hours ?? 0;
-      } else {
-        rosteredHours = 7.6;
-        sickLeaveHours = 0;
-        officeHours = 7.6;
-        wfhHours = 0;
+        if (sickLeaveHours > 0) status = 'sick';
+        else if ((officeHours + wfhHours) < rosteredHours) status = 'partial';
+        else status = 'full';
       }
-    } catch {
-      rosteredHours = 7.6;
-      sickLeaveHours = 0;
-      officeHours = 7.6;
-      wfhHours = 0;
-    }
+    } catch {}
   }
 
-  async function onDateChange() {
-    await loadDate(selectedDate);
+  function onDateChange() {
+    loadDate(selectedDate);
   }
 
-  function buildFullLog() {
-    return {
-      log_date: selectedDate,
-      day_name: null,
-      fatigue_desc: null,
-      fatigue_rating: null,
-      headache_desc: null,
-      headache_rating: null,
-      headache_duration_hours: null,
-      other_symptoms: null,
-      my_sleep_rating: null,
-      phone_sleep_rating: null,
-      sleep_avg: null,
-      sleep_time_head_on_pillow: null,
-      sleep_actual_asleep: null,
-      sleep_rem: null,
-      sleep_deep: null,
-      sleep_awake: null,
-      steps: null,
-      activity_calories: null,
-      ave_resting_hr: null,
-      ave_hr: null,
-      rostered_hours: rosteredHours,
-      sick_leave_hours: sickLeaveHours,
-      office_hours: officeHours,
-      wfh_hours: wfhHours,
-      alcohol_std_drinks: null,
-      multivitamin: null,
-      vitamin_c: null,
-      add_meds: null,
-      compression_socks: null,
-      notes: null
-    };
+  function prevDay() {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    selectedDate = d.toISOString().split('T')[0];
+    loadDate(selectedDate);
+  }
+
+  function nextDay() {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    selectedDate = d.toISOString().split('T')[0];
+    loadDate(selectedDate);
+  }
+
+  function pickStatus(s: string) {
+    status = s;
+    if (s === 'sick') { sickLeaveHours = 7.6; officeHours = 0; wfhHours = 0; }
+    else if (s === 'partial') { sickLeaveHours = 0; }
+    else { sickLeaveHours = 0; }
   }
 
   async function save() {
-    const log = buildFullLog();
-    await invoke('upsert_daily_log', { log });
+    await invoke('upsert_daily_log', {
+      log: {
+        log_date: selectedDate,
+        rostered_hours: rosteredHours,
+        sick_leave_hours: sickLeaveHours,
+        office_hours: officeHours,
+        wfh_hours: wfhHours,
+      },
+    });
     saved = true;
     setTimeout(() => saved = false, 2000);
     await loadMonthly();
   }
 
   async function loadMonthly() {
-    monthlyLoading = true;
     try {
-      logs = await invoke('list_daily_logs', { limit: 30, offset: 0 }) as any[];
-    } catch (e) {
-      console.error('Error loading logs:', e);
-    } finally {
-      monthlyLoading = false;
-    }
+      logs = await invoke('list_daily_logs', { limit: 60, offset: 0 }) as any[];
+    } catch {}
   }
+
+  let workedToday = $derived((officeHours + wfhHours).toFixed(1));
 
   function getWeekStart(dateStr: string): string {
     const d = new Date(dateStr + 'T00:00:00');
-    const day = d.getDay();
-    d.setDate(d.getDate() - day);
+    d.setDate(d.getDate() - d.getDay());
     return d.toISOString().split('T')[0];
   }
 
@@ -111,7 +95,6 @@
     const groups: { weekStart: string; logs: any[] }[] = [];
     let currentWeek = '';
     let currentGroup: any[] = [];
-
     for (const log of sorted) {
       const ws = getWeekStart(log.log_date);
       if (ws !== currentWeek && currentGroup.length > 0) {
@@ -121,322 +104,202 @@
       currentWeek = ws;
       currentGroup.push(log);
     }
-    if (currentGroup.length > 0) {
-      groups.push({ weekStart: currentWeek, logs: currentGroup });
-    }
+    if (currentGroup.length > 0) groups.push({ weekStart: currentWeek, logs: currentGroup });
     return groups;
   });
 
   function totalHours(field: string, src: any[]): number {
-    return src.reduce((sum, l) => sum + (l[field] ?? 0), 0);
+    return src.reduce((sum: number, l: any) => sum + (l[field] ?? 0), 0);
   }
 
-  function formatDate(dateStr: string): string {
-    const d = new Date(dateStr + 'T00:00:00');
-    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  function statusBadge(log: any): { label: string; cls: string } {
+    const sick = log.sick_leave_hours ?? 0;
+    const office = log.office_hours ?? 0;
+    const wfh = log.wfh_hours ?? 0;
+    const rostered = log.rostered_hours ?? 7.6;
+    if (sick > 0) return { label: 'Sick', cls: 'sick' };
+    if (office + wfh >= rostered) return { label: 'Full', cls: 'full' };
+    return { label: 'Partial', cls: 'partial' };
+  }
+
+  function toggleTheme() {
+    darkMode = !darkMode;
+    document.documentElement.classList.toggle('dark', darkMode);
   }
 
   function fmt(val: number | null | undefined): string {
     if (val == null) return '—';
-    return val.toFixed(2);
+    return val.toFixed(1);
   }
 </script>
 
-<h1>Work Hours</h1>
-
-<div class="date-picker">
-  <label for="date-input">Date</label>
-  <input id="date-input" type="date" bind:value={selectedDate} onchange={onDateChange} />
-</div>
-
-<div class="card form-card">
-  <h2>Work Hours Entry</h2>
-  <div class="form-grid">
-    <div class="field">
-      <label for="rostered">Rostered Hours</label>
-      <input id="rostered" type="number" step="0.25" min="0" bind:value={rosteredHours} />
-    </div>
-    <div class="field">
-      <label for="sick">Sick Leave Hours</label>
-      <input id="sick" type="number" step="0.25" min="0" bind:value={sickLeaveHours} />
-    </div>
-    <div class="field">
-      <label for="office">Office Hours</label>
-      <input id="office" type="number" step="0.25" min="0" bind:value={officeHours} />
-    </div>
-    <div class="field">
-      <label for="wfh">WFH Hours</label>
-      <input id="wfh" type="number" step="0.25" min="0" bind:value={wfhHours} />
-    </div>
+<div class="page-header">
+  <div>
+    <div class="page-title">Work</div>
+    <div class="page-subtitle">Hours &amp; status — feeds cognitive load &amp; tracks leave</div>
   </div>
-  <p class="notes-hint">Day notes now live in <strong>Daily Log → Other Daily Notes</strong>.</p>
-  <button class="save-btn" onclick={save}>
-    {saved ? '✓ Saved!' : 'Save'}
-  </button>
-</div>
-
-<div class="card summary-card">
-  <h2>Daily Summary — {formatDate(selectedDate)}</h2>
-  <div class="summary-row">
-    <div class="summary-item">
-      <span class="summary-label">Total Worked</span>
-      <span class="summary-value">{(officeHours + wfhHours).toFixed(2)}h</span>
+  <div class="header-actions">
+    <div class="day-nav">
+      <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <span class="day-label">{formatDateLong(selectedDate)}</span>
+      <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
     </div>
-    <div class="summary-item">
-      <span class="summary-label">Rostered</span>
-      <span class="summary-value">{fmt(rosteredHours)}h</span>
-    </div>
-    <div class="summary-item">
-      <span class="summary-label">Sick Leave</span>
-      <span class="summary-value">{fmt(sickLeaveHours)}h</span>
-    </div>
-    <div class="summary-item">
-      <span class="summary-label">Status</span>
-      <span
-        class="status-badge"
-        class:green={officeHours + wfhHours >= rosteredHours && sickLeaveHours === 0}
-        class:amber={officeHours + wfhHours < rosteredHours && officeHours + wfhHours > 0 && sickLeaveHours === 0}
-        class:red={sickLeaveHours > 0}
-      >
-        {sickLeaveHours > 0 ? 'Sick Leave' : officeHours + wfhHours >= rosteredHours ? '✔ Full Day' : 'Partial Day'}
-      </span>
-    </div>
+    <button class="theme-btn" onclick={toggleTheme} aria-label="Toggle theme">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13.5A8 8 0 1 1 10.5 4a6.3 6.3 0 0 0 9.5 9.5Z"/></svg>
+    </button>
   </div>
 </div>
 
-<div class="card table-card">
-  <h2>Monthly View</h2>
-  {#if monthlyLoading}
-    <p class="loading">Loading...</p>
-  {:else if logs.length === 0}
-    <p class="empty">No work data recorded yet.</p>
-  {:else}
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Rostered</th>
-            <th>Office</th>
-            <th>WFH</th>
-            <th>Sick</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each weekGroups as group}
-            {#each group.logs as log}
-              <tr>
-                <td class="date-cell">{formatDate(log.log_date)}</td>
-                <td>{fmt(log.rostered_hours)}</td>
-                <td>{fmt(log.office_hours)}</td>
-                <td>{fmt(log.wfh_hours)}</td>
-                <td>{fmt(log.sick_leave_hours)}</td>
-                <td class="notes-cell">{log.notes || ''}</td>
-              </tr>
-            {/each}
-            <tr class="week-total">
-              <td class="week-label">Week Total</td>
-              <td>{fmt(totalHours('rostered_hours', group.logs))}</td>
-              <td>{fmt(totalHours('office_hours', group.logs))}</td>
-              <td>{fmt(totalHours('wfh_hours', group.logs))}</td>
-              <td>{fmt(totalHours('sick_leave_hours', group.logs))}</td>
-              <td></td>
-            </tr>
-          {/each}
-          <tr class="grand-total">
-            <td>Total</td>
-            <td>{fmt(totalHours('rostered_hours', logs))}</td>
-            <td>{fmt(totalHours('office_hours', logs))}</td>
-            <td>{fmt(totalHours('wfh_hours', logs))}</td>
-            <td>{fmt(totalHours('sick_leave_hours', logs))}</td>
-            <td></td>
-          </tr>
-        </tbody>
-      </table>
+<div class="two-col">
+  <div class="entry-card">
+    <div class="card-heading">Today's entry</div>
+    <div class="seg-field">
+      <label for="work-status">Status</label>
+      <div class="seg-control" id="work-status">
+        <button class="seg-btn" class:active={status === 'full'} onclick={() => pickStatus('full')}>Full</button>
+        <button class="seg-btn" class:active={status === 'partial'} onclick={() => pickStatus('partial')}>Partial</button>
+        <button class="seg-btn" class:active={status === 'sick'} onclick={() => pickStatus('sick')}>Sick</button>
+      </div>
     </div>
-  {/if}
+    <div class="field-grid">
+      <div class="text-field">
+        <label for="rostered">Rostered</label>
+        <div class="input-unit">
+          <input id="rostered" type="number" step="0.25" min="0" bind:value={rosteredHours} />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+      <div class="text-field">
+        <label for="office">Office</label>
+        <div class="input-unit">
+          <input id="office" type="number" step="0.25" min="0" bind:value={officeHours} />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+      <div class="text-field">
+        <label for="wfh">WFH</label>
+        <div class="input-unit">
+          <input id="wfh" type="number" step="0.25" min="0" bind:value={wfhHours} />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+      <div class="text-field">
+        <label for="sick">Sick leave</label>
+        <div class="input-unit">
+          <input id="sick" type="number" step="0.25" min="0" bind:value={sickLeaveHours} />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+    </div>
+    <div class="worked-box">
+      <div>
+        <div class="worked-label">Worked today</div>
+        <div class="worked-val">{workedToday}<span class="worked-unit"> h</span></div>
+      </div>
+      <button class="save-btn" onclick={save}>{saved ? '✓ Saved' : 'Save'}</button>
+    </div>
+    <div class="notes-hint">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--tm)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+      <span>Daily notes now live on the Daily Log screen.</span>
+    </div>
+  </div>
+
+  <div class="table-card">
+    <div class="table-header">
+      <span class="card-heading">Monthly view</span>
+      <span class="table-byweek">by week</span>
+    </div>
+    <div class="table-grid header-row">
+      <span>Date</span><span>Status</span><span style="text-align:right;">Rost.</span><span style="text-align:right;">Office</span><span style="text-align:right;">WFH</span><span style="text-align:right;">Sick</span>
+    </div>
+    {#each weekGroups as group}
+      <div class="week-label">Week of {formatDate(group.weekStart)}</div>
+      {#each group.logs as log}
+        {@const sb = statusBadge(log)}
+        <div class="table-grid data-row">
+          <span>{formatDate(log.log_date)}</span>
+          <span><span class="status-pill {sb.cls}">{sb.label}</span></span>
+          <span style="text-align:right;">{fmt(log.rostered_hours)}</span>
+          <span style="text-align:right;">{fmt(log.office_hours)}</span>
+          <span style="text-align:right;">{fmt(log.wfh_hours)}</span>
+          <span style="text-align:right;color:var(--tm);">{fmt(log.sick_leave_hours)}</span>
+        </div>
+      {/each}
+      <div class="table-grid data-row week-total">
+        <span>Week total</span><span></span>
+        <span style="text-align:right;">{fmt(totalHours('rostered_hours', group.logs))}</span>
+        <span style="text-align:right;">{fmt(totalHours('office_hours', group.logs))}</span>
+        <span style="text-align:right;">{fmt(totalHours('wfh_hours', group.logs))}</span>
+        <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', group.logs))}</span>
+      </div>
+    {/each}
+    <div class="table-grid data-row month-total">
+      <span style="font-family:'Source Serif 4',serif;">Month to date</span><span></span>
+      <span style="text-align:right;">{fmt(totalHours('rostered_hours', logs))}</span>
+      <span style="text-align:right;">{fmt(totalHours('office_hours', logs))}</span>
+      <span style="text-align:right;">{fmt(totalHours('wfh_hours', logs))}</span>
+      <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', logs))}</span>
+    </div>
+  </div>
 </div>
 
 <style>
-  h1 { margin-bottom: 20px; }
+  .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px; gap:16px; flex-wrap:wrap; }
+  .page-title { font-family:'Source Serif 4',serif; font-size:30px; font-weight:600; color:var(--tp); letter-spacing:-.01em; }
+  .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
+  .header-actions { display:flex; align-items:center; gap:10px; }
+  .day-nav { display:flex; align-items:center; gap:2px; background:var(--card); border:1px solid var(--border); border-radius:999px; padding:4px; box-shadow:var(--shadow); }
+  .day-arrow { width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
+  .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
+  .day-label { font-weight:700; font-size:13px; padding:0 6px; min-width:108px; text-align:center; }
+  .theme-btn { width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
 
-  .date-picker {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 20px;
-  }
-  .date-picker label { font-size: 14px; font-weight: 600; color: #555; }
-  :global(.dark) .date-picker label { color: #bbb; }
+  .two-col { display:grid; grid-template-columns:1fr 1.7fr; gap:16px; align-items:start; }
+  .entry-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:20px; }
+  .card-heading { font-family:'Source Serif 4',serif; font-size:17px; font-weight:600; color:var(--tp); }
 
-  input[type="date"] {
-    padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    font-size: 14px;
-    background: #fff;
-  }
-  :global(.dark) input[type="date"] {
-    background: #2a3a5c;
-    border-color: #444;
-    color: #e0e0e0;
-  }
+  .seg-field { display:flex; flex-direction:column; gap:8px; }
+  .seg-field label { font-size:12px; font-weight:700; color:var(--ts); }
+  .seg-control { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:3px; gap:2px; }
+  .seg-btn { flex:1; background:transparent; border:none; border-radius:9px; padding:8px 6px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }
+  .seg-btn.active { background:var(--accent); color:#fff; }
 
-  .card {
-    background: #fff;
-    border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  }
-  :global(.dark) .card { background: #1e2a45; }
+  .field-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .text-field { display:flex; flex-direction:column; gap:7px; }
+  .text-field label { font-size:12px; font-weight:700; color:var(--ts); }
+  .input-unit { display:flex; align-items:center; background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:3px 5px; }
+  .input-unit input { width:100%; background:transparent; border:none; padding:8px; font-size:13.5px; color:var(--tp); font-variant-numeric:tabular-nums; }
+  .unit-label { font-size:11.5px; color:var(--tm); padding-right:8px; }
 
-  .form-card { max-width: 700px; }
-  .notes-hint { font-size: 12px; color: #888; margin-top: 14px; margin-bottom: 0; }
-  :global(.dark) .notes-hint { color: #999; }
-  .summary-card { max-width: 700px; }
+  .worked-box { background:var(--inset); border-radius:14px; padding:14px 16px; display:flex; justify-content:space-between; align-items:center; }
+  .worked-label { font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:800; color:var(--ts); }
+  .worked-val { font-family:'Source Serif 4',serif; font-size:24px; font-weight:600; color:var(--tp); font-variant-numeric:tabular-nums; }
+  .worked-unit { font-size:13px; color:var(--tm); }
+  .save-btn { background:var(--accent);color:#fff;border:none;border-radius:999px;padding:10px 18px;font-size:13px;font-weight:700;cursor:pointer; }
 
-  .card h2 {
-    font-size: 16px;
-    margin-bottom: 16px;
-    font-weight: 600;
-  }
+  .notes-hint { font-size:11.5px; color:var(--ts); line-height:1.5; display:flex; gap:8px; }
+  .notes-hint svg { flex-shrink:0; margin-top:1px; }
 
-  .form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-  }
+  .table-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
+  .table-header { display:flex; justify-content:space-between; align-items:center; padding:18px 20px 14px; }
+  .table-byweek { font-size:12px; color:var(--tm); }
 
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
+  .table-grid { display:grid; grid-template-columns:1.5fr 0.9fr 0.7fr 0.7fr 0.7fr 0.7fr; padding:9px 20px; align-items:center; font-variant-numeric:tabular-nums; }
+  .header-row { background:var(--inset); font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--ts); border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+  .data-row { font-size:12.5px; color:var(--tp); border-top:1px solid var(--border); }
+  .data-row span { white-space:nowrap; }
 
-  label { font-size: 13px; font-weight: 600; color: #555; }
-  :global(.dark) label { color: #bbb; }
+  .week-label { padding:12px 20px 6px; font-size:10.5px; font-weight:800; color:var(--tm); letter-spacing:.04em; }
+  .status-pill { font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; }
+  .status-pill.full { color:var(--accent-fg);background:var(--accent-soft); }
+  .status-pill.partial { color:var(--amber-fg);background:var(--amber-soft); }
+  .status-pill.sick { color:var(--red-fg);background:var(--red-soft); }
 
-  input[type="number"] {
-    padding: 8px 12px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    font-size: 14px;
-    width: 100%;
-  }
-  :global(.dark) input[type="number"] {
-    background: #2a3a5c;
-    border-color: #444;
-    color: #e0e0e0;
-  }
-
-  .save-btn {
-    padding: 12px 32px;
-    background: #1976d2;
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-size: 16px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s;
-    margin-top: 16px;
-  }
-  .save-btn:hover { background: #1565c0; }
-
-  .summary-row {
-    display: flex;
-    gap: 28px;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .summary-item {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .summary-label {
-    font-size: 12px;
-    color: #888;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  :global(.dark) .summary-label { color: #999; }
-
-  .summary-value {
-    font-size: 22px;
-    font-weight: 700;
-  }
-
-  .status-badge {
-    padding: 4px 12px;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 600;
-  }
-
-  .green { background: #e8f5e9; color: #2e7d32; }
-  :global(.dark) .green { background: #1b3d1f; color: #66bb6a; }
-  .amber { background: #fff3e0; color: #e65100; }
-  :global(.dark) .amber { background: #3d2b1a; color: #ffb74d; }
-  .red { background: #ffebee; color: #c62828; }
-  :global(.dark) .red { background: #3d1a1a; color: #ef5350; }
-
-  .loading, .empty { color: #888; text-align: center; padding: 16px; }
-
-  .table-scroll { overflow-x: auto; }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-
-  th {
-    text-align: left;
-    padding: 8px 10px;
-    border-bottom: 2px solid #eee;
-    font-weight: 600;
-    font-size: 12px;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-  }
-  :global(.dark) th { border-color: #333; color: #999; }
-
-  td {
-    padding: 8px 10px;
-    border-bottom: 1px solid #f0f0f0;
-    white-space: nowrap;
-  }
-  :global(.dark) td { border-color: #2a2a4a; }
-
-  .date-cell { font-weight: 600; }
-  .notes-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #888; }
-  :global(.dark) .notes-cell { color: #999; }
-
-  .week-total td {
-    border-top: 2px solid #1976d2;
-    border-bottom: 2px solid #1976d2;
-    font-weight: 600;
-    background: #f8faff;
-  }
-  :global(.dark) .week-total td {
-    background: #1a2a4a;
-  }
-
-  .week-label { font-size: 11px; color: #1976d2; text-transform: uppercase; letter-spacing: 0.5px; }
-  :global(.dark) .week-label { color: #64b5f6; }
-
-  .grand-total td {
-    border-top: 3px double #333;
-    font-weight: 700;
-    font-size: 14px;
-  }
-  :global(.dark) .grand-total td { border-color: #888; }
+  .week-total { font-size:12px; font-weight:700; color:var(--ts); background:var(--inset); border-top:1px solid var(--border); }
+  .month-total { font-size:13px; font-weight:800; color:var(--tp); border-top:2px solid var(--border); }
+  .month-total span:first-child { font-family:'Source Serif 4',serif; }
 </style>

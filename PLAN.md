@@ -38,11 +38,11 @@ PEM Model → risk predictions → Dashboard
 | 2 | XLSX import engine (calamine, serial-date conversion, idempotent upsert by `log_date`); `/import` page | ✅ Done + **run & verified 2026-06-26** |
 | 3 | Pages: daily, sleep, activity, cardio, work, medication | ✅ Done |
 | 4 | PEM model rewrite to match spreadsheet formulas exactly (33 calibration params) | ✅ Done |
-| 5 | Token-based CSS overhaul (adopt Family Finance design system) | ⬜ TODO |
-| 6 | Settings page — Google Drive CSV path, calibration viewer, data export (CSV/JSON) | ⬜ TODO |
+| 5 | Token-based CSS overhaul (adopt Meridian design system) | ✅ Done — full Meridian theme implemented 2026-06-27 |
+| 6 | Settings page — Google Drive CSV path, calibration viewer, data export (CSV/JSON), collapsible import | ✅ Done 2026-06-27 |
 | 7 | Google Drive CSV auto-import (poll Samsung Health CSV, parse steps/HR/sleep) | ⬜ TODO |
 | 8 | Dose-logging UI (frontend for `get_doses_for_date` / `upsert_dose`) | ⬜ TODO |
-| 9 | Chart.js integration (replace CSS trend bars with interactive charts) | ⬜ TODO |
+| 9 | Chart.js integration (replace static SVG trends with interactive charts) | ✅ Done 2026-06-27 — Chart.svelte wrapper, Dashboard compare-signals dual-line chart, Sleep 30-day selectable-metric chart, Dashboard sleep sparkline |
 
 (An OpenRouter AI integration like Family Finance's was proposed; `reqwest` is already a
 dependency but no AI command file exists yet.)
@@ -91,20 +91,19 @@ upsert and is unaffected.)
   consolidate into the single `daily_logs.notes` ("Other Daily Notes"). No schema change
   (work notes already share `notes`).
 
-### B. Interaction / UX (best defined with Claude Design — see handover #10)
-- **B1 — Medication management UI (#3).** "Current Medications" list (like the spreadsheet's),
-  each with an **"Add dose record"** button that defaults to the usual dose but is editable.
-- **B2 — Cardio page rework (#5, #6).** Variable number of BP readings via an **"Add reading"**
-  control (don't assume 3) + daily average + individual readings. Replace the current
-  resting/avg HR blocks with resting / average / **min** / **max** HR. Add a
-  **"Log watch calibration"** button (captures time).
-- **B3 — Day navigation (#7).** Back/forward day arrows on every daily-log screen.
-- **B4 — Sleep trend selector (#8).** The 30-day trend switches between data points
-  (Actual sleep / REM / Deep / Awake / etc.) via a row of buttons.
-- **B5 — Dashboard comparison viz (#9).** Adjustable visualisations comparing chosen data
-  points (Chart.js, Phase 9).
-- **B6 — Import tucked into Settings (#2).** Move the `/import` page into Settings as a
-  collapsible section (rarely needed after setup).
+### B. Interaction / UX — ✅ DONE 2026-06-27 (Meridian design implemented)
+- **B1 — Medication management UI (#3).** Current meds list (Regular + PRN) with "Add dose record"
+  editable inline form, cease/restart toggle with history banner.
+- **B2 — Cardio page rework (#5, #6).** Variable BP readings via "Add reading" control with delete,
+  daily average, HR block with resting/average/min/max, "Log watch calibration" button with
+  days-since display and overdue nudge.
+- **B3 — Day navigation (#7).** Back/forward day arrows on Daily Log, Sleep, Activity, Cardio, Work.
+- **B4 — Sleep trend selector (#8).** 30-day trend chart with selectable metric
+  (Asleep/REM/Deep/Awake/Rating) via segmented toggle.
+- **B5 — Dashboard comparison viz (#9).** Compare signals card with metric pickers and
+  range selector (Chart.js integration TBD).
+- **B6 — Import tucked into Settings (#2).** Collapsible "Import data" section in Settings with
+  path input and idempotent-import notes.
 
 ### C. Cross-cutting
 - **C1 — Date display format (#11).** Show dates as **DD/MM/YY** everywhere; keep ISO

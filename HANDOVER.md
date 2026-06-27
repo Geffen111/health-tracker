@@ -1,9 +1,8 @@
-# Handover → OpenCode (Health Tracker)
+# Handover → Claude Code (Health Tracker)
 
-This document hands the Health Tracker project from a Claude Code session to OpenCode (running
-in WSL Ubuntu). Read this first, then [`PLAN.md`](PLAN.md) (full roadmap, PEM formulas,
-backlog) and [`CLAUDE.md`](CLAUDE.md) (project guide). Everything here is current as of
-2026-06-27.
+This document hands the Health Tracker project from an OpenCode session back to Claude Code.
+Read this first, then [`PLAN.md`](PLAN.md) (full roadmap, PEM formulas, backlog) and
+[`CLAUDE.md`](CLAUDE.md) (project guide). Everything here is current as of 2026-06-27.
 
 ---
 
@@ -16,14 +15,18 @@ app at `../family-finances` (consult its `CLAUDE.md` for patterns).
 
 ## 2. Current state (what's done)
 - **Phases 1–4 complete & verified**: scaffold, XLSX import engine, the page set, PEM model.
+- **Phase 5 (Meridian CSS overhaul) complete**: full design token system, SVG nav icons, 9 redesigned
+  screens matching design comps from `../health-tracker-claude-design-files/`.
+- **Phase 9 (Chart.js integration) complete**: interactive dual-line compare-signals chart on
+  Dashboard, selectable-metric 30-day trend chart on Sleep, sleep sparkline on Dashboard.
+- **Section B (UI redesign) complete**: all 9 screens redesigned per Meridian design comps.
+- **Section C (cross-cutting) complete**: C1 (DD/MM/YY formatter), a11y warnings resolved.
 - **Spreadsheet imported & verified** into the live DB: 126 daily logs (21/02–26/06 2026),
   425 activities, 215 BP readings, **793 medication doses**, 57 calibration params.
-- **Section A (data model) complete & committed** — see §6.
-- **Design handover brief prepared** for Claude Design (see §7) — section B (UI) is intended to
-  follow once design comps come back.
-- Repo: branch `main`, **no remote** (local only), clean tree, 3 commits:
-  `b855c4a` (plan), `672c320` (Section A), `7b53c81` (initial). The working tree is the same
-  files OpenCode sees via `/mnt/c/...`.
+- **Section A (data model) complete** — see §6.
+- **Design comps received** at `../health-tracker-claude-design-files/` — "Meridian" theme,
+  implemented into all existing routes.
+- Repo: branch `main`, **no remote** (local only), clean tree, working tree matches these docs.
 
 ## 3. ⚠️ Critical environment notes (WSL vs Windows)
 OpenCode runs in **WSL Ubuntu**; this app is a **native Windows** desktop app. This matters:
@@ -62,22 +65,20 @@ node -e "const {DatabaseSync}=require('node:sqlite'); const db=new DatabaseSync(
 Decided with the user (see `PLAN.md` "Feature backlog" for the full grouped list with IDs):
 
 1. **Section A — data model/backend.** ✅ DONE.
-2. **Claude Design handover.** ✅ Brief written (§7). **Awaiting comps.**
-3. **Section B — implement the designed UI** (the bulk of remaining work) once comps arrive.
-4. **Section C — cross-cutting** (date format, etc.), folded in as screens are touched.
+2. **Claude Design handover.** ✅ Brief prepared, comps received at
+   `../health-tracker-claude-design-files/`.
+3. **Section B — implement the designed UI** ✅ DONE — Meridian theme implemented across all routes.
+4. **Section C — cross-cutting** ✅ DONE — DD/MM/YY format, a11y cleanup.
+5. **Phase 9 — Chart.js integration** ✅ DONE — Dashboard + Sleep interactive charts.
 
-**What OpenCode can start now vs. what waits for design comps:**
-- **Can start now (not design-dependent):**
-  - **C1 — DD/MM/YY date display** everywhere (store stays ISO `YYYY-MM-DD`; add a shared
-    formatter and apply it). The user prefers `DD/MM/YY`; times 24h `HH:MM`.
-  - Wiring/using the **new backend commands** from §6 into existing pages (e.g. show medication
-    history, the watch-calibration button) even before the visual redesign.
-  - The two **A2 review items** (§8).
-- **Waits for design comps (Section B UI):** the visual style/token system, and the per-screen
-  redesigns (dashboard comparison charts #9, day-nav arrows #7, sleep metric selector #8, Cardio
-  rework #5/#6, Medications management UI #3/#4, Import-into-Settings #2). If the user wants to
-  proceed without waiting for comps, build functionally first, style later — but the agreed plan
-  is design-first for the UI.
+**What remains:**
+- **Phase 7 — Google Drive CSV auto-import.** Backend not yet started. The `csv` crate is already
+  in `Cargo.toml`. Needs: new `commands/csv_import.rs`, a settings store (JSON file in data dir),
+  a scheduled/polling mechanism, and wiring in the Settings page (CSV path input, auto-import
+  toggle, last-synced display).
+- **Data export** (Settings CSV/JSON buttons) — no backend commands exist yet.
+- **Sidebar "Watch synced"** — currently hardcoded placeholder text; wire to real
+  `list_watch_calibrations` / `days_since_calibration` data.
 
 ## 6. Section A — what was added (backend API surface for the UI to use)
 Migrations `20240608`–`20240610`; all commands registered in `src-tauri/src/lib.rs`.
@@ -106,38 +107,66 @@ Migrations `20240608`–`20240610`; all commands registered in `src-tauri/src/li
 
 Full existing command list is in `src-tauri/src/lib.rs` `invoke_handler![...]`.
 
-## 7. Design handover (Section B input)
-Brief is at the **sibling folder** (kept out of this git root by convention):
-`../health-tracker-design-handoff/README.md`
-(WSL: `/mnt/c/Users/gavin/Projects/health-tracker-design-handoff/README.md`).
+## 7. Meridian design comps (Section B input)
+Design comps are at `../health-tracker-claude-design-files/` (WSL:
+`/mnt/c/Users/gavin/Projects/health-tracker-claude-design-files/`). Contents:
 
-It's a greenfield design brief: app/ME-CFS context and design principles (low cognitive load,
-calm-not-clinical, red reserved for real high PEM risk, accessible), per-screen requirements
-folding in **all** the user's UX notes, a data dictionary, and PEM context. The workflow: user
-takes it to claude.ai/design → comps come back (`.dc.html` + screenshots + `ICONS.md`) into that
-folder → implement into the existing SvelteKit routes (backend wiring unchanged). The brief
-leaves the **visual direction open** (Design proposes it); it may share a family resemblance with
-Family Finance's "Hearth" theme but be its own calmer identity.
+- **9 screen comps** (`.dc.html` files) — Dashboard, Daily Log, Sleep, Activity, Cardio,
+  Medication, Work, PEM Model, Settings + 1 Dashboard Directions reference.
+- **`ICONS.md`** — SVG line icons for all nav items and utility glyphs.
+- **Design tokens** documented in each comp's `<style>` block (light + dark CSS custom
+  properties).
+
+The **Meridian** direction was chosen: calm, spa-like blue/teal palette, Source Serif 4
+headings + Public Sans body, 18px soft cards, 999px pills/buttons. Distinct from Family
+Finance's "Hearth" but shares the sidebar + page header + card structure.
+
+**All comps have been implemented** into the existing SvelteKit routes. The backend/data
+wiring was unchanged — the design layer was purely CSS + layout.
+
+Key implementation notes:
+- Chart.js replaces static SVG trends on Dashboard (compare signals) and Sleep (30-day trend).
+- The `csv` crate is already in Cargo.toml (for Phase 7 CSV import).
+- Day arrows, medication dose logging, watch calibration, and variable BP are all wired to
+  real backend commands.
 
 ## 8. Loose ends / things to be aware of
 - **Two A2 items flagged for the user** (not yet resolved): the `add_meds` cell
   `"Rizatriptan ODT x 1 - 1:30"` was migrated assuming **13:30** (1:30 PM); and `"Flu Vax 12:50pm"`
   was **not** migrated (it's a vaccination, not a tracked med). Confirm/adjust with the user.
-- The **importer is one-time** and idempotent (daily/BP/meds upsert; activity_log is cleared
-  first). The default import path in `src/routes/import/+page.svelte` is the Windows path to
-  `Copy of Fatigue_Log_V5 26 June.xlsx` (misnamed — it's actually the current "V6" data).
+- The **XLSX importer is one-time** and idempotent (daily/BP/meds upsert; activity_log is cleared
+  first). The import UI now lives in Settings (collapsible section) — the old `/import` route
+  still exists but is not linked from the sidebar.
 - **Routes:** `/` (dashboard), `/daily`, `/sleep`, `/activity`, `/cardio`, `/medication`,
-  `/work`, `/pem-model`, `/settings`, `/import`. Sidebar/layout in `src/routes/+layout.svelte`
-  (still uses a deprecated `<slot>` → should become `{@render children()}`).
-- **Known frontend warnings:** ~13 svelte-check a11y "label not associated with control"
-  warnings exist across pages — fine to clean up as screens are redesigned.
+  `/work`, `/pem-model`, `/settings`. Nine nav items in the sidebar, all with SVG icons from
+  `ICONS.md`. Import is no longer in the nav.
+- **Chart.js component** at `src/lib/Chart.svelte` — Svelte 5 wrapper that reads CSS custom
+  properties for theming. Uses `$effect` for reactive updates and cleanup.
+- **Shared date formatter** at `src/lib/formatDate.ts` — `formatDate()` (DD/MM/YY),
+  `formatDateLong()` (e.g. "Fri 27/06/26"), `formatDateShort()` (DD/MM), `formatTime()`.
+- **Build status:** `pnpm check` → 0 errors, 0 warnings; `cargo check` → passes clean.
+- **Phase 7 (CSV auto-import) not started** — backend needs to be built. The `csv` crate is
+  ready in Cargo.toml. The Settings page has the CSV path input and auto-import toggle UI but
+  no backend wiring yet.
 
-## 9. How to continue (suggested first move for OpenCode)
-1. Read `PLAN.md` + this file. Confirm `pnpm check` is 0 errors and `cargo check` passes.
-2. If design comps are in `../health-tracker-design-handoff/`, begin Section B from the tokens
-   first (define the CSS custom properties in `+layout.svelte`), then screen by screen.
-3. If comps are not yet back, do the non-design-dependent items: C1 (DD/MM/YY formatter) and
-   surface the new backend data (medication history, watch calibration) in the existing pages.
-4. Keep `PLAN.md` updated as phases complete (this is what a prior lost session failed to do).
-5. Commit per coherent unit; end commit messages with the Co-Authored-By trailer. No remote, so
-   no pushing needed.
+## 9. Suggested next moves for Claude Code
+
+1. Read `PLAN.md` + this file + `CLAUDE.md`. Confirm `pnpm check` and `cargo check` pass.
+2. **Phase 7 — Google Drive CSV auto-import** is the largest remaining feature. It needs:
+   - New Rust command module `commands/csv_import.rs` registered in `lib.rs`.
+   - A settings store (JSON file in data dir, following Family Finance's pattern) to persist
+     the CSV path and auto-import toggle.
+   - Samsung Health CSV format parsing (the `csv` crate is already in `Cargo.toml`). Health Sync
+     writes CSV with columns like `Date`, `Steps`, `HeartRate`, `Sleep` — needs investigation.
+   - Upsert into `daily_logs` (steps, `ave_resting_hr`, `ave_hr`, `hr_min`, `hr_max`, sleep
+     stages like `sleep_actual_asleep`, `sleep_rem`, `sleep_deep`, `sleep_awake`).
+   - Frontend wiring: the Settings page CSV path input and auto-import toggle both exist in the
+     UI but call no backend commands yet. The last-synced timestamp is also placeholder.
+3. Smaller items if time permits:
+   - **Data export** — simple backend commands (`export_csv`, `export_json`) that query all
+     tables and write to a file path.
+   - **Sidebar "Watch synced"** — replace hardcoded text with real data from
+     `days_since_calibration()` and `list_watch_calibrations()`.
+   - **Remove old `/import` route** — no longer linked from nav; the import UI is in Settings now.
+4. Keep `PLAN.md` updated as work progresses.
+5. Commit per coherent unit. No remote — no pushing needed.
