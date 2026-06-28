@@ -56,6 +56,14 @@ activity_log(id, log_date, activity_type_id, duration_hours REAL, energy_cost, n
 
 watch_calibration(id, cal_date, cal_time, notes)   -- blood-pressure-monitor calibration events.
 
+lab_results(id, test_name, category, result_date, value_num REAL, value_text, unit,
+  ref_low REAL, ref_high REAL, ref_text, flag, source_note, extracted_at)
+  - Pathology/blood-test results extracted from the health records vault. One row per analyte per date.
+    test_name is a canonical analyte e.g. 'CRP','Ferritin','Haemoglobin','HDL Cholesterol'. value_num is the
+    numeric value (NULL for qualitative like 'Not detected' — see value_text). ref_low/ref_high are the reference
+    range bounds (NULL when one-sided/qualitative; ref_text has the raw range). flag is 'HIGH'/'LOW' when abnormal.
+    For "latest"/"most recent" use MAX(result_date) per test_name. This is separate from the daily log tables.
+
 Date helpers: date('now'), date('now','-30 days'), strftime('%Y-%m', log_date), etc.
 Match free text with "LIKE ''%term%'' COLLATE NOCASE"."#,
         today = today

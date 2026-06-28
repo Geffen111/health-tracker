@@ -14,3 +14,5 @@ pub mod insights;
 pub mod csv_import;
 pub mod update;
 pub mod vault;
+pub mod labs;
+pub mod records_ask;

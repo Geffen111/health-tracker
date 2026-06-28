@@ -19,7 +19,7 @@ const VAULT_ROOT_SETTING: &str = "vault_root";
 const DEFAULT_VAULT: &str = "C:\\Users\\gavin\\OneDrive\\Obsidian\\Health-Records";
 
 /// Configured vault root, or the default OneDrive location.
-fn vault_root() -> PathBuf {
+pub(crate) fn vault_root() -> PathBuf {
     PathBuf::from(settings::setting_str(VAULT_ROOT_SETTING).unwrap_or_else(|| DEFAULT_VAULT.to_string()))
 }
 
@@ -153,12 +153,78 @@ pub async fn read_vault_note(rel_path: String) -> Result<VaultNoteContent, Strin
     })
 }
 
+// ── shared walker (used by labs extraction + records Q&A) ──
+
+/// A note with its body, for backend features that need the full text.
+pub(crate) struct RawNote {
+    pub rel_path: String,
+    pub title: String,
+    pub folder: String,
+    pub note_type: Option<String>,
+    pub tags: Vec<String>,
+    pub body: String,
+}
+
+/// Walk the vault and return every note with its (frontmatter-stripped) body.
+pub(crate) fn walk_notes() -> Vec<RawNote> {
+    let root = vault_root();
+    let mut out: Vec<RawNote> = Vec::new();
+    if !root.is_dir() {
+        return out;
+    }
+    let mut stack: Vec<PathBuf> = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                if let Some(n) = raw_note(&root, &path) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn raw_note(root: &Path, path: &Path) -> Option<RawNote> {
+    let content = fs::read_to_string(path).ok()?;
+    let (fm, body) = split_frontmatter(&content);
+    let rel = path.strip_prefix(root).ok()?;
+    let rel_path = rel.to_string_lossy().replace('\\', "/");
+    let folder = rel
+        .components()
+        .next()
+        .filter(|_| rel.components().count() > 1)
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stem = path.file_stem()?.to_string_lossy().into_owned();
+    let title = first_heading(body).unwrap_or_else(|| prettify_stem(&stem));
+    Some(RawNote {
+        rel_path,
+        title,
+        folder,
+        note_type: frontmatter_value(fm, "type"),
+        tags: frontmatter_tags(fm),
+        body: body.to_string(),
+    })
+}
+
 // ── small markdown / frontmatter helpers ──
 
 /// Split a `---`-delimited YAML frontmatter block off the front of a note.
 /// Returns (frontmatter_lines, body). If there is no frontmatter, the first
 /// element is empty and the body is the whole content.
-fn split_frontmatter(content: &str) -> (&str, &str) {
+pub(crate) fn split_frontmatter(content: &str) -> (&str, &str) {
     let trimmed = content.strip_prefix('\u{feff}').unwrap_or(content);
     if let Some(rest) = trimmed.strip_prefix("---\n").or_else(|| trimmed.strip_prefix("---\r\n")) {
         // Find the closing delimiter line.
