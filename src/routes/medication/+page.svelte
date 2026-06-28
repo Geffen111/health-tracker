@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate, todayISO } from '$lib/formatDate';
+  import { formatDate, todayISO, shiftISO, formatDateLong } from '$lib/formatDate';
   import { showToast } from '$lib/stores/toast.svelte';
   import { confirmAction } from '$lib/stores/confirm.svelte';
 
@@ -15,6 +15,11 @@
   let supplements = $state({ multivitamin: false, vitamin_c: false });
 
   let today = $state(todayISO());
+  let selectedDate = $state(today);
+
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadAll(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadAll(); }
+  function goToday() { selectedDate = today; loadAll(); }
 
   // Inline "log a dose" form, keyed by medication id.
   let openId = $state<number | null>(null);
@@ -41,8 +46,8 @@
         invoke<any[]>('list_medications'),
         invoke<any[]>('get_medication_schedule', { medicationId: null }),
         invoke<any[]>('get_medication_history', { medicationId: null }),
-        invoke<any[]>('get_doses_for_date', { date: today }),
-        invoke<any>('get_daily_log', { date: today }),
+        invoke<any[]>('get_doses_for_date', { date: selectedDate }),
+        invoke<any>('get_daily_log', { date: selectedDate }),
       ]);
       medications = meds;
       schedule = sched;
@@ -59,7 +64,7 @@
     supplements[key] = !supplements[key];
     await invoke('upsert_daily_log', {
       log: {
-        log_date: today,
+        log_date: selectedDate,
         multivitamin: supplements.multivitamin,
         vitamin_c: supplements.vitamin_c,
       },
@@ -96,20 +101,20 @@
     await invoke('upsert_dose', {
       dose: {
         medication_id: medId,
-        log_date: today,
+        log_date: selectedDate,
         time_taken: d.time || null,
         dose_amount: d.amount ? parseFloat(d.amount) : null,
         notes: null,
       },
     });
     openId = null;
-    todayDoses = await invoke('get_doses_for_date', { date: today });
+    todayDoses = await invoke('get_doses_for_date', { date: selectedDate });
     showToast('Dose logged');
   }
 
   async function deleteDose(medId: number, time: string) {
-    await invoke('delete_dose', { medicationId: medId, logDate: today, timeTaken: time });
-    todayDoses = await invoke('get_doses_for_date', { date: today });
+    await invoke('delete_dose', { medicationId: medId, logDate: selectedDate, timeTaken: time });
+    todayDoses = await invoke('get_doses_for_date', { date: selectedDate });
   }
 
   async function addMedication() {
@@ -216,12 +221,26 @@
 <div class="page-header">
   <div>
     <div class="page-title">Medication</div>
-    <div class="page-subtitle">Regular &amp; occasional meds, today's doses &amp; history</div>
+    <div class="page-subtitle">Regular &amp; occasional meds, doses &amp; history</div>
   </div>
-  <button class="add-med-btn" onclick={() => showAddMed = !showAddMed}>
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-    Add medication
-  </button>
+  <div class="header-actions">
+    <div class="day-nav">
+      <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <span class="day-label">{formatDateLong(selectedDate)}</span>
+      <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+      {#if selectedDate !== today}
+        <button class="today-btn" onclick={goToday}>Today</button>
+      {/if}
+    </div>
+    <button class="add-med-btn" onclick={() => showAddMed = !showAddMed}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Add medication
+    </button>
+  </div>
 </div>
 
 {#if showAddMed}
@@ -354,11 +373,11 @@
       </div>
       <div class="doses-card">
         <div class="doses-header">
-          <span class="card-heading">Today's doses</span>
-          <span class="doses-date">{formatDate(today)}</span>
+          <span class="card-heading">Doses</span>
+          <span class="doses-date">{formatDate(selectedDate)}</span>
         </div>
         {#if todayDoses.length === 0}
-          <p class="empty-doses">No doses logged today</p>
+          <p class="empty-doses">No doses logged</p>
         {:else}
           {#each todayDoses as dose}
             <div class="dose-row">
@@ -370,7 +389,7 @@
             </div>
           {/each}
         {/if}
-        <div class="doses-footer">{todayDoses.length} dose{todayDoses.length !== 1 ? 's' : ''} logged today</div>
+        <div class="doses-footer">{todayDoses.length} dose{todayDoses.length !== 1 ? 's' : ''} logged</div>
       </div>
     </div>
   </div>
@@ -513,4 +532,11 @@
   .hist-note-input { width:100%; font-size:12.5px; border:1px solid var(--border); border-radius:9px; padding:8px 10px; background:var(--inset); color:var(--tp); }
   .hist-actions { display:flex; gap:8px; }
   .hist-row-actions { display:flex; gap:6px; flex-shrink:0; }
+  .header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .day-nav { display:flex; align-items:center; gap:2px; background:var(--card); border:1px solid var(--border); border-radius:999px; padding:4px; box-shadow:var(--shadow); }
+  .day-arrow { width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
+  .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
+  .day-label { font-weight:700; font-size:13px; padding:0 6px; min-width:108px; text-align:center; letter-spacing:.01em; }
+  .today-btn { background:var(--accent-soft);color:var(--accent-fg);border:none;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-left:4px; }
+  .today-btn:hover { background:var(--accent); color:#fff; }
 </style>

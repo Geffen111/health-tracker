@@ -117,9 +117,9 @@
       <div class="gauge">
         <svg viewBox="0 0 170 112" width="170" height="112">
           <path d="M18 96 A67 67 0 0 1 152 96" fill="none" stroke="var(--inset)" stroke-width="13" stroke-linecap="round"/>
-          <path d={riskArc(todayPrediction?.predicted_pem_risk)} fill="none" stroke={todayPrediction?.risk_band === 'High' ? 'var(--red)' : todayPrediction?.risk_band === 'Medium' ? 'var(--amber)' : 'var(--accent)'} stroke-width="13" stroke-linecap="round"/>
+          <path d={riskArc(todayPrediction?.predicted_next_day_fatigue)} fill="none" stroke={todayPrediction?.risk_band === 'High' ? 'var(--red)' : todayPrediction?.risk_band === 'Medium' ? 'var(--amber)' : 'var(--accent)'} stroke-width="13" stroke-linecap="round"/>
         </svg>
-        <div class="gauge-value">{todayPrediction?.predicted_pem_risk?.toFixed(1) ?? '—'}</div>
+        <div class="gauge-value">{todayPrediction?.predicted_next_day_fatigue?.toFixed(1) ?? '—'}</div>
         <div class="gauge-of">predicted · of 10</div>
       </div>
       <span class="risk-badge" style="color:{bandColor(todayPrediction?.risk_band)};background:{bandBg(todayPrediction?.risk_band)};">
@@ -189,7 +189,7 @@
         <div class="step-desc" style="color:var(--amber-fg);font-weight:600;">{todayPrediction?.risk_band ?? '—'} · pace gently</div>
       </div>
     </div>
-    <div class="step-note">Today's predicted fatigue from this risk is about <strong>{todayPrediction?.predicted_next_day_fatigue?.toFixed(1) ?? '—'} / 10</strong>.</div>
+    
   </div>
 
   <div class="advanced-card">
@@ -286,8 +286,6 @@
   .step-val { font-family:'Source Serif 4',serif; font-size:24px; font-weight:600; color:var(--tp); }
   .step-desc { font-size:11px; color:var(--tm); line-height:1.4; }
   .step-op { display:flex; align-items:center; color:var(--tm); font-size:18px; }
-  .step-note { margin-top:16px; font-size:12.5px; color:var(--ts); line-height:1.6; background:var(--inset); border-radius:12px; padding:13px 15px; }
-  .step-note strong { color:var(--tp); }
 
   .advanced-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:16px; }
   .advanced-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 22px; background:transparent; border:none; cursor:pointer; text-align:left; }

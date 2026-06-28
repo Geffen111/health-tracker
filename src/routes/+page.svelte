@@ -62,7 +62,7 @@
   // Today's crash risk is the PEM prediction computed from yesterday's load.
   let yesterdayPred = $derived(predictions?.find((p: any) => p.log_date === shiftISO(todayISO(), -1)) ?? null);
   let riskBand = $derived(yesterdayPred?.risk_band ?? summary?.current_risk_band ?? null);
-  let riskScore = $derived(yesterdayPred?.predicted_pem_risk ?? null);
+  let riskScore = $derived(yesterdayPred?.predicted_next_day_fatigue ?? null);
 
   function gaugeArc(score: number | null): { pct: number; color: string } {
     if (score == null) return { pct: 0, color: 'var(--inset)' };
@@ -195,7 +195,7 @@
       </div>
       <div class="risk-info">
         <div class="risk-header">
-          <div class="risk-label">PEM crash risk</div>
+          <div class="risk-label">Predicted fatigue</div>
           <span class="risk-band" style="color:{bandColor(riskBand)};background:{bandBg(riskBand)};">
             {riskBand ?? '—'}
           </span>
@@ -276,7 +276,7 @@
     <div class="stat-card">
       <div class="stat-label">Recovery debt</div>
       <div class="stat-row">
-        <span class="stat-value">{(predictions?.find((p: any) => p.log_date === todayISO())?.predicted_pem_risk ?? 0).toFixed(1)}</span>
+        <span class="stat-value">{(yesterdayPred?.predicted_pem_risk ?? 0).toFixed(1)}</span>
         <span class="stat-threshold">/ 4.0 threshold</span>
       </div>
       <div class="progress-bar">

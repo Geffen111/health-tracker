@@ -257,7 +257,7 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
     let crash_flag = threshold_penalty > 0.0;
 
     // ── 20. Predicted next-day fatigue ──
-    let predicted_next_day = (fatigue_map_slope * predicted_pem_risk + fatigue_map_intercept).min(10.0);
+    let predicted_next_day = (fatigue_map_slope * predicted_pem_risk + fatigue_map_intercept).max(1.0).min(10.0);
 
     // ── 21. Confidence range ──
     let predicted_low = (predicted_next_day - prediction_range).max(0.0);
