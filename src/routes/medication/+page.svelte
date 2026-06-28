@@ -210,6 +210,11 @@
     return medications.find((m) => m.id === medId)?.dose_unit ?? 'mg';
   }
 
+  const MED_COLORS = ['--accent', '--peri', '--amber', '--red', '--teal', '--purple', '--pink', '--lime', '--coral', '--sky'];
+  function medColor(medId: number): string {
+    return MED_COLORS[medId % MED_COLORS.length];
+  }
+
   let eventMeta: Record<string, { label: string; style: string }> = {
     started: { label: 'Started', style: 'color:var(--accent-fg);background:var(--accent-soft);' },
     ceased: { label: 'Ceased', style: 'color:var(--red-fg);background:var(--red-soft);' },
@@ -280,7 +285,7 @@
 {:else}
   <div class="med-layout">
     <div class="med-list-card">
-      {#each [{ label: 'Regular', meds: regularMeds, dot: 'accent' }, { label: 'Occasional', meds: occasionalMeds, dot: 'peri' }, { label: 'Ceased', meds: ceasedMeds, dot: 'muted' }] as section}
+      {#each [{ label: 'Regular', meds: regularMeds }, { label: 'Occasional', meds: occasionalMeds }, { label: 'Ceased', meds: ceasedMeds }] as section}
         {#if section.label !== 'Ceased' || section.meds.length > 0}
         <div class="section-divider">{section.label}</div>
         {#if section.meds.length === 0}
@@ -301,9 +306,9 @@
               <button class="dose-cancel" onclick={() => editId = null}>Cancel</button>
             </div>
           {:else}
-            <div class="med-row" class:dimmed={!med.active}>
+            <div class="med-row" class:dimmed={!med.active} style={med.active ? `background:var(${medColor(med.id)}-soft)` : ''}>
               <div class="med-top">
-                <span class="med-dot {section.dot}"></span>
+                <span class="med-dot" style={med.active ? `background:var(${medColor(med.id)})` : 'background:var(--tm)'}></span>
                 <div class="med-info">
                   <div class="med-name">{med.name}</div>
                   <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
@@ -380,7 +385,7 @@
           <p class="empty-doses">No doses logged</p>
         {:else}
           {#each todayDoses as dose}
-            <div class="dose-row">
+            <div class="dose-row" style="background:var({medColor(dose.medication_id)}-soft);">
               <span class="dose-time">{dose.time_taken ?? '--:--'}</span>
               <div class="dose-med-name">{getMedName(dose.medication_id)} <span class="dose-amount">{dose.dose_amount != null ? `${dose.dose_amount} ${getMedUnit(dose.medication_id)}` : ''}</span></div>
               <button class="dose-delete" onclick={() => deleteDose(dose.medication_id, dose.time_taken)} aria-label="Delete dose">
@@ -473,9 +478,6 @@
   .med-row.dimmed { opacity:.6; }
   .med-top { display:flex; align-items:center; gap:10px; }
   .med-dot { width:9px;height:9px;border-radius:50%;flex-shrink:0; }
-  .med-dot.accent { background:var(--accent); }
-  .med-dot.peri { background:var(--peri); }
-  .med-dot.muted { background:var(--tm); }
   .med-info { flex:1; min-width:0; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); }
   .med-detail { font-size:11.5px; color:var(--tm); }

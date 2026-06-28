@@ -15,11 +15,11 @@
 
   const METRICS: Record<string, { label: string; field: string; color: string; format: (v: number) => string }> = {
     fatigue: { label: 'Fatigue', field: 'fatigue_rating', color: 'var(--accent)', format: (v) => v.toFixed(1) },
-    sleep: { label: 'Sleep score', field: 'sleep_avg', color: 'var(--accent)', format: (v) => v.toFixed(1) },
+    sleep: { label: 'Sleep score', field: 'sleep_avg', color: 'var(--teal)', format: (v) => v.toFixed(1) },
     steps: { label: 'Steps', field: 'steps', color: 'var(--peri)', format: (v) => Math.round(v).toLocaleString() },
     restingHr: { label: 'Resting HR', field: 'ave_resting_hr', color: 'var(--amber)', format: (v) => v.toFixed(0) },
     headache: { label: 'Headache', field: 'headache_rating', color: 'var(--red)', format: (v) => v.toFixed(1) },
-    pemRisk: { label: 'PEM Risk', field: 'predicted_pem_risk', color: 'var(--amber)', format: (v) => v.toFixed(1) },
+    pemRisk: { label: 'PEM Risk', field: 'predicted_pem_risk', color: 'var(--purple)', format: (v) => v.toFixed(1) },
   };
 
   onMount(async () => {
