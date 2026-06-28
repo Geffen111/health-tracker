@@ -2,11 +2,15 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { formatDate, todayISO, shiftISO } from '$lib/formatDate';
+  import { computeDayLoad } from '$lib/load';
 
   let params = $state<any[]>([]);
   let predictions = $state<any[]>([]);
   let loading = $state(true);
   let showAdvanced = $state(false);
+  // Raw per-day activity load (same figures as the Activity page) for the
+  // contribution bars; the risk math below still uses the model's scaled values.
+  let rawLoad = $state({ phys: 0, cog: 0, sens: 0, total: 0 });
 
   // PEM is post-exertional: today's crash risk is driven by the load you carried
   // on the days BEFORE today. Today's own figures are empty until logged (often
@@ -22,6 +26,13 @@
       if (!predictions.find((p: any) => p.log_date === loadDate)) {
         await runModel();
       }
+      // Raw activity load for the contribution bars (matches the Activity page).
+      const [acts, types, cats] = await Promise.all([
+        invoke<any[]>('get_activities_for_date', { date: loadDate }),
+        invoke<any[]>('list_activity_types', { categoryId: null }),
+        invoke<any[]>('list_activity_categories'),
+      ]);
+      rawLoad = computeDayLoad(acts, types, cats);
     } catch (e) {
       console.error('PEM error:', e);
     } finally {
@@ -46,13 +57,13 @@
   // The prediction driving today's risk (computed from yesterday's complete data).
   let todayPrediction = $derived(predictions.find((p: any) => p.log_date === loadDate));
 
-  // Load contributions for the bars + steps below, from yesterday's prediction.
-  let loads = $derived.by(() => {
-    const p = todayPrediction;
-    const phys = p?.physical_load ?? 0;
-    const cog = p?.cognitive_load ?? 0;
-    const sen = p?.sensory_social_load ?? 0;
-    return { phys, cog, sen, total: phys + cog + sen, max: Math.max(phys, cog, sen, 0.01) };
+  // Contribution bars use the raw activity load (recognisable, matches Activity).
+  let loads = $derived({
+    phys: rawLoad.phys,
+    cog: rawLoad.cog,
+    sen: rawLoad.sens,
+    total: rawLoad.total,
+    max: Math.max(rawLoad.phys, rawLoad.cog, rawLoad.sens, 0.01),
   });
 
   // Format a number for display, or an em-dash when there's no prediction yet.
@@ -125,15 +136,15 @@
       <div class="card-heading">Load contributions <span class="load-day">· yesterday {formatDate(loadDate)}</span></div>
       <div class="load-bars">
         <div class="load-item">
-          <div class="load-header"><span><span class="load-swatch" style="background:var(--accent);"></span>Physical</span><span class="load-val">{todayPrediction ? num(loads.phys) : '—'}</span></div>
+          <div class="load-header"><span><span class="load-swatch" style="background:var(--accent);"></span>Physical</span><span class="load-val">{num(loads.phys, 1)}</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:{loads.phys / loads.max * 100}%;background:var(--accent);"></div></div>
         </div>
         <div class="load-item">
-          <div class="load-header"><span><span class="load-swatch" style="background:var(--peri);"></span>Cognitive</span><span class="load-val">{todayPrediction ? num(loads.cog) : '—'}</span></div>
+          <div class="load-header"><span><span class="load-swatch" style="background:var(--peri);"></span>Cognitive</span><span class="load-val">{num(loads.cog, 1)}</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:{loads.cog / loads.max * 100}%;background:var(--peri);"></div></div>
         </div>
         <div class="load-item">
-          <div class="load-header"><span><span class="load-swatch" style="background:var(--amber);"></span>Sensory / social</span><span class="load-val">{todayPrediction ? num(loads.sen) : '—'}</span></div>
+          <div class="load-header"><span><span class="load-swatch" style="background:var(--amber);"></span>Sensory / social</span><span class="load-val">{num(loads.sen, 1)}</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:{loads.sen / loads.max * 100}%;background:var(--amber);"></div></div>
         </div>
       </div>
@@ -156,14 +167,14 @@
     <div class="step-row">
       <div class="step">
         <div class="step-label">1 · Total load</div>
-        <div class="step-val">{todayPrediction ? num(loads.total) : '—'}</div>
+        <div class="step-val">{num(loads.total, 1)}</div>
         <div class="step-desc">physical + cognitive + sensory</div>
       </div>
       <span class="step-op">→</span>
       <div class="step">
         <div class="step-label">2 · Weighted load</div>
         <div class="step-val">{num(todayPrediction?.three_day_weighted_load)}</div>
-        <div class="step-desc">recent days, scaled</div>
+        <div class="step-desc">scaled for the model</div>
       </div>
       <span class="step-op">→</span>
       <div class="step">

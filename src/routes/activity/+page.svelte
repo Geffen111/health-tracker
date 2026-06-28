@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
+  import { computeDayLoad } from '$lib/load';
 
   let today = $state(todayISO());
   let selectedDate = $state(today);
@@ -100,20 +101,7 @@
   function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadEntries(); }
 
   let loadBuckets = $derived.by(() => {
-    let phys = 0, cog = 0, sens = 0;
-    for (const entry of entries) {
-      const type = getType(entry.activity_type_id);
-      if (!type) continue;
-      const cat = categories.find((c: any) => c.id === type.category_id);
-      if (!cat) continue;
-      const weight = entry.energy_cost === 'Low' ? 0.7 : entry.energy_cost === 'High' ? 2.0 : 1.0;
-      const v = entry.duration_hours * (cat.energy_weight ?? 1) * weight;
-      const name = (cat.name ?? '').toLowerCase();
-      if (name.includes('physical') || name.includes('domestic') || name === 'active') phys += v;
-      else if (name.includes('cognitive') || name.includes('hobby')) cog += v;
-      else sens += v;
-    }
-    const total = phys + cog + sens;
+    const { phys, cog, sens, total } = computeDayLoad(entries, activityTypes, categories);
     const scale = Math.max(total > 0 ? Math.max(phys, cog, sens) : 1, 0.001);
     const pct = (v: number) => Math.round((v / scale) * 100) + '%';
     return { phys, cog, sens, total, physPct: pct(phys), cogPct: pct(cog), sensPct: pct(sens) };
