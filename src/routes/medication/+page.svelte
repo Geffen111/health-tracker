@@ -571,12 +571,12 @@
   .section-divider:first-child { border-top:none; }
   .section-empty { font-size:12.5px; color:var(--tm); padding:4px 18px 12px; }
 
-  .med-row { display:flex; flex-direction:column; gap:9px; padding:12px 18px; border-top:1px solid var(--border); }
+  .med-row { display:flex; flex-direction:column; gap:7px; padding:8px 18px; border-top:1px solid var(--border); }
   .med-row.dimmed { opacity:.6; }
   .med-top { display:flex; align-items:center; gap:10px; }
-  .med-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
+  .med-info { flex:1; min-width:0; display:flex; flex-direction:row; align-items:baseline; gap:9px; flex-wrap:wrap; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); display:inline-block; padding:3px 9px; border-radius:7px; }
-  .med-detail { font-size:11.5px; color:var(--tm); padding-left:1px; }
+  .med-detail { font-size:11.5px; color:var(--tm); }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
 
   .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-start; padding-left:19px; }
