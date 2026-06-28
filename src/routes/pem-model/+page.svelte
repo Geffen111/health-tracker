@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate, todayISO, shiftISO } from '$lib/formatDate';
+  import { formatDate, todayISO, shiftISO, fatigueBand } from '$lib/formatDate';
   import { computeDayLoad } from '$lib/load';
 
   let params = $state<any[]>([]);
@@ -56,6 +56,9 @@
 
   // The prediction driving today's risk (computed from yesterday's complete data).
   let todayPrediction = $derived(predictions.find((p: any) => p.log_date === loadDate));
+  // Band reflects the predicted fatigue score (Low 0–3 / Med 3.1–6 / High 6.1–10),
+  // matching the dashboard's headline number.
+  let fatBand = $derived(fatigueBand(todayPrediction?.predicted_next_day_fatigue));
 
   // Contribution bars use the raw activity load (recognisable, matches Activity).
   let loads = $derived({
@@ -117,17 +120,17 @@
       <div class="gauge">
         <svg viewBox="0 0 170 112" width="170" height="112">
           <path d="M18 96 A67 67 0 0 1 152 96" fill="none" stroke="var(--inset)" stroke-width="13" stroke-linecap="round"/>
-          <path d={riskArc(todayPrediction?.predicted_next_day_fatigue)} fill="none" stroke={todayPrediction?.risk_band === 'High' ? 'var(--red)' : todayPrediction?.risk_band === 'Medium' ? 'var(--amber)' : 'var(--accent)'} stroke-width="13" stroke-linecap="round"/>
+          <path d={riskArc(todayPrediction?.predicted_next_day_fatigue)} fill="none" stroke={fatBand === 'High' ? 'var(--red)' : fatBand === 'Medium' ? 'var(--amber)' : 'var(--accent)'} stroke-width="13" stroke-linecap="round"/>
         </svg>
         <div class="gauge-value">{todayPrediction?.predicted_next_day_fatigue?.toFixed(1) ?? '—'}</div>
         <div class="gauge-of">predicted · of 10</div>
       </div>
-      <span class="risk-badge" style="color:{bandColor(todayPrediction?.risk_band)};background:{bandBg(todayPrediction?.risk_band)};">
-        {todayPrediction?.risk_band ?? 'No data'} risk
+      <span class="risk-badge" style="color:{bandColor(fatBand)};background:{bandBg(fatBand)};">
+        {fatBand ?? 'No data'} risk
       </span>
       <div class="risk-desc">
-        {todayPrediction?.risk_band === 'High' ? 'High risk today — rest is essential.' :
-         todayPrediction?.risk_band === 'Medium' ? 'A manageable day. The main pressure is load; recovery debt is still under the crash line.' :
+        {fatBand === 'High' ? 'High risk today — rest is essential.' :
+         fatBand === 'Medium' ? 'A manageable day. The main pressure is load; recovery debt is still under the crash line.' :
          'Low risk today. Good to maintain your usual pacing.'}
       </div>
     </div>
@@ -226,13 +229,13 @@
   </div>
 
   <div class="pred-card">
-    <div class="card-heading" style="margin-bottom:12px;">Recent predictions</div>
+    <div class="card-heading" style="margin-bottom:12px;">Fatigue prediction</div>
     {#each predictions as pred}
+      {@const band = fatigueBand(pred.predicted_next_day_fatigue)}
       <div class="pred-row" class:crash={pred.crash_flag}>
         <span class="pred-date">{formatDate(pred.log_date)}</span>
-        <span class="pred-band" style="color:{bandColor(pred.risk_band)};background:{bandBg(pred.risk_band)};">{pred.risk_band}</span>
-        <span class="pred-risk">Risk: {pred.predicted_pem_risk?.toFixed(2)}</span>
-        <span class="pred-future">Next: {pred.predicted_next_day_fatigue?.toFixed(1)}</span>
+        <span class="pred-band" style="color:{bandColor(band)};background:{bandBg(band)};">{band ?? '—'}</span>
+        <span class="pred-risk">Fatigue: {pred.predicted_next_day_fatigue?.toFixed(1) ?? '—'}</span>
         {#if pred.crash_flag}
           <span class="crash-badge">⚠ Crash</span>
         {/if}
@@ -304,6 +307,5 @@
   .pred-date { font-size:13px; color:var(--ts); min-width:90px; }
   .pred-band { font-size:11px; padding:2px 8px; border-radius:4px; font-weight:600; }
   .pred-risk { font-size:14px; flex:1; color:var(--tp); }
-  .pred-future { font-size:13px; color:var(--ts); }
   .crash-badge { font-size:12px; color:var(--amber-fg); font-weight:700; }
 </style>

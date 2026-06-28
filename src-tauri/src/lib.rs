@@ -27,6 +27,7 @@ pub fn run() {
             commands::medications::update_schedule_item,
             commands::medications::delete_schedule_item,
             commands::medications::get_doses_for_date,
+            commands::medications::get_all_doses,
             commands::medications::upsert_dose,
             commands::medications::delete_dose,
             commands::medications::get_medication_history,

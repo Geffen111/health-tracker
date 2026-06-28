@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate, todayISO, shiftISO, formatDateLong } from '$lib/formatDate';
+  import { formatDate, todayISO, shiftISO, formatDateLong, weekdayIndex } from '$lib/formatDate';
   import { showToast } from '$lib/stores/toast.svelte';
   import { confirmAction } from '$lib/stores/confirm.svelte';
 
@@ -9,6 +9,7 @@
   let schedule = $state<any[]>([]);            // all schedule items, flat
   let history = $state<any[]>([]);
   let todayDoses = $state<any[]>([]);
+  let allDoses = $state<any[]>([]);   // every logged dose, for the history tree
   let loading = $state(true);
 
   // Supplements (stored on the daily log) — toggled here, above today's doses.
@@ -42,17 +43,19 @@
 
   async function loadAll() {
     try {
-      const [meds, sched, hist, doses, dlog] = await Promise.all([
+      const [meds, sched, hist, doses, dlog, all] = await Promise.all([
         invoke<any[]>('list_medications'),
         invoke<any[]>('get_medication_schedule', { medicationId: null }),
         invoke<any[]>('get_medication_history', { medicationId: null }),
         invoke<any[]>('get_doses_for_date', { date: selectedDate }),
         invoke<any>('get_daily_log', { date: selectedDate }),
+        invoke<any[]>('get_all_doses'),
       ]);
       medications = meds;
       schedule = sched;
       history = hist;
       todayDoses = doses;
+      allDoses = all;
       supplements.multivitamin = !!dlog?.multivitamin;
       supplements.vitamin_c = !!dlog?.vitamin_c;
     } catch (e) {
@@ -108,13 +111,19 @@
       },
     });
     openId = null;
-    todayDoses = await invoke('get_doses_for_date', { date: selectedDate });
+    [todayDoses, allDoses] = await Promise.all([
+      invoke<any[]>('get_doses_for_date', { date: selectedDate }),
+      invoke<any[]>('get_all_doses'),
+    ]);
     showToast('Dose logged');
   }
 
   async function deleteDose(medId: number, time: string) {
     await invoke('delete_dose', { medicationId: medId, logDate: selectedDate, timeTaken: time });
-    todayDoses = await invoke('get_doses_for_date', { date: selectedDate });
+    [todayDoses, allDoses] = await Promise.all([
+      invoke<any[]>('get_doses_for_date', { date: selectedDate }),
+      invoke<any[]>('get_all_doses'),
+    ]);
   }
 
   async function addMedication() {
@@ -215,6 +224,52 @@
     return MED_COLORS[medId % MED_COLORS.length];
   }
 
+  // ── Collapsible dose history: months → weeks → days, all collapsed by default ──
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+  function monthLabel(key: string): string {
+    const [y, m] = key.split('-').map(Number);
+    return `${MONTH_NAMES[m - 1]} ${y}`;
+  }
+  function getWeekStart(dateStr: string): string {
+    // Week starts on Monday (Mon→0 … Sun→6), matching the Work page.
+    const mondayOffset = (weekdayIndex(dateStr) + 6) % 7;
+    return shiftISO(dateStr, -mondayOffset);
+  }
+
+  // allDoses arrives newest-first (log_date DESC, time DESC); insertion order into
+  // the Maps preserves that, so months/weeks/days all read most-recent first.
+  let doseHistory = $derived.by(() => {
+    const months = new Map<string, Map<string, Map<string, any[]>>>();
+    for (const d of allDoses) {
+      const mKey = d.log_date.slice(0, 7);
+      const wKey = getWeekStart(d.log_date);
+      if (!months.has(mKey)) months.set(mKey, new Map());
+      const weeks = months.get(mKey)!;
+      if (!weeks.has(wKey)) weeks.set(wKey, new Map());
+      const days = weeks.get(wKey)!;
+      if (!days.has(d.log_date)) days.set(d.log_date, []);
+      days.get(d.log_date)!.push(d);
+    }
+    const countDoses = (days: Map<string, any[]>) =>
+      [...days.values()].reduce((t, ds) => t + ds.length, 0);
+    return [...months.entries()].map(([mKey, weeks]) => ({
+      key: mKey,
+      label: monthLabel(mKey),
+      count: [...weeks.values()].reduce((s, days) => s + countDoses(days), 0),
+      weeks: [...weeks.entries()].map(([wKey, days]) => ({
+        weekStart: wKey,
+        count: countDoses(days),
+        days: [...days.entries()].map(([date, doses]) => ({ date, doses })),
+      })),
+    }));
+  });
+
+  let openMonths = $state<Record<string, boolean>>({});
+  let openWeeks = $state<Record<string, boolean>>({});
+  let openDays = $state<Record<string, boolean>>({});
+  function toggleOpen(map: Record<string, boolean>, key: string) { map[key] = !map[key]; }
+
   let eventMeta: Record<string, { label: string; style: string }> = {
     started: { label: 'Started', style: 'color:var(--accent-fg);background:var(--accent-soft);' },
     ceased: { label: 'Ceased', style: 'color:var(--red-fg);background:var(--red-soft);' },
@@ -306,11 +361,10 @@
               <button class="dose-cancel" onclick={() => editId = null}>Cancel</button>
             </div>
           {:else}
-            <div class="med-row" class:dimmed={!med.active} style={med.active ? `background:var(${medColor(med.id)}-soft)` : ''}>
+            <div class="med-row" class:dimmed={!med.active}>
               <div class="med-top">
-                <span class="med-dot" style={med.active ? `background:var(${medColor(med.id)})` : 'background:var(--tm)'}></span>
                 <div class="med-info">
-                  <div class="med-name">{med.name}</div>
+                  <span class="med-name" style={med.active ? `background:var(${medColor(med.id)}-soft);` : ''}>{med.name}</span>
                   <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
                 </div>
                 {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
@@ -396,6 +450,49 @@
         {/if}
         <div class="doses-footer">{todayDoses.length} dose{todayDoses.length !== 1 ? 's' : ''} logged</div>
       </div>
+
+      <div class="dose-hist-card">
+        <div class="dose-hist-header">
+          <span class="card-heading">Dose history</span>
+        </div>
+        {#if doseHistory.length === 0}
+          <p class="empty-doses">No doses logged yet</p>
+        {:else}
+          {#each doseHistory as month}
+            <button class="tree-row month" class:open={openMonths[month.key]} onclick={() => toggleOpen(openMonths, month.key)}>
+              <svg class="tree-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+              <span class="tree-name">{month.label}</span>
+              <span class="tree-count">{month.count}</span>
+            </button>
+            {#if openMonths[month.key]}
+              {#each month.weeks as week}
+                <button class="tree-row week" class:open={openWeeks[week.weekStart]} onclick={() => toggleOpen(openWeeks, week.weekStart)}>
+                  <svg class="tree-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+                  <span class="tree-name">Week of {formatDate(week.weekStart)}</span>
+                  <span class="tree-count">{week.count}</span>
+                </button>
+                {#if openWeeks[week.weekStart]}
+                  {#each week.days as day}
+                    <button class="tree-row day" class:open={openDays[day.date]} onclick={() => toggleOpen(openDays, day.date)}>
+                      <svg class="tree-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+                      <span class="tree-name">{formatDateLong(day.date)}</span>
+                      <span class="tree-count">{day.doses.length}</span>
+                    </button>
+                    {#if openDays[day.date]}
+                      {#each day.doses as dose}
+                        <div class="tree-dose" style="background:var({medColor(dose.medication_id)}-soft);">
+                          <span class="dose-time">{dose.time_taken ?? '--:--'}</span>
+                          <span class="tree-dose-name">{getMedName(dose.medication_id)} <span class="dose-amount">{dose.dose_amount != null ? `${dose.dose_amount} ${getMedUnit(dose.medication_id)}` : ''}</span></span>
+                        </div>
+                      {/each}
+                    {/if}
+                  {/each}
+                {/if}
+              {/each}
+            {/if}
+          {/each}
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -477,10 +574,9 @@
   .med-row { display:flex; flex-direction:column; gap:9px; padding:12px 18px; border-top:1px solid var(--border); }
   .med-row.dimmed { opacity:.6; }
   .med-top { display:flex; align-items:center; gap:10px; }
-  .med-dot { width:9px;height:9px;border-radius:50%;flex-shrink:0; }
-  .med-info { flex:1; min-width:0; }
-  .med-name { font-size:13.5px; font-weight:600; color:var(--tp); }
-  .med-detail { font-size:11.5px; color:var(--tm); }
+  .med-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
+  .med-name { font-size:13.5px; font-weight:600; color:var(--tp); display:inline-block; padding:3px 9px; border-radius:7px; }
+  .med-detail { font-size:11.5px; color:var(--tm); padding-left:1px; }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
 
   .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-start; padding-left:19px; }
@@ -521,6 +617,21 @@
   .dose-amount { color:var(--tm); font-size:12px; }
   .dose-delete { width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:var(--tm);display:flex;align-items:center;justify-content:center;cursor:pointer; }
   .doses-footer { padding:12px 18px; border-top:1px solid var(--border); font-size:12px; color:var(--tm); }
+
+  .dose-hist-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
+  .dose-hist-header { padding:16px 18px 12px; }
+  .tree-row { display:flex; align-items:center; gap:8px; width:100%; background:transparent; border:none; border-top:1px solid var(--border); cursor:pointer; font-family:inherit; text-align:left; color:var(--tp); }
+  .tree-row:hover { background:var(--inset); }
+  .tree-chevron { flex-shrink:0; transition:transform .15s; color:var(--tm); }
+  .tree-row.open > .tree-chevron { transform:rotate(90deg); }
+  .tree-name { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tree-count { font-size:11px; font-weight:700; color:var(--tm); background:var(--inset); border-radius:999px; padding:2px 8px; font-variant-numeric:tabular-nums; flex-shrink:0; }
+  .tree-row.month { padding:12px 18px; font-size:13px; font-weight:700; }
+  .tree-row.week { padding:10px 18px 10px 30px; font-size:12px; font-weight:600; color:var(--ts); }
+  .tree-row.day { padding:9px 18px 9px 44px; font-size:12px; color:var(--ts); }
+  .tree-row.week .tree-count, .tree-row.day .tree-count { background:transparent; }
+  .tree-dose { display:flex; align-items:center; gap:11px; padding:9px 18px 9px 44px; border-top:1px solid var(--border); }
+  .tree-dose-name { flex:1; min-width:0; font-size:12.5px; color:var(--tp); }
 
   .history-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); margin-top:16px; display:flex; flex-direction:column; gap:4px; }
   .hist-row { display:flex; gap:14px; padding:12px 0; border-top:1px solid var(--border); align-items:flex-start; }

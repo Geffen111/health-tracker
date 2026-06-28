@@ -309,6 +309,20 @@ pub async fn get_doses_for_date(
     .map_err(|e| e.to_string())
 }
 
+/// Every logged dose, most recent first — feeds the collapsible month→week→day
+/// dose history on the Medication page.
+#[tauri::command]
+pub async fn get_all_doses(pool: State<'_, SqlitePool>) -> Result<Vec<MedicationDose>, String> {
+    sqlx::query_as::<_, MedicationDose>(
+        "SELECT md.* FROM medication_doses md
+         JOIN medications m ON md.medication_id = m.id
+         ORDER BY md.log_date DESC, md.time_taken DESC"
+    )
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn upsert_dose(
     pool: State<'_, SqlitePool>,

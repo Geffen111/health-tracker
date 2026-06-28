@@ -27,11 +27,35 @@
 
   onMount(async () => loadDate(selectedDate));
 
+  // A fresh day starts at 0 fatigue / 0 headache (not blank), and every other
+  // field clears — so navigating to a day with no entry never shows the previous
+  // day's values lingering.
+  function freshLog(date: string) {
+    return {
+      log_date: date,
+      fatigue_rating: 0,
+      fatigue_desc: '',
+      headache_rating: 0,
+      headache_desc: '',
+      headache_duration_hours: null,
+      other_symptoms: '',
+      my_sleep_rating: null,
+      phone_sleep_rating: null,
+      sleep_avg: null,
+      alcohol_std_drinks: null,
+      notes: '',
+    };
+  }
+
   async function loadDate(date: string) {
+    Object.assign(log, freshLog(date));
     try {
       const existing = await invoke('get_daily_log', { date });
       if (existing) Object.assign(log, existing);
     } catch {}
+    // Treat a missing rating as 0 (none) rather than blank.
+    if (log.fatigue_rating == null) log.fatigue_rating = 0;
+    if (log.headache_rating == null) log.headache_rating = 0;
     // Steps come from the previous day's row (yesterday's complete total).
     try {
       const p: any = await invoke('get_daily_log', { date: shiftISO(date, -1) });
@@ -124,23 +148,23 @@
         <input id="fatigue-desc" type="text" bind:value={log.fatigue_desc} placeholder="e.g. Heavy legs by mid-afternoon" />
       </div>
 
-      <div class="two-field-row">
-        <div class="slider-field">
-          <div class="slider-header">
-            <label for="headache">Headache</label>
-            <span class="slider-badge">{log.headache_rating ?? '—'} / 10</span>
-          </div>
-          <div class="slider-track">
-            <div class="slider-fill" style="width:{(log.headache_rating != null ? (log.headache_rating / 10) * 100 : 0)}%;background:var(--accent);"></div>
-            <input type="range" id="headache" min="0" max="10" step="0.5" bind:value={log.headache_rating} class="slider-input" />
-          </div>
+      <div class="slider-field">
+        <div class="slider-header">
+          <label for="headache">Headache</label>
+          <span class="slider-badge">{log.headache_rating ?? '—'} / 10</span>
         </div>
-        <div class="text-field">
-          <label for="headache-dur">Duration</label>
-          <div class="input-unit">
-            <input id="headache-dur" type="number" step="0.5" min="0" bind:value={log.headache_duration_hours} placeholder="0" />
-            <span class="unit-label">hrs</span>
-          </div>
+        <div class="slider-track">
+          <div class="slider-fill" style="width:{(log.headache_rating != null ? (log.headache_rating / 10) * 100 : 0)}%;background:var(--accent);"></div>
+          <input type="range" id="headache" min="0" max="10" step="0.5" bind:value={log.headache_rating} class="slider-input" />
+        </div>
+        <div class="slider-ends"><span>None</span><span>Severe</span></div>
+      </div>
+
+      <div class="text-field">
+        <label for="headache-dur">Headache duration</label>
+        <div class="input-unit">
+          <input id="headache-dur" type="number" step="0.5" min="0" bind:value={log.headache_duration_hours} placeholder="0" />
+          <span class="unit-label">hrs</span>
         </div>
       </div>
 
@@ -251,8 +275,6 @@
   .text-field label { font-size:13.5px; font-weight:600; color:var(--tp); }
   .label-hint { font-weight:500; color:var(--tm); font-size:11.5px; }
   .text-field input[type="text"] { width:100%; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:11px 13px; font-size:13.5px; color:var(--tp); }
-
-  .two-field-row { display:grid; grid-template-columns:1.5fr 1fr; gap:16px; }
 
   .input-unit { display:flex; align-items:center; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:4px 6px; }
   .input-unit input { width:100%; background:transparent; border:none; padding:7px; font-size:13.5px; color:var(--tp); font-variant-numeric:tabular-nums; }

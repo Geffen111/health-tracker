@@ -1,25 +1,28 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { formatDate, todayISO, shiftISO } from '$lib/formatDate';
+  import { formatDate, todayISO, shiftISO, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
 
   let summary = $state<any>(null);
   let todayLog = $state<any>(null);
   let predictions = $state<any[]>([]);
   let logs = $state<any[]>([]);
+  let bpHistory = $state<any[]>([]);
   let loading = $state(true);
   let rangeDays = $state(14);
   let metricA = $state<string | null>('fatigue');
   let metricB = $state<string | null>('steps');
 
   const METRICS: Record<string, { label: string; field: string; color: string; format: (v: number) => string }> = {
+    // Colours chosen for maximum separation — every pair must be tellable apart
+    // on the line chart (previously Fatigue/Sleep were both teal-green).
     fatigue: { label: 'Fatigue', field: 'fatigue_rating', color: 'var(--accent)', format: (v) => v.toFixed(1) },
-    sleep: { label: 'Sleep score', field: 'sleep_avg', color: 'var(--teal)', format: (v) => v.toFixed(1) },
-    steps: { label: 'Steps', field: 'steps', color: 'var(--peri)', format: (v) => Math.round(v).toLocaleString() },
-    restingHr: { label: 'Resting HR', field: 'ave_resting_hr', color: 'var(--amber)', format: (v) => v.toFixed(0) },
+    sleep: { label: 'Sleep score', field: 'sleep_avg', color: 'var(--sky)', format: (v) => v.toFixed(1) },
+    steps: { label: 'Steps', field: 'steps', color: 'var(--amber)', format: (v) => Math.round(v).toLocaleString() },
+    restingHr: { label: 'Resting HR', field: 'ave_resting_hr', color: 'var(--purple)', format: (v) => v.toFixed(0) },
     headache: { label: 'Headache', field: 'headache_rating', color: 'var(--red)', format: (v) => v.toFixed(1) },
-    pemRisk: { label: 'PEM Risk', field: 'predicted_pem_risk', color: 'var(--purple)', format: (v) => v.toFixed(1) },
+    pemRisk: { label: 'PEM Risk', field: 'predicted_pem_risk', color: 'var(--coral)', format: (v) => v.toFixed(1) },
   };
 
   onMount(async () => {
@@ -33,6 +36,7 @@
       todayLog = log;
       predictions = preds;
       logs = await invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 });
+      bpHistory = await invoke<any[]>('get_bp_history', { days: 7 });
     } catch (e) {
       console.error('Dashboard error:', e);
     } finally {
@@ -58,16 +62,25 @@
   let fatigue = $derived(todayLog?.fatigue_rating ?? null);
   let sleep = $derived(sleepScore(todayLog));
   let steps = $derived(yesterdayLog?.steps ?? null);
-  let restingHr = $derived(yesterdayLog?.ave_resting_hr ?? null);
+  // BP is taken sporadically; show yesterday's daily average (same morning-entry
+  // convention as steps), falling back to the most recent day with readings.
+  let yesterdayBp = $derived.by(() => {
+    const yday = shiftISO(todayISO(), -1);
+    return bpHistory.find((b: any) => b.log_date === yday)
+      ?? [...bpHistory].sort((a: any, b: any) => b.log_date.localeCompare(a.log_date))[0]
+      ?? null;
+  });
   // Today's crash risk is the PEM prediction computed from yesterday's load.
   let yesterdayPred = $derived(predictions?.find((p: any) => p.log_date === shiftISO(todayISO(), -1)) ?? null);
-  let riskBand = $derived(yesterdayPred?.risk_band ?? summary?.current_risk_band ?? null);
   let riskScore = $derived(yesterdayPred?.predicted_next_day_fatigue ?? null);
+  // Band reflects the predicted fatigue score (Low 0–3 / Med 3.1–6 / High 6.1–10).
+  let riskBand = $derived(fatigueBand(riskScore));
 
   function gaugeArc(score: number | null): { pct: number; color: string } {
     if (score == null) return { pct: 0, color: 'var(--inset)' };
     const pct = Math.min(100, (score / 10) * 100);
-    const color = score >= 4.5 ? 'var(--red)' : score >= 2 ? 'var(--amber)' : 'var(--accent)';
+    const band = fatigueBand(score);
+    const color = band === 'High' ? 'var(--red)' : band === 'Medium' ? 'var(--amber)' : 'var(--accent)';
     return { pct, color };
   }
 
@@ -229,8 +242,8 @@
           <div class="mini-value">{steps != null ? Number(steps).toLocaleString() : '—'}</div>
         </div>
         <div class="mini-inset">
-          <div class="mini-label">Resting HR</div>
-          <div class="mini-value">{restingHr ?? '—'}<span class="mini-unit"> bpm</span></div>
+          <div class="mini-label">BP · yday</div>
+          <div class="mini-value">{yesterdayBp?.avg_systolic != null ? `${Math.round(yesterdayBp.avg_systolic)}/${Math.round(yesterdayBp.avg_diastolic)}` : '—'}<span class="mini-unit"> mmHg</span></div>
         </div>
       </div>
     </div>

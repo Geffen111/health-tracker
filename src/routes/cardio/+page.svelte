@@ -210,7 +210,7 @@
         </div>
       {/each}
       <div class="bp-add">
-        <input bind:value={nTime} placeholder="HH:MM" class="bp-input sm" />
+        <input type="time" bind:value={nTime} class="bp-input time" />
         <input bind:value={nSys} placeholder="Sys" class="bp-input xs" />
         <span class="bp-slash">/</span>
         <input bind:value={nDia} placeholder="Dia" class="bp-input xs" />
@@ -346,7 +346,7 @@
 
   .bp-add { display:flex; align-items:center; gap:8px; padding:12px 14px; background:var(--inset); }
   .bp-input { background:var(--card); border:1px solid var(--border); border-radius:9px; padding:8px; font-size:12.5px; color:var(--tp); text-align:center; font-variant-numeric:tabular-nums; }
-  .bp-input.sm { width:64px; }
+  .bp-input.time { width:auto; }
   .bp-input.xs { width:56px; }
   .bp-slash { color:var(--tm); }
   .add-reading-btn { margin-left:auto; display:inline-flex; align-items:center; gap:6px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:8px 15px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
