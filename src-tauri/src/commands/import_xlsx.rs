@@ -215,6 +215,7 @@ async fn import_daily_row(pool: &SqlitePool, row: &[Data]) -> Result<(), String>
                 "INSERT INTO blood_pressure (log_date, reading_num, time_taken, systolic, diastolic)
                  VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT(log_date, reading_num) DO UPDATE SET
+                 time_taken=excluded.time_taken,
                  systolic=excluded.systolic, diastolic=excluded.diastolic"
             )
             .bind(&date_str).bind(reading_num).bind(&bp_time).bind(sys as i64).bind(dia as i64)
