@@ -92,6 +92,11 @@
     max: Math.max(rawLoad.phys, rawLoad.cog, rawLoad.sens, 0.01),
   });
 
+  // Only the snake_case params are read by the model. The spreadsheet import also
+  // inserts a parallel set under human-readable names ("Steps weight (Physical
+  // Load)" …) that nothing reads, so hide those — editing them does nothing.
+  let modelParams = $derived(params.filter((p: any) => /^[a-z][a-z0-9_]*$/.test(p.param_name)));
+
   // Format a number for display, or an em-dash when there's no prediction yet.
   function num(v: number | null | undefined, dp = 2): string {
     return v == null ? '—' : v.toFixed(dp);
@@ -207,13 +212,13 @@
       <div class="step">
         <div class="step-label">3 · Recovery debt</div>
         <div class="step-val">{num(todayPrediction?.recovery_debt)}</div>
-        <div class="step-desc">load held over crash line</div>
+        <div class="step-desc">carried over + today's load</div>
       </div>
       <span class="step-op">→</span>
       <div class="step result">
-        <div class="step-label">Predicted risk</div>
-        <div class="step-val">{todayPrediction?.predicted_pem_risk?.toFixed(1) ?? '—'}</div>
-        <div class="step-desc" style="color:var(--amber-fg);font-weight:600;">{todayPrediction?.risk_band ?? '—'} · pace gently</div>
+        <div class="step-label">Predicted fatigue</div>
+        <div class="step-val">{todayPrediction?.predicted_next_day_fatigue?.toFixed(1) ?? '—'}</div>
+        <div class="step-desc" style="color:var(--amber-fg);font-weight:600;">{fatBand ?? '—'} · from recovery debt</div>
       </div>
     </div>
     
@@ -227,7 +232,7 @@
         </span>
         <div>
           <div class="card-heading">Calibration parameters</div>
-          <div class="card-subtitle">33 values tuned to match the spreadsheet model · rarely changed</div>
+          <div class="card-subtitle">{modelParams.length} values tuning the load &amp; recovery-debt model · rarely changed</div>
         </div>
       </div>
       <span class="advanced-label">{showAdvanced ? 'Hide' : 'Show all 33'}</span>
@@ -235,7 +240,7 @@
     {#if showAdvanced}
       <div class="advanced-content">
         <div class="param-grid">
-          {#each params as param}
+          {#each modelParams as param}
             <div class="param-row">
               <span class="param-name">{param.param_name}</span>
               <input type="number" step="0.01" value={param.param_value}

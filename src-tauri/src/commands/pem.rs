@@ -157,28 +157,49 @@ async fn compute_and_store(pool: &SqlitePool, date: String) -> Result<(), String
 
     // ── 8. Load parameters ──
     let steps_normaliser = f("steps_normaliser", 2000.0);
-    let steps_weight = f("steps_weight", 0.4);
+    let steps_weight = f("steps_weight", 1.0);
+    let steps_load_cap = f("steps_load_cap", 4.0);
     let calories_normaliser = f("calories_normaliser", 500.0);
-    let calories_weight = f("calories_weight", 0.6);
+    let calories_weight = f("calories_weight", 0.0);
     let fatigue_sensitivity_divisor = f("fatigue_sensitivity_divisor", 9.0);
     let fatigue_load_penalty = f("fatigue_load_penalty", 0.2);
     let recovery_credit = f("recovery_credit", 0.14);
     let _active_while_fatigued_penalty = f("active_while_fatigued_penalty", 0.2);
     // Actually the spreadsheet uses high_energy_fatigued_multiplier (0.1)
     let high_energy_multiplier = f("high_energy_fatigued_multiplier", 0.1);
+    let debt_persistence = f("debt_persistence", 0.55);
     let crash_threshold = f("crash_threshold", 4.0);
     let threshold_exponent = f("threshold_exponent", 1.3);
     let risk_divisor = f("risk_divisor", 2.5);
     let sleep_weight = f("sleep_weight", 0.2);
     let sleep_baseline = f("sleep_baseline", 8.0);
-    let low_cutoff = f("low_risk_band_cutoff", 2.0);
-    let med_cutoff = f("medium_risk_band_cutoff", 4.5);
-    let fatigue_map_slope = f("fatigue_map_slope", 0.6980);
-    let fatigue_map_intercept = f("fatigue_map_intercept", 4.4608);
-    let prediction_range = f("prediction_range", 1.70);
+    // Next-day fatigue is now an OLS fit on recovery debt (the best CV predictor),
+    // not the old composite-risk mapping.
+    let fatigue_from_debt_intercept = f("fatigue_from_debt_intercept", 3.5696);
+    let fatigue_from_debt_slope = f("fatigue_from_debt_slope", 0.5316);
+    let prediction_range = f("prediction_range", 1.60);
 
-    // ── 9. Physical Load (G) ──
-    let step_load = (steps / steps_normaliser).min(2.0);
+    // ── 8b. Previous day's recovery debt (for carryover) ──
+    // PEM is cumulative: debt persists and decays rather than resetting daily.
+    // Use the most recent earlier prediction, decayed by one persistence factor per
+    // elapsed day (so gaps in the history decay the carried debt appropriately).
+    let prev_debt: Option<(String, Option<f64>)> = sqlx::query_as(
+        "SELECT log_date, recovery_debt FROM pem_predictions WHERE log_date < ? ORDER BY log_date DESC LIMIT 1"
+    )
+    .bind(&date)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let carried_debt = match prev_debt {
+        Some((prev_date, Some(d))) => {
+            let gap = (date_to_excel_serial(&date) - date_to_excel_serial(&prev_date)).max(1.0);
+            d * debt_persistence.powf(gap)
+        }
+        _ => 0.0,
+    };
+
+    // ── 9. Physical Load (G) — steps only (calories collinear, weight 0) ──
+    let step_load = (steps / steps_normaliser).min(steps_load_cap);
     let cal_load = (calories / calories_normaliser).min(2.0);
     let physical_base = step_load * steps_weight + cal_load * calories_weight;
 
@@ -221,7 +242,7 @@ async fn compute_and_store(pool: &SqlitePool, date: String) -> Result<(), String
     } else {
         0.0
     };
-    let recovery_debt = (three_day_weighted + fatigue_penalty - recovery_credit_amount + active_penalty).max(0.0);
+    let recovery_debt = (carried_debt + three_day_weighted + fatigue_penalty - recovery_credit_amount + active_penalty).max(0.0);
 
     // ── 15. Threshold Penalty (M) = IF(L > CrashThreshold, (L - CrashThreshold)^ThresholdExponent, 0) ──
     let threshold_penalty = if recovery_debt > crash_threshold {
@@ -245,20 +266,22 @@ async fn compute_and_store(pool: &SqlitePool, date: String) -> Result<(), String
         / risk_divisor;
     let predicted_pem_risk = risk.min(10.0);
 
-    // ── 18. Risk Band (P) ──
-    let risk_band = if predicted_pem_risk >= med_cutoff {
+    // ── 18. Predicted next-day fatigue (OLS on recovery debt) ──
+    let predicted_next_day =
+        (fatigue_from_debt_intercept + fatigue_from_debt_slope * recovery_debt).max(1.0).min(10.0);
+
+    // ── 19. Risk Band — derived from the predicted fatigue so the stored band,
+    // the dashboard and the PEM gauge all agree (Low ≤3, Medium ≤6, High >6) ──
+    let risk_band = if predicted_next_day > 6.0 {
         "High"
-    } else if predicted_pem_risk >= low_cutoff {
+    } else if predicted_next_day > 3.0 {
         "Medium"
     } else {
         "Low"
     };
 
-    // ── 19. Crash Flag (Q) = IF(M > 0, "Threshold crossed", "") ──
+    // ── 20. Crash Flag = sustained debt past the crash threshold ──
     let crash_flag = threshold_penalty > 0.0;
-
-    // ── 20. Predicted next-day fatigue ──
-    let predicted_next_day = (fatigue_map_slope * predicted_pem_risk + fatigue_map_intercept).max(1.0).min(10.0);
 
     // ── 21. Confidence range ──
     let predicted_low = (predicted_next_day - prediction_range).max(0.0);

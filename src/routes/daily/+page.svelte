@@ -22,6 +22,7 @@
   // Steps are a full-day synced metric — today's count is incomplete until the
   // day is over, so the daily log shows (and edits) YESTERDAY's complete total.
   let prevSteps = $state<number | null>(null);
+  let prevCalories = $state<number | null>(null);
   let stepsDate = $derived(shiftISO(selectedDate, -1));
   let saved = $state(false);
 
@@ -60,7 +61,8 @@
     try {
       const p: any = await invoke('get_daily_log', { date: shiftISO(date, -1) });
       prevSteps = p?.steps ?? null;
-    } catch { prevSteps = null; }
+      prevCalories = p?.activity_calories ?? null;
+    } catch { prevSteps = null; prevCalories = null; }
   }
 
   async function save() {
@@ -70,8 +72,8 @@
     const m = log.my_sleep_rating, p = log.phone_sleep_rating;
     log.sleep_avg = (m != null && p != null) ? (m + p) / 2 : (m ?? p ?? null);
     await invoke('upsert_daily_log', { log });
-    // Steps belong to the previous day's row.
-    await invoke('upsert_daily_log', { log: { log_date: stepsDate, steps: prevSteps } });
+    // Steps & active calories are full-day metrics → the previous day's row.
+    await invoke('upsert_daily_log', { log: { log_date: stepsDate, steps: prevSteps, activity_calories: prevCalories } });
     saved = true;
     setTimeout(() => saved = false, 2000);
   }
@@ -216,6 +218,14 @@
         <div class="input-unit">
           <input id="steps" type="number" min="0" bind:value={prevSteps} placeholder="0" />
           <span class="unit-label">steps</span>
+        </div>
+      </div>
+
+      <div class="text-field">
+        <label for="calories">Active calories <span class="label-hint">· yesterday {formatDate(stepsDate)}</span></label>
+        <div class="input-unit">
+          <input id="calories" type="number" min="0" step="1" bind:value={prevCalories} placeholder="0" />
+          <span class="unit-label">kcal</span>
         </div>
       </div>
 
