@@ -36,6 +36,10 @@
   let histEditId = $state<number | null>(null);
   let histEdit = $state({ event_date: '', detail: '' });
 
+  // Per-row actions (edit / pause / delete) live in a 3-dot menu so each med fits
+  // on a single condensed row. Only one menu is open at a time.
+  let openMenuId = $state<number | null>(null);
+
   onMount(async () => {
     await loadAll();
     loading = false;
@@ -338,6 +342,9 @@
 {#if loading}
   <p class="loading-text">Loading...</p>
 {:else}
+  {#if openMenuId !== null}
+    <button class="menu-backdrop" onclick={() => openMenuId = null} aria-label="Close menu" tabindex="-1"></button>
+  {/if}
   <div class="med-layout">
     <div class="med-list-card">
       {#each [{ label: 'Regular', meds: regularMeds }, { label: 'Occasional', meds: occasionalMeds }, { label: 'Ceased', meds: ceasedMeds }] as section}
@@ -362,26 +369,11 @@
             </div>
           {:else}
             <div class="med-row" class:dimmed={!med.active}>
-              <div class="med-top">
-                <div class="med-info">
-                  <span class="med-name" style={med.active ? `background:var(${medColor(med.id)}-soft);` : ''}>{med.name}</span>
-                  <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
-                </div>
-                {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
-                <button class="icon-btn" onclick={() => startEdit(med)} aria-label="Edit">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-                </button>
-                <button class="icon-btn" onclick={() => toggleActive(med)} aria-label={med.active ? 'Cease' : 'Restart'} title={med.active ? 'Cease' : 'Restart'}>
-                  {#if med.active}
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
-                  {:else}
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8Z"/></svg>
-                  {/if}
-                </button>
-                <button class="icon-btn danger" onclick={() => removeMed(med)} aria-label="Delete">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
-                </button>
+              <div class="med-info">
+                <span class="med-name" style={med.active ? `background:var(${medColor(med.id)}-soft);` : ''}>{med.name}</span>
+                <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
               </div>
+              {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
               {#if med.active}
                 <div class="dose-buttons">
                   {#each slotsFor(med.id) as slot}
@@ -395,6 +387,32 @@
                   </button>
                 </div>
               {/if}
+              <div class="med-menu">
+                <button class="icon-btn menu-trigger" onclick={() => openMenuId = openMenuId === med.id ? null : med.id} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === med.id}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
+                </button>
+                {#if openMenuId === med.id}
+                  <div class="menu-pop" role="menu">
+                    <button class="menu-item" role="menuitem" onclick={() => { startEdit(med); openMenuId = null; }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                      Edit
+                    </button>
+                    <button class="menu-item" role="menuitem" onclick={() => { toggleActive(med); openMenuId = null; }}>
+                      {#if med.active}
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                        Cease
+                      {:else}
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8Z"/></svg>
+                        Restart
+                      {/if}
+                    </button>
+                    <button class="menu-item danger" role="menuitem" onclick={() => { removeMed(med); openMenuId = null; }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+                      Delete
+                    </button>
+                  </div>
+                {/if}
+              </div>
             </div>
             {#if openId === med.id}
               <div class="dose-inline">
@@ -571,15 +589,23 @@
   .section-divider:first-child { border-top:none; }
   .section-empty { font-size:12.5px; color:var(--tm); padding:4px 18px 12px; }
 
-  .med-row { display:flex; flex-direction:column; gap:7px; padding:8px 18px; border-top:1px solid var(--border); }
+  .med-row { display:flex; align-items:center; gap:10px; padding:9px 18px; border-top:1px solid var(--border); }
   .med-row.dimmed { opacity:.6; }
-  .med-top { display:flex; align-items:center; gap:10px; }
   .med-info { flex:1; min-width:0; display:flex; flex-direction:row; align-items:baseline; gap:9px; flex-wrap:wrap; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); display:inline-block; padding:3px 9px; border-radius:7px; }
   .med-detail { font-size:11.5px; color:var(--tm); }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
 
-  .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-start; padding-left:19px; }
+  .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; flex-shrink:1; min-width:0; }
+
+  /* 3-dot per-row actions menu */
+  .med-menu { position:relative; flex-shrink:0; }
+  .menu-trigger { width:30px; }
+  .menu-backdrop { position:fixed; inset:0; z-index:40; background:transparent; border:none; cursor:default; padding:0; }
+  .menu-pop { position:absolute; top:34px; right:0; z-index:50; min-width:148px; background:var(--card); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.14); padding:5px; display:flex; flex-direction:column; gap:1px; }
+  .menu-item { display:flex; align-items:center; gap:10px; width:100%; background:transparent; border:none; border-radius:8px; padding:9px 11px; font-size:13px; font-weight:600; color:var(--tp); cursor:pointer; font-family:inherit; text-align:left; }
+  .menu-item:hover { background:var(--inset); }
+  .menu-item.danger { color:var(--red-fg); }
   .slot-btn { background:var(--accent-soft); color:var(--accent-fg); border:1px solid var(--border); border-radius:999px; padding:6px 11px; font-size:11.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
   .add-dose-btn { display:inline-flex;align-items:center;gap:4px;background:var(--inset);color:var(--ts);border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap; }
   .icon-btn { width:28px;height:28px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0; }
