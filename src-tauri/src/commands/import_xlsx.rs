@@ -63,6 +63,14 @@ pub async fn import_spreadsheet(
     }
 
     // ── Sheet 3: Calibration ──
+    // The PEM model (commands/pem.rs) reads ONLY canonical snake_case params
+    // (steps_weight, fatigue_from_debt_slope, debt_persistence, ...). Those params are
+    // seeded and tuned by migrations and edited in-app, so the DB — not the spreadsheet —
+    // is their source of truth. The Calibration sheet still uses the old human-readable
+    // names ("Steps weight (Physical Load)", "Fatigue-map slope", ...) whose values have
+    // since diverged from the CV-fitted canonical values. So we UPDATE existing params by
+    // name only and never INSERT: a spreadsheet row that doesn't match an existing param
+    // is skipped rather than added as a dead, never-read duplicate.
     if let Ok(range) = workbook.worksheet_range("Calibration") {
         for raw_row in range.rows() {
             let row: Vec<calamine::Data> = raw_row.to_vec();
@@ -77,15 +85,16 @@ pub async fn import_spreadsheet(
                 continue;
             }
             if let Some(val) = row[1].get_float() {
-                let desc = row.get(2)
-                    .map(|c| match c { Data::String(s) => s.clone(), _ => c.to_string() })
-                    .unwrap_or_default();
-                let _ = sqlx::query(
-                    "INSERT OR REPLACE INTO pem_calibration (param_name, param_value, description) VALUES (?, ?, ?)"
+                let result = sqlx::query(
+                    "UPDATE pem_calibration SET param_value = ? WHERE param_name = ?"
                 )
-                .bind(&param_name).bind(val).bind(&desc)
+                .bind(val).bind(&param_name)
                 .execute(&*pool).await;
-                total_calibration += 1;
+                // Only count rows that matched an existing canonical param; unknown
+                // (e.g. legacy Title-Case) names affect zero rows and are skipped.
+                if matches!(result, Ok(r) if r.rows_affected() > 0) {
+                    total_calibration += 1;
+                }
             }
         }
     }
