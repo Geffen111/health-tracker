@@ -98,20 +98,28 @@
     return 'var(--accent-soft)';
   }
 
+  // The visible track is a 180° semicircle (left point → right point), so the fill
+  // must use the same π→2π half-circle. The old 0.75π→2.25π (270°) geometry drew a
+  // floating arc that didn't sit on the track.
   let gaugeArcPath = $derived.by(() => {
     if (riskScore == null) return '';
-    const r = 54, cx = 70, cy = 78;
-    const startAngle = Math.PI * 0.75;
-    const endAngle = Math.PI * 2.25;
-    const pct = Math.min(1, riskScore / 10);
+    const r = 68, cx = 85, cy = 88;
+    const startAngle = Math.PI;
+    const endAngle = Math.PI * 2;
+    const pct = Math.min(1, Math.max(0, riskScore / 10));
     const angle = startAngle + pct * (endAngle - startAngle);
     const sx = cx + r * Math.cos(startAngle);
     const sy = cy + r * Math.sin(startAngle);
     const ex = cx + r * Math.cos(angle);
     const ey = cy + r * Math.sin(angle);
-    const large = pct > 0.5 ? 1 : 0;
-    return `M${sx} ${sy} A${r} ${r} 0 ${large} 1 ${ex} ${ey}`;
+    return `M${sx} ${sy} A${r} ${r} 0 0 1 ${ex} ${ey}`;
   });
+
+  function num(v: number | null | undefined, dp = 1): string {
+    return v == null ? '—' : v.toFixed(dp);
+  }
+  let recoveryDebt = $derived(yesterdayPred?.recovery_debt ?? null);
+  let crashFlag = $derived(!!yesterdayPred?.crash_flag);
 
   let todayStr = $derived(formatDate(todayISO()));
 
@@ -197,14 +205,14 @@
   <div class="top-row">
     <div class="risk-card">
       <div class="risk-gauge">
-        <svg viewBox="0 0 140 92" width="140" height="92">
-          <path d="M16 78 A54 54 0 0 1 124 78" fill="none" stroke="var(--inset)" stroke-width="11" stroke-linecap="round"/>
+        <svg viewBox="0 0 170 104" width="170" height="104">
+          <path d="M17 88 A68 68 0 0 1 153 88" fill="none" stroke="var(--inset)" stroke-width="14" stroke-linecap="round"/>
           {#if gaugeArcPath}
-            <path d={gaugeArcPath} fill="none" stroke={gauge.color} stroke-width="11" stroke-linecap="round"/>
+            <path d={gaugeArcPath} fill="none" stroke={gauge.color} stroke-width="14" stroke-linecap="round"/>
           {/if}
         </svg>
         <div class="gauge-value">{riskScore != null ? riskScore.toFixed(1) : '—'}</div>
-        <div class="gauge-of">of 10</div>
+        <div class="gauge-of">predicted · of 10</div>
       </div>
       <div class="risk-info">
         <div class="risk-header">
@@ -214,13 +222,23 @@
           </span>
         </div>
         <div class="risk-desc">{bandLabel(riskBand)}</div>
-        <div class="risk-tags">
-          {#if fatigue != null}
-            <span class="risk-tag">↑ Fatigue {fatigue}/10</span>
-          {/if}
-          {#if sleep != null && sleep < 7}
-            <span class="risk-tag">↓ Sleep {sleep.toFixed(1)}/10</span>
-          {/if}
+        <div class="risk-stats">
+          <div class="rs-tile">
+            <div class="rs-label">Recovery debt</div>
+            <div class="rs-val">{num(recoveryDebt, 1)}<span class="rs-sub"> / 4.0</span></div>
+          </div>
+          <div class="rs-tile">
+            <div class="rs-label">Crash flag</div>
+            <div class="rs-val" style="color:{crashFlag ? 'var(--amber-fg)' : 'var(--accent-fg)'};">{crashFlag ? '⚠ Active' : 'None'}</div>
+          </div>
+          <div class="rs-tile">
+            <div class="rs-label">Today's fatigue</div>
+            <div class="rs-val">{fatigue != null ? fatigue.toFixed(1) : '—'}<span class="rs-sub"> /10</span></div>
+          </div>
+          <div class="rs-tile">
+            <div class="rs-label">Sleep</div>
+            <div class="rs-val">{sleep != null ? sleep.toFixed(1) : '—'}<span class="rs-sub"> /10</span></div>
+          </div>
         </div>
       </div>
     </div>
@@ -392,26 +410,26 @@
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 18px;
-    padding: 18px;
+    padding: 22px 24px;
     box-shadow: var(--shadow-lg);
     display: flex;
-    gap: 18px;
+    gap: 26px;
     align-items: center;
   }
   .risk-gauge {
     flex-shrink: 0;
-    width: 140px;
-    height: 92px;
+    width: 170px;
+    height: 104px;
     position: relative;
   }
   .gauge-value {
     position: absolute;
     left: 0;
     right: 0;
-    top: 40px;
+    top: 44px;
     text-align: center;
     font-family: 'Source Serif 4', serif;
-    font-size: 34px;
+    font-size: 44px;
     font-weight: 600;
     color: var(--tp);
     letter-spacing: -0.02em;
@@ -420,9 +438,9 @@
     position: absolute;
     left: 0;
     right: 0;
-    top: 80px;
+    top: 96px;
     text-align: center;
-    font-size: 10px;
+    font-size: 10.5px;
     color: var(--tm);
     font-weight: 600;
   }
@@ -430,7 +448,8 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 11px;
+    min-width: 0;
   }
   .risk-header {
     display: flex;
@@ -451,23 +470,41 @@
     border-radius: 999px;
   }
   .risk-desc {
-    font-size: 13.5px;
+    font-size: 14.5px;
     color: var(--ts);
     line-height: 1.45;
   }
-  .risk-tags {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 2px;
+  .risk-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-top: 4px;
   }
-  .risk-tag {
-    font-size: 11.5px;
-    color: var(--ts);
+  .rs-tile {
     background: var(--inset);
-    border: 1px solid var(--border);
-    padding: 4px 9px;
-    border-radius: 999px;
+    border-radius: 12px;
+    padding: 10px 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .rs-label {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 800;
+    color: var(--ts);
+  }
+  .rs-val {
+    font-family: 'Source Serif 4', serif;
+    font-size: 21px;
+    font-weight: 600;
+    color: var(--tp);
+  }
+  .rs-sub {
+    font-size: 12px;
+    color: var(--tm);
+    font-family: 'Public Sans', sans-serif;
   }
 
   .mini-card-group {
