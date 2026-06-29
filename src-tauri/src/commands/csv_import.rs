@@ -159,6 +159,12 @@ pub async fn import_health_csv(
         }
     }
 
+    // A 0.0 active-calorie total means Health Sync exported the day with no real
+    // data (the source app wasn't recording active energy). Drop those so we don't
+    // write a misleading zero — or, via the import's COALESCE, clobber a value that
+    // came from another source — for a day that simply has no calorie reading.
+    energy.retain(|_, c| *c > 0.0);
+
     // ── Merge into per-day aggregates ──
     let mut days: HashMap<String, DayAgg> = HashMap::new();
     let steps_days = steps.len() as i64;
