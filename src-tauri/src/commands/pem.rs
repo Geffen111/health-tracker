@@ -95,8 +95,9 @@ pub async fn get_pem_predictions(
     .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<PemPrediction, String> {
+/// Recompute and persist a single date's PEM prediction.
+/// Shared by `run_pem_model` (one date) and `backfill_pem_predictions` (all dates).
+async fn compute_and_store(pool: &SqlitePool, date: String) -> Result<(), String> {
     // ── 1. Fetch daily log ──
     let log: Option<PemDailyLog> = sqlx::query_as(
         "SELECT fatigue_rating, \
@@ -106,7 +107,7 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
          FROM daily_logs WHERE log_date = ?"
     )
     .bind(&date)
-    .fetch_optional(&*pool)
+    .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -116,7 +117,7 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
     let params: Vec<PemCalibration> = sqlx::query_as(
         "SELECT * FROM pem_calibration"
     )
-    .fetch_all(&*pool)
+    .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -131,7 +132,7 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
          WHERE al.log_date = ?"
     )
     .bind(&date)
-    .fetch_all(&*pool)
+    .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -142,7 +143,7 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
     let (activity_physical, activity_cognitive, activity_sensory_social) = compute_activity_loads(&activities, &f);
 
     // ── 6. Determine if we're past the ActivityLog start date ──
-    let al_start_date = f("activity_log_start_date", 46150.0);
+    let al_start_date = f("activity_log_start_date", 46151.0);
     let date_serial = date_to_excel_serial(&date);
     let use_activity_log = date_serial >= al_start_date;
 
@@ -172,9 +173,9 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
     let sleep_baseline = f("sleep_baseline", 8.0);
     let low_cutoff = f("low_risk_band_cutoff", 2.0);
     let med_cutoff = f("medium_risk_band_cutoff", 4.5);
-    let fatigue_map_slope = f("fatigue_map_slope", 0.466);
-    let fatigue_map_intercept = f("fatigue_map_intercept", 4.004);
-    let prediction_range = f("prediction_range", 1.6);
+    let fatigue_map_slope = f("fatigue_map_slope", 0.6980);
+    let fatigue_map_intercept = f("fatigue_map_intercept", 4.4608);
+    let prediction_range = f("prediction_range", 1.70);
 
     // ── 9. Physical Load (G) ──
     let step_load = (steps / steps_normaliser).min(2.0);
@@ -286,11 +287,17 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
     .bind(three_day_weighted).bind(recovery_debt).bind(threshold_penalty)
     .bind(predicted_pem_risk).bind(&risk_band).bind(crash_flag)
     .bind(predicted_next_day).bind(predicted_low).bind(predicted_high)
-    .execute(&*pool)
+    .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
 
-    // ── 23. Return the saved prediction ──
+    Ok(())
+}
+
+/// Recompute one date's prediction and return it.
+#[tauri::command]
+pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<PemPrediction, String> {
+    compute_and_store(&pool, date.clone()).await?;
     sqlx::query_as::<_, PemPrediction>(
         "SELECT * FROM pem_predictions WHERE log_date = ?"
     )
@@ -298,6 +305,39 @@ pub async fn run_pem_model(pool: State<'_, SqlitePool>, date: String) -> Result<
     .fetch_one(&*pool)
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Recompute predictions for every logged date in the activity-tracking era so the
+/// history reflects real day-to-day variation (the per-page run only ever computes
+/// yesterday). Dates before `activity_log_start_date` are skipped: without activity
+/// data the model is barely better than guessing (R^2 ~0.02), so those predictions
+/// would only add noise to the history. Returns the number of dates recomputed.
+#[tauri::command]
+pub async fn backfill_pem_predictions(pool: State<'_, SqlitePool>) -> Result<i64, String> {
+    let start: Option<f64> = sqlx::query_scalar(
+        "SELECT param_value FROM pem_calibration WHERE param_name = 'activity_log_start_date'"
+    )
+    .fetch_optional(&*pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    let start = start.unwrap_or(46151.0);
+
+    let dates: Vec<(String,)> = sqlx::query_as(
+        "SELECT log_date FROM daily_logs WHERE fatigue_rating IS NOT NULL ORDER BY log_date"
+    )
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut count = 0i64;
+    for (date,) in dates {
+        if date_to_excel_serial(&date) < start {
+            continue;
+        }
+        compute_and_store(&pool, date).await?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 // ── Helper functions ──

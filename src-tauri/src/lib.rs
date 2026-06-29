@@ -52,6 +52,7 @@ pub fn run() {
             commands::pem::update_calibration_param,
             commands::pem::get_pem_predictions,
             commands::pem::run_pem_model,
+            commands::pem::backfill_pem_predictions,
             commands::dashboard::get_dashboard_summary,
             commands::import_xlsx::import_spreadsheet,
             commands::export::export_csv,

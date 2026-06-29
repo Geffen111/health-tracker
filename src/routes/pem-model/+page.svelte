@@ -22,8 +22,13 @@
     try {
       params = await invoke('get_calibration_params');
       predictions = await invoke('get_pem_predictions', { limit: 14 });
-      // Make sure yesterday's prediction exists so the breakdown isn't blank.
-      if (!predictions.find((p: any) => p.log_date === loadDate)) {
+      // The per-page run only ever computes yesterday, so early on the history is
+      // nearly empty and every row looks identical. Backfill once when it's sparse
+      // so the list reflects real day-to-day variation; otherwise just ensure
+      // yesterday exists so the breakdown isn't blank.
+      if (predictions.length < 7) {
+        await backfill();
+      } else if (!predictions.find((p: any) => p.log_date === loadDate)) {
         await runModel();
       }
       // Raw activity load for the contribution bars (matches the Activity page).
@@ -49,6 +54,16 @@
     }
   }
 
+  // Recompute predictions for every logged day (not just yesterday).
+  async function backfill() {
+    try {
+      await invoke('backfill_pem_predictions');
+      predictions = await invoke('get_pem_predictions', { limit: 14 });
+    } catch (e) {
+      console.error('Backfill error:', e);
+    }
+  }
+
   async function updateParam(name: string, value: number) {
     await invoke('update_calibration_param', { paramName: name, paramValue: value });
     params = params.map((p: any) => p.param_name === name ? { ...p, param_value: value } : p);
@@ -59,6 +74,14 @@
   // Band reflects the predicted fatigue score (Low 0–3 / Med 3.1–6 / High 6.1–10),
   // matching the dashboard's headline number.
   let fatBand = $derived(fatigueBand(todayPrediction?.predicted_next_day_fatigue));
+
+  // The model's own scaled load (steps/sleep blended in, each component ÷3) — this
+  // is the real input to the weighted-load step, NOT the raw activity total above.
+  let modelLoad = $derived(
+    (todayPrediction?.physical_load ?? 0)
+    + (todayPrediction?.cognitive_load ?? 0)
+    + (todayPrediction?.sensory_social_load ?? 0)
+  );
 
   // Contribution bars use the raw activity load (recognisable, matches Activity).
   let loads = $derived({
@@ -108,6 +131,7 @@
     <div class="page-subtitle">Today's crash risk, driven by yesterday's load · {formatDate(loadDate)}</div>
   </div>
   <div class="header-actions">
+    <button class="ghost-btn" onclick={backfill}>Backfill history</button>
     <button class="run-btn" onclick={runModel}>Recalculate</button>
   </div>
 </div>
@@ -169,15 +193,15 @@
     <div class="card-subtitle" style="margin-bottom:18px;">Each step in plain terms — no need to read the formulas.</div>
     <div class="step-row">
       <div class="step">
-        <div class="step-label">1 · Total load</div>
-        <div class="step-val">{num(loads.total, 1)}</div>
-        <div class="step-desc">physical + cognitive + sensory</div>
+        <div class="step-label">1 · Scaled load</div>
+        <div class="step-val">{num(modelLoad)}</div>
+        <div class="step-desc">activity + steps/sleep, scaled</div>
       </div>
       <span class="step-op">→</span>
       <div class="step">
         <div class="step-label">2 · Weighted load</div>
         <div class="step-val">{num(todayPrediction?.three_day_weighted_load)}</div>
-        <div class="step-desc">scaled for the model</div>
+        <div class="step-desc">scaled load × 0.55</div>
       </div>
       <span class="step-op">→</span>
       <div class="step">
@@ -250,6 +274,7 @@
   .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
   .header-actions { display:flex; align-items:center; gap:10px; }
   .run-btn { display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#fff;border:none;border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer; }
+  .ghost-btn { display:inline-flex;align-items:center;gap:7px;background:transparent;color:var(--accent-fg);border:1px solid var(--border);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer; }
   .loading-text { color:var(--ts); text-align:center; padding:32px; }
 
   .hero-row { display:grid; grid-template-columns:1fr 1.6fr; gap:16px; margin-bottom:16px; }
