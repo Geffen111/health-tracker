@@ -418,6 +418,7 @@
     <div class="card-heading" style="margin-bottom:12px;">Fatigue prediction</div>
     <div class="pred-row head">
       <span class="pred-date">Day</span>
+      <span class="pred-crash"></span>
       <span class="pred-band">Band</span>
       <span class="pred-risk">Predicted</span>
       <span class="pred-actual">Actual</span>
@@ -427,12 +428,10 @@
       {@const actual = actualNextDay(pred.log_date)}
       <div class="pred-row" class:crash={pred.crash_flag}>
         <span class="pred-date">{formatDate(pred.log_date)}</span>
+        <span class="pred-crash">{#if pred.crash_flag}<span class="crash-badge">⚠ Crash</span>{/if}</span>
         <span class="pred-band" style="color:{bandColor(band)};background:{bandBg(band)};">{band ?? '—'}</span>
         <span class="pred-risk"><strong>{pred.predicted_next_day_fatigue?.toFixed(1) ?? '—'}</strong></span>
         <span class="pred-actual"><strong>{actual?.toFixed(1) ?? '—'}</strong></span>
-        {#if pred.crash_flag}
-          <span class="crash-badge">⚠ Crash</span>
-        {/if}
       </div>
     {/each}
   </div>
@@ -502,6 +501,7 @@
   .pred-row.head { padding:4px 14px; margin-bottom:2px; }
   .pred-row.head span { font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--tm); }
   .pred-date { font-size:13px; color:var(--ts); min-width:90px; flex:1; }
+  .pred-crash { width:78px; flex-shrink:0; text-align:right; display:flex; justify-content:flex-end; align-items:center; }
   .pred-band { font-size:11px; padding:2px 8px; border-radius:4px; font-weight:600; min-width:62px; text-align:center; }
   .pred-row.head .pred-band { padding:0; background:transparent !important; text-align:left; }
   .pred-risk { font-size:14px; color:var(--tp); width:84px; text-align:right; }

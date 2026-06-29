@@ -73,6 +73,10 @@ pub async fn update_medication(
     active: Option<bool>,
     default_time: Option<String>,
     med_type: Option<String>,
+    // An omitted `default_dose` means "leave unchanged" (so callers like the
+    // cease/restart toggle don't wipe it). To actually clear a saved dose, the
+    // edit form sends `clear_dose: true`.
+    clear_dose: Option<bool>,
 ) -> Result<Option<String>, String> {
     // Snapshot the current state so we can detect notable changes.
     let before = sqlx::query_as::<_, Medication>("SELECT * FROM medications WHERE id = ?")
@@ -93,7 +97,19 @@ pub async fn update_medication(
         sqlx::query("UPDATE medications SET short_code = ? WHERE id = ?")
             .bind(&val).bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
     }
-    if let Some(val) = default_dose {
+    if clear_dose == Some(true) {
+        if before.default_dose.is_some() {
+            let old = before.default_dose.map(|d| format!("{}", d));
+            record_history(
+                &pool, id, &med_name, "dose_changed",
+                &format!("Default dose removed (was {} {})", old.clone().unwrap_or_else(|| "—".into()), unit),
+                old, None,
+            ).await;
+            banner = Some(format!("Recorded: {} default dose cleared", med_name));
+        }
+        sqlx::query("UPDATE medications SET default_dose = NULL WHERE id = ?")
+            .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    } else if let Some(val) = default_dose {
         if before.default_dose != Some(val) {
             let old = before.default_dose.map(|d| format!("{}", d));
             record_history(

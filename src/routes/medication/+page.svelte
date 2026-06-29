@@ -159,10 +159,12 @@
   }
 
   async function saveEdit(medId: number) {
+    const dose = edit.dose.trim();
     await invoke('update_medication', {
       id: medId,
       name: edit.name.trim() || null,
-      defaultDose: edit.dose ? parseFloat(edit.dose) : null,
+      defaultDose: dose ? parseFloat(dose) : null,
+      clearDose: dose === '',   // emptying the field clears the saved dose
       doseUnit: edit.unit || null,
       defaultTime: edit.time || null,
       medType: edit.type,
@@ -170,6 +172,15 @@
     editId = null;
     await loadAll();
     showToast('Medication updated');
+  }
+
+  // Sub-label under a med name: "usual 5mg · 08:00", omitting absent parts so a
+  // cleared dose leaves no stray text.
+  function medDetail(med: any): string {
+    const parts: string[] = [];
+    if (med.default_dose != null) parts.push(`usual ${med.default_dose}${med.dose_unit || 'mg'}`);
+    if (med.default_time) parts.push(med.default_time);
+    return parts.join(' · ');
   }
 
   async function toggleActive(med: any) {
@@ -371,7 +382,7 @@
             <div class="med-row" class:dimmed={!med.active}>
               <div class="med-info">
                 <span class="med-name" style={med.active ? `background:var(${medColor(med.id)}-soft);` : ''}>{med.name}</span>
-                <div class="med-detail">{med.default_dose != null ? `usual ${med.default_dose}${med.dose_unit || 'mg'}` : ''}{med.default_time ? ` · ${med.default_time}` : ''}</div>
+                {#if medDetail(med)}<div class="med-detail">{medDetail(med)}</div>{/if}
               </div>
               {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
               {#if med.active}
@@ -381,9 +392,8 @@
                       {slot.label ?? slot.time_of_day ?? 'Dose'}{slot.dose_amount != null ? ` ${slot.dose_amount}${med.dose_unit || 'mg'}` : ''}
                     </button>
                   {/each}
-                  <button class="add-dose-btn" onclick={() => openDose(med, null)}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-                    Dose
+                  <button class="add-dose-btn" onclick={() => openDose(med, null)} aria-label="Log a dose" title="Log a dose">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
                   </button>
                 </div>
               {/if}
@@ -596,7 +606,7 @@
   .med-detail { font-size:11.5px; color:var(--tm); }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
 
-  .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; flex-shrink:1; min-width:0; }
+  .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; align-items:center; flex-shrink:1; min-width:0; }
 
   /* 3-dot per-row actions menu */
   .med-menu { position:relative; flex-shrink:0; }
@@ -607,7 +617,8 @@
   .menu-item:hover { background:var(--inset); }
   .menu-item.danger { color:var(--red-fg); }
   .slot-btn { background:var(--accent-soft); color:var(--accent-fg); border:1px solid var(--border); border-radius:999px; padding:6px 11px; font-size:11.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
-  .add-dose-btn { display:inline-flex;align-items:center;gap:4px;background:var(--inset);color:var(--ts);border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap; }
+  .add-dose-btn { display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;background:var(--card);color:var(--accent-fg);border:2px solid var(--accent-fg);border-radius:999px;padding:0;cursor:pointer;flex-shrink:0; }
+  .add-dose-btn:hover { background:var(--accent-soft); }
   .icon-btn { width:28px;height:28px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0; }
   .icon-btn.danger { color:var(--red-fg); }
   .icon-btn:hover { background:var(--inset); }
