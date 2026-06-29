@@ -120,6 +120,21 @@
   }
   let recoveryDebt = $derived(yesterdayPred?.recovery_debt ?? null);
   let crashFlag = $derived(!!yesterdayPred?.crash_flag);
+  // Recovery-debt card: progress + colour + copy relative to the 4.0 crash line.
+  const DEBT_THRESHOLD = 4.0;
+  let debtPct = $derived(Math.min(100, ((recoveryDebt ?? 0) / DEBT_THRESHOLD) * 100));
+  let debtColor = $derived(
+    recoveryDebt == null ? 'var(--inset)'
+    : recoveryDebt >= DEBT_THRESHOLD ? 'var(--red)'
+    : recoveryDebt >= DEBT_THRESHOLD * 0.75 ? 'var(--amber)'
+    : 'var(--accent)'
+  );
+  let debtDesc = $derived(
+    recoveryDebt == null ? 'No prediction yet'
+    : recoveryDebt >= DEBT_THRESHOLD ? 'Over the crash line'
+    : recoveryDebt >= DEBT_THRESHOLD * 0.75 ? 'Approaching the crash line'
+    : 'Comfortably below crash line'
+  );
 
   let todayStr = $derived(formatDate(todayISO()));
 
@@ -307,13 +322,13 @@
     <div class="stat-card">
       <div class="stat-label">Recovery debt</div>
       <div class="stat-row">
-        <span class="stat-value">{(yesterdayPred?.predicted_pem_risk ?? 0).toFixed(1)}</span>
+        <span class="stat-value">{num(recoveryDebt, 1)}</span>
         <span class="stat-threshold">/ 4.0 threshold</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" style="width:45%;background:var(--accent);"></div>
+        <div class="progress-fill" style="width:{debtPct}%;background:{debtColor};"></div>
       </div>
-      <div class="stat-desc">Comfortably below crash line</div>
+      <div class="stat-desc">{debtDesc}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-header">
