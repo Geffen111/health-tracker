@@ -58,6 +58,13 @@
       ...options,
     });
 
+    // Chart.js can't change a chart's base type on update, so if `type` flips
+    // (e.g. switching a cardio metric from a bar range back to a line), tear the
+    // instance down and rebuild rather than reusing a stale bar/line chart.
+    if (chartInstance && (chartInstance.config as any).type !== type) {
+      chartInstance.destroy();
+      chartInstance = null;
+    }
     if (chartInstance) {
       chartInstance.data.labels = labels;
       chartInstance.data.datasets = resolvedDatasets;

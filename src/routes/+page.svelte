@@ -44,6 +44,9 @@
         invoke<any[]>('get_rolling_averages'),
         invoke<any[]>('get_monthly_activity'),
       ]);
+      // Default the comparison to the three most recent years present.
+      const ys = [...new Set(monthly.map((r: any) => r.year))].sort((a, b) => a - b);
+      selectedYears = ys.slice(-3);
     } catch (e) {
       console.error('Dashboard error:', e);
     } finally {
@@ -222,9 +225,18 @@
   // Years present in the data (ascending). The table shows all of them; the chart
   // shows only the most recent `monthlyYearsToShow` so it stays readable.
   let monthlyYears = $derived([...new Set(monthly.map((r: any) => r.year))].sort((a, b) => a - b));
-  let monthlyYearsToShow = $state(1); // chart shows the latest year by default; up to 3 to compare
+  // The chart compares a chosen set of years (max 3); defaults to the most recent 3.
+  // The table still shows every year.
+  let selectedYears = $state<number[]>([]);
   let monthlyTableOpen = $state(false);
-  let monthlyChartYears = $derived(monthlyYears.slice(-monthlyYearsToShow));
+  let monthlyChartYears = $derived([...selectedYears].sort((a, b) => a - b));
+  function toggleYear(y: number) {
+    if (selectedYears.includes(y)) {
+      selectedYears = selectedYears.filter((v) => v !== y);
+    } else if (selectedYears.length < 3) {
+      selectedYears = [...selectedYears, y];
+    }
+  }
   function monthlyCell(year: number, month: number): any {
     return monthly.find((r: any) => r.year === year && r.month === month) ?? null;
   }
@@ -438,11 +450,22 @@
       </div>
       <div class="monthly-controls">
         {#if monthlyYears.length > 1}
-          <select class="year-select" bind:value={monthlyYearsToShow} aria-label="Years to compare">
-            {#each Array(Math.min(3, monthlyYears.length)) as _, i}
-              <option value={i + 1}>{i + 1} year{i + 1 > 1 ? 's' : ''}</option>
-            {/each}
-          </select>
+          <details class="year-dropdown">
+            <summary class="year-summary">
+              <span>{selectedYears.length ? monthlyChartYears.join(', ') : 'Select years'}</span>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            </summary>
+            <div class="year-menu">
+              <div class="year-menu-hint">Compare up to 3 years</div>
+              {#each monthlyYears as y}
+                {@const checked = selectedYears.includes(y)}
+                <label class="year-option" class:disabled={!checked && selectedYears.length >= 3}>
+                  <input type="checkbox" {checked} disabled={!checked && selectedYears.length >= 3} onchange={() => toggleYear(y)} />
+                  {y}
+                </label>
+              {/each}
+            </div>
+          </details>
         {/if}
         <div class="range-toggle">
           <button class="range-btn" class:active={monthlyMetric === 'steps'} onclick={() => monthlyMetric = 'steps'}>Steps</button>
@@ -915,17 +938,53 @@
     flex-wrap: wrap;
   }
   .monthly-controls { display: flex; align-items: center; gap: 10px; }
-  .year-select {
+  .year-dropdown { position: relative; }
+  .year-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     background: var(--inset);
     border: 1px solid var(--border);
     border-radius: 999px;
-    padding: 7px 12px;
+    padding: 7px 13px;
     font-size: 12px;
     font-weight: 700;
     color: var(--ts);
     cursor: pointer;
-    font-family: inherit;
+    list-style: none;
+    white-space: nowrap;
   }
+  .year-summary::-webkit-details-marker { display: none; }
+  .year-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 20;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg, var(--shadow));
+    padding: 8px;
+    min-width: 130px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .year-menu-hint { font-size: 10.5px; color: var(--tm); padding: 2px 8px 6px; }
+  .year-option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 7px 8px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--tp);
+    cursor: pointer;
+  }
+  .year-option:hover { background: var(--inset); }
+  .year-option.disabled { color: var(--tm); cursor: not-allowed; }
+  .year-option input { accent-color: var(--accent); cursor: inherit; }
   .table-toggle {
     align-self: flex-start;
     display: inline-flex;

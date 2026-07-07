@@ -18,6 +18,7 @@
   let banner = $state(false);
   let calDays = $state<number | null>(null);
   let lastCal = $state<any>(null);
+  let calHistory = $state<any[]>([]);
   let calDate = $state(today);
   let calTime = $state(nowTime);
 
@@ -92,12 +93,27 @@
       { label: histCfg.b.label, data: histRows.map((r: any) => r[histCfg.b.key] ?? null), borderColor: histCfg.b.color, backgroundColor: histCfg.b.color },
     ];
   });
+  // Focus the y-axis on the data range (with a little padding) so the chart isn't
+  // dominated by empty space below the lowest reading; an outlier widens it naturally.
+  let histYRange = $derived.by(() => {
+    const vals: number[] = [];
+    for (const r of histRows) {
+      for (const key of [histCfg.a.key, histCfg.b.key]) {
+        const v = r[key];
+        if (v != null) vals.push(v);
+      }
+    }
+    if (vals.length === 0) return { min: undefined, max: undefined };
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const pad = Math.max(3, Math.round((hi - lo) * 0.12));
+    return { min: Math.max(0, Math.floor(lo - pad)), max: Math.ceil(hi + pad) };
+  });
   let histOptions = $derived({
     elements: { point: { radius: 2, hoverRadius: 5 } },
     spanGaps: true,
     interaction: { mode: 'index', intersect: false },
     scales: {
-      y: { type: 'linear', grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      y: { type: 'linear', min: histYRange.min, max: histYRange.max, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
       x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
     },
     plugins: {
@@ -154,9 +170,18 @@
   async function loadCal() {
     try {
       calDays = await invoke('days_since_calibration');
-      const recent: any[] = await invoke('list_watch_calibrations', { limit: 1 });
-      lastCal = recent.length > 0 ? recent[0] : null;
+      const all: any[] = await invoke('list_watch_calibrations', { limit: 50 });
+      // Most recent drives the "last calibrated" line; the rest become history.
+      lastCal = all.length > 0 ? all[0] : null;
+      calHistory = all.slice(1);
     } catch {}
+  }
+
+  async function deleteCal(id: number) {
+    try {
+      await invoke('delete_watch_calibration', { id });
+      await loadCal();
+    } catch (e) { console.error('Error deleting calibration:', e); }
   }
 
   function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadBP(); loadDailyLog(); }
@@ -375,6 +400,23 @@
   </div>
 </div>
 
+{#if calHistory.length > 0}
+  <div class="cal-history-card">
+    <div class="cal-history-heading">Calibration history</div>
+    <div class="cal-history-list">
+      {#each calHistory as c}
+        <div class="cal-history-row">
+          <span class="cal-history-date">{formatDateLong(c.cal_date)}</span>
+          <span class="cal-history-time">{c.cal_time ?? '--:--'}</span>
+          <button class="cal-history-del" onclick={() => deleteCal(c.id)} aria-label="Delete calibration entry">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+      {/each}
+    </div>
+  </div>
+{/if}
+
 <style>
   .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px; gap:16px; flex-wrap:wrap; }
   .page-title { font-family:'Source Serif 4',serif; font-size:30px; font-weight:600; color:var(--tp); letter-spacing:-.01em; }
@@ -450,4 +492,14 @@
   .cal-entry { display:flex; align-items:center; gap:8px; }
   .cal-input { background:var(--inset); border:1px solid var(--border); border-radius:9px; padding:8px 10px; font-size:12.5px; color:var(--tp); font-variant-numeric:tabular-nums; }
   .cal-btn { display:inline-flex; align-items:center; gap:7px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; }
+
+  .cal-history-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:18px 22px; box-shadow:var(--shadow); margin-top:16px; }
+  .cal-history-heading { font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:800; color:var(--ts); margin-bottom:10px; }
+  .cal-history-list { display:flex; flex-direction:column; }
+  .cal-history-row { display:flex; align-items:center; gap:14px; padding:9px 0; border-bottom:1px solid var(--border); }
+  .cal-history-row:last-child { border-bottom:none; }
+  .cal-history-date { font-size:13px; color:var(--tp); font-weight:600; flex:1; }
+  .cal-history-time { font-size:12.5px; color:var(--ts); font-variant-numeric:tabular-nums; }
+  .cal-history-del { width:26px; height:26px; border-radius:50%; border:none; background:transparent; color:var(--tm); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .cal-history-del:hover { color:var(--red); }
 </style>
