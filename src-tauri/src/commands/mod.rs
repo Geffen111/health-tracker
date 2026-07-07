@@ -4,6 +4,7 @@ pub mod blood_pressure;
 pub mod activity;
 pub mod pem;
 pub mod dashboard;
+pub mod monthly_activity;
 pub mod import_xlsx;
 pub mod watch_calibration;
 pub mod export;

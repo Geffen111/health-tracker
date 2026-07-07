@@ -12,6 +12,9 @@
   // incomplete, so the HR tiles show the most recent complete day (yesterday).
   let hrLog = $state<any>(null);
   let hrDate = $derived(selectedDate === today ? shiftISO(today, -1) : selectedDate);
+  // Resting HR isn't reliably populated by health sync, so it's manually editable.
+  let restingEdit = $state<number | null>(null);
+  let restingSaved = $state(false);
   let banner = $state(false);
   let calDays = $state<number | null>(null);
   let lastCal = $state<any>(null);
@@ -85,7 +88,19 @@
     try {
       const logs: any[] = await invoke('list_daily_logs', { limit: 30, offset: 0 });
       hrLog = logs.find((l: any) => l.log_date === hrDate) || null;
+      restingEdit = hrLog?.ave_resting_hr ?? null;
     } catch (e) { console.error('Error loading daily logs:', e); }
+  }
+
+  // Manually save resting HR for the day shown (yesterday when viewing today).
+  async function saveResting() {
+    try {
+      const v = restingEdit === null || (restingEdit as any) === '' ? null : Math.round(Number(restingEdit));
+      await invoke('upsert_daily_log', { log: { log_date: hrDate, ave_resting_hr: v } });
+      await Promise.all([loadDailyLog(), loadHistory()]);
+      restingSaved = true;
+      setTimeout(() => restingSaved = false, 1500);
+    } catch (e) { console.error('Error saving resting HR:', e); }
   }
 
   async function loadCal() {
@@ -231,8 +246,11 @@
     </div>
     <div class="hr-grid">
       <div class="hr-tile">
-        <div class="hr-tile-label">Resting</div>
-        <div class="hr-tile-val">{hrLog?.ave_resting_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
+        <div class="hr-tile-label">Resting <span class="hr-manual">· manual{restingSaved ? ' · saved' : ''}</span></div>
+        <div class="hr-edit">
+          <input class="hr-input" type="number" min="0" max="250" bind:value={restingEdit} onchange={saveResting} placeholder="—" aria-label="Resting heart rate" />
+          <span class="hr-unit">bpm</span>
+        </div>
       </div>
       <div class="hr-tile">
         <div class="hr-tile-label">Average</div>
@@ -359,6 +377,10 @@
   .hr-tile-label { font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--ts); }
   .hr-tile-val { font-family:'Source Serif 4',serif; font-size:25px; font-weight:600; color:var(--tp); }
   .hr-unit { font-size:12px; color:var(--tm); }
+  .hr-manual { font-size:9.5px; letter-spacing:0; text-transform:none; font-weight:600; color:var(--tm); }
+  .hr-edit { display:flex; align-items:baseline; gap:6px; margin-top:2px; }
+  .hr-input { width:70px; background:var(--card); border:1px solid var(--border); border-radius:9px; padding:4px 8px; font-family:'Source Serif 4',serif; font-size:22px; font-weight:600; color:var(--tp); font-variant-numeric:tabular-nums; }
+  .hr-input:focus { outline:none; border-color:var(--accent); }
   .hr-note { font-size:11.5px; color:var(--ts); line-height:1.5; }
 
   .cal-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; align-items:center; gap:24px; flex-wrap:wrap; }

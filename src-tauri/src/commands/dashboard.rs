@@ -87,3 +87,133 @@ pub async fn get_dashboard_summary(pool: State<'_, SqlitePool>) -> Result<Dashbo
         headache_days_30d: headaches.0,
     })
 }
+
+/// One row of the dashboard "Rolling averages" table: a metric with its value over
+/// each trailing window. `dp` is the decimal places the UI should render with.
+#[derive(Debug, Serialize)]
+pub struct RollingMetric {
+    pub key: String,
+    pub label: String,
+    pub unit: String,
+    pub dp: i64,
+    pub d7: Option<f64>,
+    pub d30: Option<f64>,
+    pub d60: Option<f64>,
+    pub d90: Option<f64>,
+}
+
+/// Aggregates for a single trailing window, pulled from daily_logs + blood_pressure.
+#[derive(Debug, Default, Clone)]
+struct WindowAgg {
+    sleep: Option<f64>,
+    fatigue: Option<f64>,
+    headache_rating: Option<f64>,
+    headache_days: Option<f64>,
+    sick_hours: Option<f64>,
+    rostered_hours: Option<f64>,
+    alcohol: Option<f64>,
+    steps: Option<f64>,
+    resting_hr: Option<f64>,
+    avg_hr: Option<f64>,
+    calories: Option<f64>,
+    bp_sys: Option<f64>,
+    bp_dia: Option<f64>,
+}
+
+async fn window_agg(pool: &SqlitePool, offset: &str) -> Result<WindowAgg, String> {
+    // One pass over daily_logs for every daily-sourced metric in the window.
+    let row: (
+        Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>,
+        Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>,
+    ) = sqlx::query_as(
+        "SELECT \
+         AVG(COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating)), \
+         AVG(fatigue_rating), \
+         AVG(headache_rating), \
+         SUM(CASE WHEN headache_rating > 0 THEN 1 ELSE 0 END), \
+         SUM(sick_leave_hours), \
+         SUM(rostered_hours), \
+         SUM(alcohol_std_drinks), \
+         AVG(steps), \
+         AVG(ave_resting_hr), \
+         AVG(ave_hr), \
+         AVG(activity_calories) \
+         FROM daily_logs WHERE log_date >= date('now', ?)",
+    )
+    .bind(offset)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Blood pressure lives in its own per-reading table.
+    let bp: (Option<f64>, Option<f64>) = sqlx::query_as(
+        "SELECT AVG(systolic), AVG(diastolic) FROM blood_pressure WHERE log_date >= date('now', ?)",
+    )
+    .bind(offset)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(WindowAgg {
+        sleep: row.0,
+        fatigue: row.1,
+        headache_rating: row.2,
+        headache_days: row.3,
+        sick_hours: row.4,
+        rostered_hours: row.5,
+        alcohol: row.6,
+        steps: row.7,
+        resting_hr: row.8,
+        avg_hr: row.9,
+        calories: row.10,
+        bp_sys: bp.0,
+        bp_dia: bp.1,
+    })
+}
+
+/// Trailing 7/30/60/90-day rollups for the dashboard table (mirrors the spreadsheet's
+/// "Rolling averages" block).
+#[tauri::command]
+pub async fn get_rolling_averages(pool: State<'_, SqlitePool>) -> Result<Vec<RollingMetric>, String> {
+    let w7 = window_agg(&pool, "-7 days").await?;
+    let w30 = window_agg(&pool, "-30 days").await?;
+    let w60 = window_agg(&pool, "-60 days").await?;
+    let w90 = window_agg(&pool, "-90 days").await?;
+    let windows = [&w7, &w30, &w60, &w90];
+
+    // Each metric names its per-window extractor once; we then fan it across the 4 windows.
+    let metric = |key: &str, label: &str, unit: &str, dp: i64, f: &dyn Fn(&WindowAgg) -> Option<f64>| -> RollingMetric {
+        RollingMetric {
+            key: key.to_string(),
+            label: label.to_string(),
+            unit: unit.to_string(),
+            dp,
+            d7: f(windows[0]),
+            d30: f(windows[1]),
+            d60: f(windows[2]),
+            d90: f(windows[3]),
+        }
+    };
+
+    let sick_pct = |w: &WindowAgg| match (w.sick_hours, w.rostered_hours) {
+        (Some(s), Some(r)) if r > 0.0 => Some(s / r * 100.0),
+        _ => None,
+    };
+    let steps_k = |w: &WindowAgg| w.steps.map(|s| s / 1000.0);
+
+    Ok(vec![
+        metric("sleep", "Sleep (avg)", "/10", 1, &|w| w.sleep),
+        metric("fatigue", "Fatigue rating (avg)", "/10", 1, &|w| w.fatigue),
+        metric("headache_rating", "Headache rating (avg)", "/10", 1, &|w| w.headache_rating),
+        metric("headache_days", "Headache days (total)", "", 0, &|w| w.headache_days),
+        metric("sick_hours", "Sick leave (hours)", "h", 1, &|w| w.sick_hours),
+        metric("sick_pct", "Sick leave (% of rostered)", "%", 1, &sick_pct),
+        metric("alcohol", "Alcohol (approx std drinks)", "", 1, &|w| w.alcohol),
+        metric("steps_k", "Steps (thousands, avg)", "k", 1, &steps_k),
+        metric("resting_hr", "Resting Heart Rate (avg)", "bpm", 1, &|w| w.resting_hr),
+        metric("avg_hr", "Heart Rate (avg)", "bpm", 1, &|w| w.avg_hr),
+        metric("calories", "Activity calories (avg)", "kcal", 1, &|w| w.calories),
+        metric("bp_sys", "Blood Pressure Sys (avg)", "", 1, &|w| w.bp_sys),
+        metric("bp_dia", "Blood Pressure Dia (avg)", "", 1, &|w| w.bp_dia),
+    ])
+}

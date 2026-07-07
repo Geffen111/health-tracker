@@ -9,6 +9,9 @@
   let predictions = $state<any[]>([]);
   let logs = $state<any[]>([]);
   let bpHistory = $state<any[]>([]);
+  let rolling = $state<any[]>([]);
+  let monthly = $state<any[]>([]);
+  let monthlyMetric = $state<'steps' | 'calories'>('steps');
   let loading = $state(true);
   let rangeDays = $state(14);
   let metricA = $state<string | null>('fatigue');
@@ -37,6 +40,10 @@
       predictions = preds;
       logs = await invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 });
       bpHistory = await invoke<any[]>('get_bp_history', { days: 7 });
+      [rolling, monthly] = await Promise.all([
+        invoke<any[]>('get_rolling_averages'),
+        invoke<any[]>('get_monthly_activity'),
+      ]);
     } catch (e) {
       console.error('Dashboard error:', e);
     } finally {
@@ -199,6 +206,52 @@
 
   let sleepLogs = $derived([...logs].reverse().slice(-14));
   let sleepChartData = $derived(sleepLogs.map((l: any) => sleepScore(l)));
+
+  // ── Rolling averages table ──
+  function fmtRoll(v: number | null, dp: number): string {
+    return v == null ? '—' : v.toFixed(dp);
+  }
+
+  // ── Monthly steps / calories ──
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // 2024 blue, 2025 red, 2026 amber — same order as the source spreadsheet charts.
+  const YEAR_PALETTE = ['var(--sky)', 'var(--red)', 'var(--amber)', 'var(--accent)', 'var(--purple)', 'var(--peri)'];
+  let monthlyField = $derived(monthlyMetric === 'steps' ? 'steps_avg' : 'calories_avg');
+  let monthlyYears = $derived([...new Set(monthly.map((r: any) => r.year))].sort((a, b) => a - b));
+  function monthlyCell(year: number, month: number): any {
+    return monthly.find((r: any) => r.year === year && r.month === month) ?? null;
+  }
+  let monthlyDatasets = $derived(monthlyYears.map((y: number, i: number) => ({
+    label: String(y),
+    data: MONTHS.map((_, mi) => {
+      const row = monthlyCell(y, mi + 1);
+      return row ? (row[monthlyField] ?? null) : null;
+    }),
+    backgroundColor: YEAR_PALETTE[i % YEAR_PALETTE.length],
+    borderColor: YEAR_PALETTE[i % YEAR_PALETTE.length],
+  })));
+  let monthlyOptions = $derived({
+    scales: {
+      y: { beginAtZero: true, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 11 } } },
+    },
+    plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
+  });
+  let monthlyHasData = $derived(monthlyDatasets.some((d: any) => d.data.some((v: number | null) => v != null)));
+
+  // Editing a cell stores a manual override. Send BOTH metrics so persisting a row
+  // for a previously-computed month doesn't blank the other metric's value.
+  async function editMonthlyCell(year: number, month: number, raw: string) {
+    const num = raw.trim() === '' ? null : Number(raw);
+    if (num != null && Number.isNaN(num)) return;
+    const row = monthlyCell(year, month);
+    const stepsAvg = monthlyMetric === 'steps' ? num : (row?.steps_avg ?? null);
+    const caloriesAvg = monthlyMetric === 'calories' ? num : (row?.calories_avg ?? null);
+    try {
+      await invoke('upsert_monthly_activity', { year, month, stepsAvg, caloriesAvg });
+      monthly = await invoke<any[]>('get_monthly_activity');
+    } catch (e) { console.error('Error saving monthly value:', e); }
+  }
 </script>
 
 <div class="page-header">
@@ -362,6 +415,83 @@
         <span class="risk-dot med"></span>
       </div>
       <div class="stat-desc">{summary.crash_count_30d > 0 ? `${summary.crash_count_30d} crashes in 30 days` : 'No crashes in 30 days'}</div>
+    </div>
+  </div>
+
+  <div class="monthly-card">
+    <div class="monthly-header">
+      <div>
+        <div class="card-title">Monthly activity</div>
+        <div class="card-subtitle">Daily-average {monthlyMetric === 'steps' ? 'steps' : 'active calories'} by month · history from the spreadsheet, Jun 2026 on from your logs</div>
+      </div>
+      <div class="range-toggle">
+        <button class="range-btn" class:active={monthlyMetric === 'steps'} onclick={() => monthlyMetric = 'steps'}>Steps</button>
+        <button class="range-btn" class:active={monthlyMetric === 'calories'} onclick={() => monthlyMetric = 'calories'}>Calories</button>
+      </div>
+    </div>
+    <div style="height:260px;">
+      {#if monthlyHasData}
+        <Chart type="bar" labels={MONTHS} datasets={monthlyDatasets} options={monthlyOptions} chartArea="260px" />
+      {:else}
+        <div class="compare-empty">No monthly data yet.</div>
+      {/if}
+    </div>
+    <div class="monthly-table-wrap">
+      <table class="monthly-table">
+        <thead>
+          <tr>
+            <th>Month</th>
+            {#each monthlyYears as y}<th>{y}</th>{/each}
+          </tr>
+        </thead>
+        <tbody>
+          {#each MONTHS as mName, mi}
+            <tr>
+              <td class="m-name">{mName}</td>
+              {#each monthlyYears as y}
+                {@const cell = monthlyCell(y, mi + 1)}
+                {@const val = cell && cell[monthlyField] != null ? Math.round(cell[monthlyField]) : ''}
+                <td>
+                  <input
+                    class="m-input"
+                    class:computed={cell?.computed}
+                    type="number"
+                    value={val}
+                    onchange={(e) => editMonthlyCell(y, mi + 1, (e.currentTarget as HTMLInputElement).value)}
+                    title={cell?.computed ? 'Computed from your daily logs — type to override' : ''}
+                  />
+                </td>
+              {/each}
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+    <div class="monthly-note">Values are daily averages. Muted cells are computed from your logged days; type a value to override.</div>
+  </div>
+
+  <div class="rolling-card">
+    <div class="card-title">Rolling averages</div>
+    <div class="rolling-table-wrap">
+      <table class="rolling-table">
+        <thead>
+          <tr>
+            <th class="metric-col">Metric</th>
+            <th>Last 7d</th><th>Last 30d</th><th>Last 60d</th><th>Last 90d</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each rolling as m}
+            <tr>
+              <td class="metric-col">{m.label}</td>
+              <td>{fmtRoll(m.d7, m.dp)}</td>
+              <td>{fmtRoll(m.d30, m.dp)}</td>
+              <td>{fmtRoll(m.d60, m.dp)}</td>
+              <td>{fmtRoll(m.d90, m.dp)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     </div>
   </div>
 {:else}
@@ -738,5 +868,66 @@
   }
   .risk-dot.low { background: var(--accent-soft); }
   .risk-dot.med { background: var(--amber-soft); }
-  
+
+  .monthly-card, .rolling-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-top: 16px;
+  }
+  .monthly-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .monthly-table-wrap, .rolling-table-wrap { overflow-x: auto; }
+  .monthly-table, .rolling-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+  .monthly-table th, .rolling-table th {
+    text-align: right;
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-weight: 800;
+    color: var(--ts);
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .monthly-table th:first-child, .rolling-table th.metric-col { text-align: left; }
+  .monthly-table td, .rolling-table td {
+    padding: 4px 8px;
+    text-align: right;
+    color: var(--tp);
+    font-variant-numeric: tabular-nums;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .rolling-table td.metric-col { text-align: left; font-weight: 600; }
+  .monthly-table td.m-name { text-align: left; font-weight: 600; color: var(--ts); }
+  .m-input {
+    width: 74px;
+    background: var(--inset);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 5px 7px;
+    font-size: 12.5px;
+    color: var(--tp);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .m-input:hover { border-color: var(--border); }
+  .m-input:focus { outline: none; border-color: var(--accent); background: var(--card); }
+  .m-input.computed { color: var(--tm); font-style: italic; }
+  .monthly-note { font-size: 11px; color: var(--tm); }
 </style>

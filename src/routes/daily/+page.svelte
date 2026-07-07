@@ -57,6 +57,8 @@
     // Treat a missing rating as 0 (none) rather than blank.
     if (log.fatigue_rating == null) log.fatigue_rating = 0;
     if (log.headache_rating == null) log.headache_rating = 0;
+    // Other symptoms are stored as a comma-separated string; show them as chips.
+    symptomList = parseSymptoms(log.other_symptoms);
     // Steps come from the previous day's row (yesterday's complete total).
     try {
       const p: any = await invoke('get_daily_log', { date: shiftISO(date, -1) });
@@ -71,6 +73,8 @@
     // present, use that. Stored so the dashboard and PEM model read one field.
     const m = log.my_sleep_rating, p = log.phone_sleep_rating;
     log.sleep_avg = (m != null && p != null) ? (m + p) / 2 : (m ?? p ?? null);
+    // Persist the symptom chips back to the single other_symptoms field.
+    log.other_symptoms = symptomList.join(', ');
     await invoke('upsert_daily_log', { log });
     // Steps & active calories are full-day metrics → the previous day's row.
     await invoke('upsert_daily_log', { log: { log_date: stepsDate, steps: prevSteps, activity_calories: prevCalories } });
@@ -94,6 +98,13 @@
   }
 
   let symptomList = $state<string[]>([]);
+
+  // Split a stored other_symptoms string into individual symptom chips. Existing
+  // spreadsheet entries were written comma-separated ("Irritable, malaise, sore eyes").
+  function parseSymptoms(s: string | null | undefined): string[] {
+    if (!s) return [];
+    return s.split(',').map((x) => x.trim()).filter((x) => x.length > 0);
+  }
 
   function addSymptom(e: KeyboardEvent) {
     const target = e.target as HTMLInputElement;
@@ -147,7 +158,7 @@
 
       <div class="text-field">
         <label for="fatigue-desc">Fatigue description</label>
-        <input id="fatigue-desc" type="text" bind:value={log.fatigue_desc} placeholder="e.g. Heavy legs by mid-afternoon" />
+        <input id="fatigue-desc" type="text" bind:value={log.fatigue_desc} />
       </div>
 
       <div class="slider-field">
@@ -171,11 +182,12 @@
       </div>
 
       <div class="text-field" aria-label="Other symptoms">
+        <label for="symptom-input">Other symptoms</label>
         <div class="symptom-chips">
           {#each symptomList as symptom, i}
             <span class="chip">{symptom}<button class="chip-remove" onclick={() => removeSymptom(i)}>×</button></span>
           {/each}
-          <input type="text" placeholder="+ add" class="chip-input" onkeydown={addSymptom} />
+          <input id="symptom-input" type="text" placeholder="+ add" class="chip-input" onkeydown={addSymptom} />
         </div>
       </div>
     </div>
@@ -202,7 +214,6 @@
           <div class="slider-fill" style="width:{(log.my_sleep_rating != null ? (log.my_sleep_rating / 10) * 100 : 0)}%;background:var(--accent);"></div>
           <input type="range" id="sleep-rating" min="0" max="10" step="0.5" bind:value={log.my_sleep_rating} class="slider-input" />
         </div>
-        <div class="watch-hint">Watch detail on the Sleep screen</div>
       </div>
 
       <div class="text-field">
@@ -279,7 +290,6 @@
   .slider-fill { position:absolute; left:0; top:0; height:100%; border-radius:999px; pointer-events:none; }
   .slider-input { position:absolute; left:0; top:-4px; width:100%; height:18px; opacity:0; cursor:pointer; z-index:2; }
   .slider-ends { display:flex; justify-content:space-between; font-size:10.5px; color:var(--tm); font-weight:600; }
-  .watch-hint { font-size:11.5px; color:var(--tm); }
 
   .text-field { display:flex; flex-direction:column; gap:8px; }
   .text-field label { font-size:13.5px; font-weight:600; color:var(--tp); }
