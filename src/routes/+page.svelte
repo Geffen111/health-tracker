@@ -238,6 +238,9 @@
     plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
   });
   let monthlyHasData = $derived(monthlyDatasets.some((d: any) => d.data.some((v: number | null) => v != null)));
+  // Give each month room for its year-bars; fills the card for 1-2 years, then the
+  // chart grows past the card width and its container scrolls horizontally.
+  let monthlyChartMinWidth = $derived(Math.max(480, 12 * (monthlyYears.length * 18 + 26)));
 
   // Editing a cell stores a manual override. Send BOTH metrics so persisting a row
   // for a previously-computed month doesn't blank the other metric's value.
@@ -429,11 +432,13 @@
         <button class="range-btn" class:active={monthlyMetric === 'calories'} onclick={() => monthlyMetric = 'calories'}>Calories</button>
       </div>
     </div>
-    <div style="height:260px;">
+    <div class="monthly-chart-scroll">
       {#if monthlyHasData}
-        <Chart type="bar" labels={MONTHS} datasets={monthlyDatasets} options={monthlyOptions} chartArea="260px" />
+        <div style="height:260px; min-width:{monthlyChartMinWidth}px;">
+          <Chart type="bar" labels={MONTHS} datasets={monthlyDatasets} options={monthlyOptions} chartArea="260px" />
+        </div>
       {:else}
-        <div class="compare-empty">No monthly data yet.</div>
+        <div class="compare-empty" style="height:260px;">No monthly data yet.</div>
       {/if}
     </div>
     <div class="monthly-table-wrap">
@@ -887,6 +892,7 @@
     gap: 12px;
     flex-wrap: wrap;
   }
+  .monthly-chart-scroll { overflow-x: auto; }
   .monthly-table-wrap, .rolling-table-wrap { overflow-x: auto; }
   .monthly-table, .rolling-table {
     width: 100%;

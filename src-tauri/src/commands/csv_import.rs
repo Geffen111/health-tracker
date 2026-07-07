@@ -53,6 +53,22 @@ struct DayAgg {
     sleep_time_head_on_pillow: Option<f64>,
 }
 
+/// Per-day HR, bucketed by minute. A workout is sampled every second, so a single
+/// exercise hour can hold thousands of high-bpm rows; averaging per sample lets that
+/// burst dominate and pushes the "daily average" up to workout levels. Bucketing by
+/// minute first (one vote per minute) makes the daily average time-weighted instead.
+struct DayHr {
+    minute: HashMap<String, (i64, i64)>, // "HH:MM" -> (bpm sum, sample count)
+    min: i64,
+    max: i64,
+}
+
+impl DayHr {
+    fn new() -> Self {
+        DayHr { minute: HashMap::new(), min: i64::MAX, max: i64::MIN }
+    }
+}
+
 /// Import (or re-import) the Health Sync CSVs. `full = true` ignores the
 /// last-sync modification-time filter and reprocesses every file.
 #[tauri::command]
@@ -78,7 +94,7 @@ pub async fn import_health_csv(
     // Cross-file per-date accumulators.
     let mut steps: HashMap<String, i64> = HashMap::new();
     let mut energy: HashMap<String, f64> = HashMap::new();
-    let mut hr: HashMap<String, (i64, i64, i64, i64)> = HashMap::new(); // sum, count, min, max
+    let mut hr: HashMap<String, DayHr> = HashMap::new(); // per-minute buckets + min/max
     let mut sleep: HashMap<String, (f64, f64, f64, f64)> = HashMap::new(); // asleep, rem, deep, awake (secs)
 
     // ── Steps ──
@@ -125,12 +141,18 @@ pub async fn import_health_csv(
             Ok((h, recs)) => match agg_hr(&h, &recs) {
                 Ok(m) => {
                     files_processed += 1;
-                    for (d, (sum, count, min, max)) in m {
-                        let e = hr.entry(d).or_insert((0, 0, i64::MAX, i64::MIN));
-                        e.0 += sum;
-                        e.1 += count;
-                        e.2 = e.2.min(min);
-                        e.3 = e.3.max(max);
+                    // The HR folder holds overlapping 30-day exports, so the same
+                    // minute recurs across files; merging per-minute sums keeps the
+                    // per-minute mean (and the daily average) stable regardless.
+                    for (d, dh) in m {
+                        let e = hr.entry(d).or_insert_with(DayHr::new);
+                        for (minute, (s, c)) in dh.minute {
+                            let me = e.minute.entry(minute).or_insert((0, 0));
+                            me.0 += s;
+                            me.1 += c;
+                        }
+                        e.min = e.min.min(dh.min);
+                        e.max = e.max.max(dh.max);
                     }
                 }
                 Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
@@ -178,12 +200,12 @@ pub async fn import_health_csv(
     for (date, c) in energy {
         days.entry(date).or_default().activity_calories = Some(round1(c));
     }
-    for (date, (sum, count, min, max)) in hr {
-        if count > 0 {
+    for (date, dh) in hr {
+        if let Some(ave) = day_ave_hr(&dh) {
             let a = days.entry(date).or_default();
-            a.ave_hr = Some((sum as f64 / count as f64).round() as i64);
-            a.hr_min = Some(min);
-            a.hr_max = Some(max);
+            a.ave_hr = Some(ave);
+            a.hr_min = Some(dh.min);
+            a.hr_max = Some(dh.max);
         }
     }
     for (date, (asleep, rem, deep, awake)) in sleep {
@@ -265,21 +287,42 @@ fn agg_energy(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Res
     Ok(out)
 }
 
-/// Per day: (sum, count, min, max) of bpm.
-fn agg_hr(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, (i64, i64, i64, i64)>, &'static str> {
+/// Per day: HR bucketed by minute, plus the day's true min/max bpm.
+fn agg_hr(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, DayHr>, &'static str> {
     let di = col(headers, "Date").ok_or("missing Date column")?;
     let hi = col(headers, "Heart rate").ok_or("missing Heart rate column")?;
-    let mut out: HashMap<String, (i64, i64, i64, i64)> = HashMap::new();
+    let mut out: HashMap<String, DayHr> = HashMap::new();
     for r in records {
-        if let (Some(date), Some(bpm)) = (r.get(di).and_then(date_part), r.get(hi).and_then(parse_i64)) {
-            let e = out.entry(date).or_insert((0, 0, i64::MAX, i64::MIN));
-            e.0 += bpm;
-            e.1 += 1;
-            e.2 = e.2.min(bpm);
-            e.3 = e.3.max(bpm);
+        if let (Some(date), Some(minute), Some(bpm)) = (
+            r.get(di).and_then(date_part),
+            r.get(di).and_then(minute_part),
+            r.get(hi).and_then(parse_i64),
+        ) {
+            let e = out.entry(date).or_insert_with(DayHr::new);
+            let m = e.minute.entry(minute).or_insert((0, 0));
+            m.0 += bpm;
+            m.1 += 1;
+            e.min = e.min.min(bpm);
+            e.max = e.max.max(bpm);
         }
     }
     Ok(out)
+}
+
+/// Time-weighted daily average HR: average each minute's samples, then average those
+/// per-minute means (one vote per minute) so a second-by-second workout burst counts
+/// as a single minute rather than thousands of samples. `None` if no samples.
+fn day_ave_hr(dh: &DayHr) -> Option<i64> {
+    if dh.minute.is_empty() {
+        return None;
+    }
+    let n = dh.minute.len() as f64;
+    let sum: f64 = dh
+        .minute
+        .values()
+        .map(|(s, c)| if *c > 0 { *s as f64 / *c as f64 } else { 0.0 })
+        .sum();
+    Some((sum / n).round() as i64)
 }
 
 /// Sum sleep-stage seconds for the session, attributed to its wake day (the date
@@ -413,6 +456,17 @@ fn date_part(s: &str) -> Option<String> {
     }
 }
 
+/// "2026.06.25 08:41:09" → "08:41" (the sample's hour:minute), for per-minute bucketing.
+fn minute_part(s: &str) -> Option<String> {
+    let time = s.split_whitespace().nth(1)?;
+    let hhmm = time.get(0..5)?;
+    if hhmm.len() == 5 && hhmm.as_bytes()[2] == b':' {
+        Some(hhmm.to_string())
+    } else {
+        None
+    }
+}
+
 fn parse_i64(s: &str) -> Option<i64> {
     let t = s.trim().trim_matches('"');
     t.parse::<i64>().ok().or_else(|| t.parse::<f64>().ok().map(|f| f.round() as i64))
@@ -492,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn hr_computes_sum_count_min_max() {
+    fn hr_buckets_per_minute_and_tracks_min_max() {
         let h = rec(&["Date", "Time", "Heart rate", "Source"]);
         let recs = vec![
             rec(&["2026.06.26 00:00:00", "00:00:00", "70", "x"]),
@@ -500,7 +554,28 @@ mod tests {
             rec(&["2026.06.26 00:02:00", "00:02:00", "80", "x"]),
         ];
         let m = agg_hr(&h, &recs).unwrap();
-        assert_eq!(m["2026-06-26"], (216, 3, 66, 80));
+        let dh = &m["2026-06-26"];
+        assert_eq!(dh.minute.len(), 3); // three distinct minutes
+        assert_eq!(dh.min, 66);
+        assert_eq!(dh.max, 80);
+        assert_eq!(day_ave_hr(dh), Some(72)); // mean of 70, 66, 80
+    }
+
+    #[test]
+    fn hr_daily_average_is_time_weighted_not_sample_weighted() {
+        // One resting minute at 60 bpm, then a workout minute sampled 100x at 150 bpm.
+        // Per-sample mean would be ~149; time-weighted (per-minute) mean is (60+150)/2.
+        let h = rec(&["Date", "Time", "Heart rate"]);
+        let mut recs = vec![rec(&["2026.06.26 08:00:00", "08:00:00", "60"])];
+        for i in 0..100 {
+            recs.push(rec(&[&format!("2026.06.26 09:00:{:02}", i % 60), "09:00", "150"]));
+        }
+        let m = agg_hr(&h, &recs).unwrap();
+        let dh = &m["2026-06-26"];
+        assert_eq!(dh.minute.len(), 2);
+        assert_eq!(day_ave_hr(dh), Some(105));
+        assert_eq!(dh.min, 60);
+        assert_eq!(dh.max, 150);
     }
 
     #[test]
