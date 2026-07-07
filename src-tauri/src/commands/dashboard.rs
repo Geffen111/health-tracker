@@ -130,7 +130,7 @@ async fn window_agg(pool: &SqlitePool, offset: &str) -> Result<WindowAgg, String
          AVG(COALESCE(sleep_avg, my_sleep_rating, phone_sleep_rating)), \
          AVG(fatigue_rating), \
          AVG(headache_rating), \
-         SUM(CASE WHEN headache_rating > 0 THEN 1 ELSE 0 END), \
+         CAST(SUM(CASE WHEN headache_rating > 0 THEN 1 ELSE 0 END) AS REAL), \
          SUM(sick_leave_hours), \
          SUM(rostered_hours), \
          SUM(alcohol_std_drinks), \
