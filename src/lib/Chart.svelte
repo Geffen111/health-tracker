@@ -4,9 +4,12 @@
 
   Chart.register(...registerables);
 
+  // datasets is `any[]` because callers pass a range of Chart.js dataset shapes —
+  // plain line/bar series, floating bars ([low, high] data), and scatter-style point
+  // datasets — not just the simple {label, data} form.
   let { type = 'line', datasets, labels, options = {}, chartArea = '' } = $props<{
     type?: string;
-    datasets: { label: string; data: (number | null)[]; borderColor?: string; backgroundColor?: string; yAxisID?: string }[];
+    datasets: any[];
     labels: string[];
     options?: Record<string, any>;
     chartArea?: string;

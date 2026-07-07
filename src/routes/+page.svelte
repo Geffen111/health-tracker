@@ -170,7 +170,9 @@
     metricB = key;
   }
 
-  let chartLogs = $derived([...logs].reverse().slice(-rangeDays));
+  // Exclude today: steps, HR and active calories aren't complete until the day
+  // ends, so today always shows an artificial dip. The chart is "through yesterday".
+  let chartLogs = $derived([...logs].reverse().filter((l: any) => l.log_date !== todayISO()).slice(-rangeDays));
   let chartLabels = $derived(chartLogs.map((l: any) => formatDate(l.log_date)));
   let chartMetricA = $derived(metricA ? METRICS[metricA] : null);
   let chartMetricB = $derived(metricB ? METRICS[metricB] : null);
@@ -217,18 +219,28 @@
   // 2024 blue, 2025 red, 2026 amber — same order as the source spreadsheet charts.
   const YEAR_PALETTE = ['var(--sky)', 'var(--red)', 'var(--amber)', 'var(--accent)', 'var(--purple)', 'var(--peri)'];
   let monthlyField = $derived(monthlyMetric === 'steps' ? 'steps_avg' : 'calories_avg');
+  // Years present in the data (ascending). The table shows all of them; the chart
+  // shows only the most recent `monthlyYearsToShow` so it stays readable.
   let monthlyYears = $derived([...new Set(monthly.map((r: any) => r.year))].sort((a, b) => a - b));
+  let monthlyYearsToShow = $state(1); // chart shows the latest year by default; up to 3 to compare
+  let monthlyTableOpen = $state(false);
+  let monthlyChartYears = $derived(monthlyYears.slice(-monthlyYearsToShow));
   function monthlyCell(year: number, month: number): any {
     return monthly.find((r: any) => r.year === year && r.month === month) ?? null;
   }
-  let monthlyDatasets = $derived(monthlyYears.map((y: number, i: number) => ({
+  // Colour by the year's absolute position so a given year keeps its colour
+  // regardless of how many years are being compared.
+  function yearColor(year: number): string {
+    return YEAR_PALETTE[Math.max(0, monthlyYears.indexOf(year)) % YEAR_PALETTE.length];
+  }
+  let monthlyDatasets = $derived(monthlyChartYears.map((y: number) => ({
     label: String(y),
     data: MONTHS.map((_, mi) => {
       const row = monthlyCell(y, mi + 1);
       return row ? (row[monthlyField] ?? null) : null;
     }),
-    backgroundColor: YEAR_PALETTE[i % YEAR_PALETTE.length],
-    borderColor: YEAR_PALETTE[i % YEAR_PALETTE.length],
+    backgroundColor: yearColor(y),
+    borderColor: yearColor(y),
   })));
   let monthlyOptions = $derived({
     scales: {
@@ -238,9 +250,6 @@
     plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
   });
   let monthlyHasData = $derived(monthlyDatasets.some((d: any) => d.data.some((v: number | null) => v != null)));
-  // Give each month room for its year-bars; fills the card for 1-2 years, then the
-  // chart grows past the card width and its container scrolls horizontally.
-  let monthlyChartMinWidth = $derived(Math.max(480, 12 * (monthlyYears.length * 18 + 26)));
 
   // Editing a cell stores a manual override. Send BOTH metrics so persisting a row
   // for a previously-computed month doesn't blank the other metric's value.
@@ -427,52 +436,65 @@
         <div class="card-title">Monthly activity</div>
         <div class="card-subtitle">Daily-average {monthlyMetric === 'steps' ? 'steps' : 'active calories'} by month · history from the spreadsheet, Jun 2026 on from your logs</div>
       </div>
-      <div class="range-toggle">
-        <button class="range-btn" class:active={monthlyMetric === 'steps'} onclick={() => monthlyMetric = 'steps'}>Steps</button>
-        <button class="range-btn" class:active={monthlyMetric === 'calories'} onclick={() => monthlyMetric = 'calories'}>Calories</button>
+      <div class="monthly-controls">
+        {#if monthlyYears.length > 1}
+          <select class="year-select" bind:value={monthlyYearsToShow} aria-label="Years to compare">
+            {#each Array(Math.min(3, monthlyYears.length)) as _, i}
+              <option value={i + 1}>{i + 1} year{i + 1 > 1 ? 's' : ''}</option>
+            {/each}
+          </select>
+        {/if}
+        <div class="range-toggle">
+          <button class="range-btn" class:active={monthlyMetric === 'steps'} onclick={() => monthlyMetric = 'steps'}>Steps</button>
+          <button class="range-btn" class:active={monthlyMetric === 'calories'} onclick={() => monthlyMetric = 'calories'}>Calories</button>
+        </div>
       </div>
     </div>
-    <div class="monthly-chart-scroll">
+    <div style="height:260px;">
       {#if monthlyHasData}
-        <div style="height:260px; min-width:{monthlyChartMinWidth}px;">
-          <Chart type="bar" labels={MONTHS} datasets={monthlyDatasets} options={monthlyOptions} chartArea="260px" />
-        </div>
+        <Chart type="bar" labels={MONTHS} datasets={monthlyDatasets} options={monthlyOptions} chartArea="260px" />
       {:else}
         <div class="compare-empty" style="height:260px;">No monthly data yet.</div>
       {/if}
     </div>
-    <div class="monthly-table-wrap">
-      <table class="monthly-table">
-        <thead>
-          <tr>
-            <th>Month</th>
-            {#each monthlyYears as y}<th>{y}</th>{/each}
-          </tr>
-        </thead>
-        <tbody>
-          {#each MONTHS as mName, mi}
+    <button class="table-toggle" onclick={() => monthlyTableOpen = !monthlyTableOpen} aria-expanded={monthlyTableOpen}>
+      <svg class="chevron" class:open={monthlyTableOpen} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      {monthlyTableOpen ? 'Hide' : 'Show'} monthly table
+    </button>
+    {#if monthlyTableOpen}
+      <div class="monthly-table-wrap">
+        <table class="monthly-table">
+          <thead>
             <tr>
-              <td class="m-name">{mName}</td>
-              {#each monthlyYears as y}
-                {@const cell = monthlyCell(y, mi + 1)}
-                {@const val = cell && cell[monthlyField] != null ? Math.round(cell[monthlyField]) : ''}
-                <td>
-                  <input
-                    class="m-input"
-                    class:computed={cell?.computed}
-                    type="number"
-                    value={val}
-                    onchange={(e) => editMonthlyCell(y, mi + 1, (e.currentTarget as HTMLInputElement).value)}
-                    title={cell?.computed ? 'Computed from your daily logs — type to override' : ''}
-                  />
-                </td>
-              {/each}
+              <th>Month</th>
+              {#each monthlyYears as y}<th>{y}</th>{/each}
             </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-    <div class="monthly-note">Values are daily averages. Muted cells are computed from your logged days; type a value to override.</div>
+          </thead>
+          <tbody>
+            {#each MONTHS as mName, mi}
+              <tr>
+                <td class="m-name">{mName}</td>
+                {#each monthlyYears as y}
+                  {@const cell = monthlyCell(y, mi + 1)}
+                  {@const val = cell && cell[monthlyField] != null ? Math.round(cell[monthlyField]) : ''}
+                  <td>
+                    <input
+                      class="m-input"
+                      class:computed={cell?.computed}
+                      type="number"
+                      value={val}
+                      onchange={(e) => editMonthlyCell(y, mi + 1, (e.currentTarget as HTMLInputElement).value)}
+                      title={cell?.computed ? 'Computed from your daily logs — type to override' : ''}
+                    />
+                  </td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+      <div class="monthly-note">Values are daily averages. Muted cells are computed from your logged days; type a value to override.</div>
+    {/if}
   </div>
 
   <div class="rolling-card">
@@ -892,7 +914,34 @@
     gap: 12px;
     flex-wrap: wrap;
   }
-  .monthly-chart-scroll { overflow-x: auto; }
+  .monthly-controls { display: flex; align-items: center; gap: 10px; }
+  .year-select {
+    background: var(--inset);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ts);
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .table-toggle {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: transparent;
+    border: none;
+    color: var(--ts);
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    padding: 2px 0;
+  }
+  .chevron { transition: transform 0.15s ease; }
+  .chevron.open { transform: rotate(90deg); }
   .monthly-table-wrap, .rolling-table-wrap { overflow-x: auto; }
   .monthly-table, .rolling-table {
     width: 100%;

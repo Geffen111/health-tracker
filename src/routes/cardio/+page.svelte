@@ -45,12 +45,53 @@
     return sorted.slice(-histDays);
   });
   let histLabels = $derived(histRows.map((r: any) => formatDateShort(r.log_date)));
-  // Both series of a couplet share one axis so they're directly comparable
-  // (a right-hand axis can make resting HR look higher than average HR, etc.).
-  let histDatasets = $derived([
-    { label: histCfg.a.label, data: histRows.map((r: any) => r[histCfg.a.key] ?? null), borderColor: histCfg.a.color, backgroundColor: histCfg.a.color },
-    { label: histCfg.b.label, data: histRows.map((r: any) => r[histCfg.b.key] ?? null), borderColor: histCfg.b.color, backgroundColor: histCfg.b.color },
-  ]);
+
+  // BP and Min/Max HR are ranges, so each day reads best as a vertical connector with
+  // a hollow marker at each end (low & high) rather than two horizontal trend lines.
+  // Avg/Resting HR aren't a range, so they stay as two independent lines.
+  let isRange = $derived(histMetric === 'bp' || histMetric === 'minmax');
+  let rangeColor = $derived(histMetric === 'bp' ? 'var(--red)' : 'var(--accent)');
+
+  function lowHigh(r: any): { low: number | null; high: number | null } {
+    const v1 = r[histCfg.a.key], v2 = r[histCfg.b.key];
+    if (v1 == null || v2 == null) return { low: null, high: null };
+    return { low: Math.min(v1, v2), high: Math.max(v1, v2) };
+  }
+
+  let histDatasets = $derived.by(() => {
+    if (isRange) {
+      const color = rangeColor;
+      const ring = {
+        showLine: false,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        pointBorderColor: color,
+        pointBackgroundColor: 'var(--card)', // hollow centre, theme-aware
+        pointBorderWidth: 2,
+        borderColor: color,
+        backgroundColor: color,
+        order: 1,
+      };
+      return [
+        // Vertical connector: a thin floating bar from the day's low to its high.
+        {
+          type: 'bar',
+          label: '_range',
+          data: histRows.map((r: any) => { const { low, high } = lowHigh(r); return low != null && high != null ? [low, high] : null; }),
+          backgroundColor: color,
+          borderWidth: 0,
+          barThickness: 3,
+          order: 2,
+        },
+        { type: 'line', label: histMetric === 'bp' ? 'Systolic' : 'Max HR', data: histRows.map((r: any) => lowHigh(r).high), ...ring },
+        { type: 'line', label: histMetric === 'bp' ? 'Diastolic' : 'Min HR', data: histRows.map((r: any) => lowHigh(r).low), ...ring },
+      ];
+    }
+    return [
+      { label: histCfg.a.label, data: histRows.map((r: any) => r[histCfg.a.key] ?? null), borderColor: histCfg.a.color, backgroundColor: histCfg.a.color },
+      { label: histCfg.b.label, data: histRows.map((r: any) => r[histCfg.b.key] ?? null), borderColor: histCfg.b.color, backgroundColor: histCfg.b.color },
+    ];
+  });
   let histOptions = $derived({
     elements: { point: { radius: 2, hoverRadius: 5 } },
     spanGaps: true,
@@ -59,9 +100,13 @@
       y: { type: 'linear', grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
       x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
     },
-    plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
+    plugins: {
+      legend: { display: !isRange, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } },
+      // The connector bar is a visual aid, not a data series — keep it out of tooltips.
+      tooltip: { filter: (item: any) => item.dataset.label !== '_range' },
+    },
   });
-  let histHasData = $derived(histDatasets.some((d) => d.data.some((v) => v != null)));
+  let histHasData = $derived(histDatasets.some((d: any) => (d.data as any[]).some((v: any) => v != null)));
 
   onMount(() => { loadAll(); });
 
@@ -293,7 +338,7 @@
   </div>
   <div style="height:240px;">
     {#if histHasData}
-      <Chart type="line" labels={histLabels} datasets={histDatasets} options={histOptions} chartArea="240px" />
+      <Chart type={isRange ? 'bar' : 'line'} labels={histLabels} datasets={histDatasets} options={histOptions} chartArea="240px" />
     {:else}
       <div class="hist-empty">No {histCfg.label.toLowerCase()} data in this range.</div>
     {/if}
