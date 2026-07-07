@@ -88,20 +88,18 @@
     try {
       const logs: any[] = await invoke('list_daily_logs', { limit: 30, offset: 0 });
       hrLog = logs.find((l: any) => l.log_date === hrDate) || null;
-      // The synced tiles (avg/min/max) show hrDate, but resting HR is a manual
-      // per-day figure — it belongs to the date actually selected in the header,
-      // not the yesterday-shifted hrDate. Load & save it for selectedDate so an
-      // entry never lands on the previous day.
-      const restingRow = logs.find((l: any) => l.log_date === selectedDate) || null;
-      restingEdit = restingRow?.ave_resting_hr ?? null;
+      // Resting HR follows hrDate too, so all four HR tiles (and the card's
+      // "Yesterday" note) refer to the same day.
+      restingEdit = hrLog?.ave_resting_hr ?? null;
     } catch (e) { console.error('Error loading daily logs:', e); }
   }
 
-  // Manually save resting HR for the selected date (the day shown in the header).
+  // Manually save resting HR for the day the HR card shows (hrDate = yesterday when
+  // viewing today), keeping it in step with the synced avg/min/max tiles.
   async function saveResting() {
     try {
       const v = restingEdit === null || (restingEdit as any) === '' ? null : Math.round(Number(restingEdit));
-      await invoke('upsert_daily_log', { log: { log_date: selectedDate, ave_resting_hr: v } });
+      await invoke('upsert_daily_log', { log: { log_date: hrDate, ave_resting_hr: v } });
       await Promise.all([loadDailyLog(), loadHistory()]);
       restingSaved = true;
       setTimeout(() => restingSaved = false, 1500);
@@ -251,7 +249,7 @@
     </div>
     <div class="hr-grid">
       <div class="hr-tile">
-        <div class="hr-tile-label">Resting <span class="hr-manual">· {formatDateShort(selectedDate)}{restingSaved ? ' · saved' : ''}</span></div>
+        <div class="hr-tile-label">Resting <span class="hr-manual">· manual{restingSaved ? ' · saved' : ''}</span></div>
         <div class="hr-edit">
           <input class="hr-input" type="number" min="0" max="250" bind:value={restingEdit} onchange={saveResting} placeholder="—" aria-label="Resting heart rate" />
           <span class="hr-unit">bpm</span>
