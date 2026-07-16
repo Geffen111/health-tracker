@@ -167,12 +167,16 @@ pub async fn import_health_csv(
             Ok((h, recs)) => match agg_sleep(&h, &recs) {
                 Ok(m) => {
                     files_processed += 1;
+                    // A single night recurs across overlapping exports — a 30-day range
+                    // file and the per-day file for that morning carry the same session
+                    // (or one is a partial fragment). Take the fullest reading per stage
+                    // rather than summing, which would double-count the overlap.
                     for (d, (a, r, dp, aw)) in m {
                         let e = sleep.entry(d).or_insert((0.0, 0.0, 0.0, 0.0));
-                        e.0 += a;
-                        e.1 += r;
-                        e.2 += dp;
-                        e.3 += aw;
+                        e.0 = e.0.max(a);
+                        e.1 = e.1.max(r);
+                        e.2 = e.2.max(dp);
+                        e.3 = e.3.max(aw);
                     }
                 }
                 Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
@@ -325,37 +329,83 @@ fn day_ave_hr(dh: &DayHr) -> Option<i64> {
     Some((sum / n).round() as i64)
 }
 
-/// Sum sleep-stage seconds for the session, attributed to its wake day (the date
-/// of the latest row). Returns (asleep, rem, deep, awake) seconds.
+/// A gap this long (seconds) between consecutive rows starts a new sleep session.
+/// Within a night, rows are back-to-back (each row's start follows the previous by
+/// its own duration — minutes, not hours); the daytime gap between nights is many
+/// hours. 3h cleanly separates nights without splitting on in-night wake periods.
+const SLEEP_SESSION_GAP_SECS: i64 = 3 * 3600;
+
+/// Sum sleep-stage seconds per session, each attributed to its own wake day (the
+/// date of the session's latest row). Returns a map keyed by wake day →
+/// (asleep, rem, deep, awake) seconds.
+///
+/// A single file may hold one night (the usual per-day Health Connect export) or a
+/// whole month (a range export). We must NOT collapse every row onto one date, or a
+/// month's sleep lands on a single day and the other nights read blank; instead we
+/// split the rows into sessions on large time gaps and attribute each to its own day.
 fn agg_sleep(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Result<HashMap<String, (f64, f64, f64, f64)>, &'static str> {
     let di = col(headers, "Date").ok_or("missing Date column")?;
     let dur = col(headers, "Duration in seconds").ok_or("missing Duration in seconds column")?;
     let st = col(headers, "Sleep stage").ok_or("missing Sleep stage column")?;
     let mut out: HashMap<String, (f64, f64, f64, f64)> = HashMap::new();
 
-    // Timestamps "YYYY.MM.DD HH:MM:SS" sort lexically = chronologically.
-    let wake = records
+    // Rows that carry a parseable timestamp, sorted chronologically. (The "YYYY.MM.DD
+    // HH:MM:SS" format sorts lexically = chronologically, so we sort on the raw string
+    // and only parse to seconds when measuring the gap between rows.)
+    let mut rows: Vec<(&str, f64, Option<String>)> = records
         .iter()
-        .filter_map(|r| r.get(di).map(|s| s.to_string()))
-        .max()
-        .and_then(|s| date_part(&s));
-    let date = match wake {
-        Some(d) => d,
-        None => return Ok(out),
+        .filter_map(|r| {
+            let ts = r.get(di)?;
+            let secs = r.get(dur).and_then(parse_f64).unwrap_or(0.0);
+            let stage = r.get(st).map(|s| s.trim().to_lowercase());
+            Some((ts, secs, stage))
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+
+    // Walk the rows, breaking into sessions whenever the gap since the previous row
+    // exceeds the threshold. Flush each finished session onto its wake day.
+    let mut session: (f64, f64, f64, f64) = (0.0, 0.0, 0.0, 0.0);
+    let mut session_wake: Option<String> = None;
+    let mut prev_ts: Option<i64> = None;
+
+    let flush = |out: &mut HashMap<String, (f64, f64, f64, f64)>,
+                 wake: &mut Option<String>,
+                 s: &mut (f64, f64, f64, f64)| {
+        if let Some(day) = wake.take() {
+            let e = out.entry(day).or_insert((0.0, 0.0, 0.0, 0.0));
+            e.0 += s.0;
+            e.1 += s.1;
+            e.2 += s.2;
+            e.3 += s.3;
+        }
+        *s = (0.0, 0.0, 0.0, 0.0);
     };
 
-    let mut e = (0.0, 0.0, 0.0, 0.0);
-    for r in records {
-        let secs = r.get(dur).and_then(parse_f64).unwrap_or(0.0);
-        match r.get(st).map(|s| s.trim().to_lowercase()).as_deref() {
-            Some("rem") => { e.0 += secs; e.1 += secs; }
-            Some("deep") => { e.0 += secs; e.2 += secs; }
-            Some("light") | Some("sleeping") => { e.0 += secs; }
-            Some("awake") | Some("awake_in_bed") => { e.3 += secs; }
+    for (ts, secs, stage) in rows {
+        let epoch = parse_ts_secs(ts);
+        if let (Some(cur), Some(prev)) = (epoch, prev_ts) {
+            if cur - prev > SLEEP_SESSION_GAP_SECS {
+                flush(&mut out, &mut session_wake, &mut session);
+            }
+        }
+        prev_ts = epoch.or(prev_ts);
+
+        match stage.as_deref() {
+            Some("rem") => { session.0 += secs; session.1 += secs; }
+            Some("deep") => { session.0 += secs; session.2 += secs; }
+            Some("light") | Some("sleeping") => { session.0 += secs; }
+            Some("awake") | Some("awake_in_bed") => { session.3 += secs; }
             _ => {}
         }
+        // The wake day is the date of the session's latest row; rows are sorted, so
+        // each successive row's date is the running wake day for this session.
+        if let Some(d) = date_part(ts) {
+            session_wake = Some(d);
+        }
     }
-    out.insert(date, e);
+    flush(&mut out, &mut session_wake, &mut session);
+
     Ok(out)
 }
 
@@ -465,6 +515,15 @@ fn minute_part(s: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// "2026.06.25 08:41:09" → seconds since the Unix epoch, for measuring the gap
+/// between consecutive sleep rows. Returns None if the timestamp doesn't parse.
+fn parse_ts_secs(s: &str) -> Option<i64> {
+    use chrono::NaiveDateTime;
+    NaiveDateTime::parse_from_str(s.trim(), "%Y.%m.%d %H:%M:%S")
+        .ok()
+        .map(|dt| dt.and_utc().timestamp())
 }
 
 fn parse_i64(s: &str) -> Option<i64> {
@@ -606,6 +665,30 @@ mod tests {
         assert_eq!(deep, 2460.0);
         assert_eq!(asleep, 900.0 + 2460.0 + 930.0); // light + deep + rem
         assert_eq!(awake, 60.0);
+    }
+
+    #[test]
+    fn sleep_range_file_splits_into_per_night_sessions() {
+        // A range export holding two separate nights must land on two wake days, not
+        // collapse the whole file onto the latest date.
+        let h = rec(&["Date", "Time", "Duration in seconds", "Sleep stage"]);
+        let recs = vec![
+            // Night one (contiguous rows) → wakes 06-25.
+            rec(&["2026.06.24 23:00:00", "23:00:00", "3600", "light"]),
+            rec(&["2026.06.25 00:00:00", "00:00:00", "1800", "deep"]),
+            rec(&["2026.06.25 00:30:00", "00:30:00", "600", "awake"]),
+            // ~22h daytime gap (no rows), then night two (contiguous) → wakes 06-26.
+            rec(&["2026.06.25 22:30:00", "22:30:00", "3600", "light"]),
+            rec(&["2026.06.25 23:30:00", "23:30:00", "1800", "deep"]),
+            rec(&["2026.06.26 00:00:00", "00:00:00", "1200", "rem"]),
+        ];
+        let m = agg_sleep(&h, &recs).unwrap();
+        assert_eq!(m.len(), 2);
+        // Night one: the 22h gap keeps it off the later wake day.
+        let n1 = m["2026-06-25"];
+        assert_eq!(n1, (3600.0 + 1800.0, 0.0, 1800.0, 600.0));
+        let n2 = m["2026-06-26"];
+        assert_eq!(n2, (3600.0 + 1800.0 + 1200.0, 1200.0, 1800.0, 0.0));
     }
 
     #[test]

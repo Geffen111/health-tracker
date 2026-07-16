@@ -8,10 +8,13 @@
   let nowTime = new Date().toTimeString().slice(0, 5);
   let selectedDate = $state(today);
   let bpReadings = $state<any[]>([]);
-  // Heart rate is a full-day synced metric — when viewing today it's still
-  // incomplete, so the HR tiles show the most recent complete day (yesterday).
+  // The HR section always reports the day BEFORE the selected date. Today's synced
+  // figures aren't complete until the day ends, and for consistency every selected
+  // day shows its prior day (the "Yesterday" label makes this explicit). Resting HR
+  // is entered against that same prior day, so stepping back a day shows the day
+  // before it — the value never appears to "copy" onto the previous day.
   let hrLog = $state<any>(null);
-  let hrDate = $derived(selectedDate === today ? shiftISO(today, -1) : selectedDate);
+  let hrDate = $derived(shiftISO(selectedDate, -1));
   // Resting HR isn't reliably populated by health sync, so it's manually editable.
   let restingEdit = $state<number | null>(null);
   let restingSaved = $state(false);
