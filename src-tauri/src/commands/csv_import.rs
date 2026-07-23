@@ -444,7 +444,16 @@ async fn upsert_day(pool: &SqlitePool, date: &str, a: &DayAgg) -> Result<(), Str
     Ok(())
 }
 
-/// CSV files in `dir` (optionally only those modified after `last_sync_unix`).
+/// Checks if a file path belongs to a Samsung Health export (e.g. contains "Samsung Health").
+fn is_samsung_health_file(path: &Path) -> bool {
+    let name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(s) => s.to_lowercase(),
+        None => return false,
+    };
+    name.contains("samsung health") || name.contains("samsung-health") || name.contains("samsunghealth")
+}
+
+/// CSV files in `dir` (only Samsung Health files, optionally filtered by `last_sync_unix`).
 fn collect_files(dir: &Path, last_sync_unix: Option<i64>, skipped: &mut i64) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let entries = match fs::read_dir(dir) {
@@ -461,6 +470,13 @@ fn collect_files(dir: &Path, last_sync_unix: Option<i64>, skipped: &mut i64) -> 
         if !is_csv {
             continue;
         }
+
+        // Only process files exported from Samsung Health, skipping Health Connect and other files.
+        if !is_samsung_health_file(&path) {
+            *skipped += 1;
+            continue;
+        }
+
         if let Some(ls) = last_sync_unix {
             let mtime = entry
                 .metadata()
@@ -698,5 +714,17 @@ mod tests {
         assert!(agg_hr(&h, &[]).is_err());
         assert!(agg_energy(&h, &[]).is_err());
         assert!(agg_sleep(&h, &[]).is_err());
+    }
+
+    #[test]
+    fn matches_only_samsung_health_files() {
+        assert!(is_samsung_health_file(Path::new("Steps 2026.07.22 Samsung Health.csv")));
+        assert!(is_samsung_health_file(Path::new("Steps 29-2026 samsung health.csv")));
+        assert!(is_samsung_health_file(Path::new("Steps June 2026 Samsung-Health.csv")));
+        assert!(is_samsung_health_file(Path::new("Heart rate 2026.07.21 SamsungHealth.csv")));
+
+        assert!(!is_samsung_health_file(Path::new("Steps 2026.07.22 Health Connect.csv")));
+        assert!(!is_samsung_health_file(Path::new("Heart rate 2026.06.01-2026.07.01 Health Connect.csv")));
+        assert!(!is_samsung_health_file(Path::new("random_file.csv")));
     }
 }
