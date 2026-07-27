@@ -42,4 +42,6 @@ calamine). Register new commands in `src-tauri/src/lib.rs`.
 - Frontend calls the backend via `invoke('<command>', { ... })` from `@tauri-apps/api/core`.
 
 ## Workflow
-Not yet a git repo. Keep changes scoped per phase; update `PLAN.md` status after each phase.
+Git repo, `origin` = github.com/Geffen111/health-tracker. Solo project — commit and
+push straight to `main`, no feature branch or PR. Keep changes scoped per phase;
+update `PLAN.md` status after each phase.
