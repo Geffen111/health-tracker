@@ -26,6 +26,9 @@ pub struct DailyLog {
     pub sleep_rem: Option<f64>,
     pub sleep_deep: Option<f64>,
     pub sleep_awake: Option<f64>,
+    /// 'manual' when the breakdown was typed in on the Sleep page — the watch
+    /// sync then leaves it alone. NULL means the sync owns it.
+    pub sleep_source: Option<String>,
     pub steps: Option<i64>,
     pub activity_calories: Option<f64>,
     pub ave_resting_hr: Option<i64>,
@@ -42,6 +45,19 @@ pub struct DailyLog {
     pub add_meds: Option<String>,
     pub compression_socks: Option<bool>,
     pub notes: Option<String>,
+}
+
+/// Just the sleep-stage columns of a daily log. Written by the Sleep page when
+/// the watch sync misses a night (or gets one wrong) and the breakdown has to be
+/// typed in by hand.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SleepBreakdown {
+    pub log_date: String,
+    pub sleep_time_head_on_pillow: Option<f64>,
+    pub sleep_actual_asleep: Option<f64>,
+    pub sleep_rem: Option<f64>,
+    pub sleep_deep: Option<f64>,
+    pub sleep_awake: Option<f64>,
 }
 
 // ── Medications ──

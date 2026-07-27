@@ -1,4 +1,4 @@
-use crate::models::DailyLog;
+use crate::models::{DailyLog, SleepBreakdown};
 use sqlx::SqlitePool;
 use tauri::State;
 
@@ -77,6 +77,119 @@ pub async fn upsert_daily_log(
     .map_err(|e| e.to_string())
 }
 
+/// Columns `patch_daily_log` may write. The map keys are interpolated into the
+/// SQL, so this list is also the injection guard — reject anything not on it.
+const PATCHABLE: &[&str] = &[
+    "day_name", "fatigue_desc", "fatigue_rating", "headache_desc", "headache_rating",
+    "headache_duration_hours", "other_symptoms", "my_sleep_rating", "phone_sleep_rating",
+    "sleep_avg", "steps", "activity_calories", "alcohol_std_drinks", "multivitamin",
+    "vitamin_c", "add_meds", "compression_socks", "notes",
+];
+
+/// Build the upsert for a set of columns, rejecting any that isn't in
+/// `PATCHABLE`. Column names reach the SQL by interpolation (they can't be bound),
+/// so the whitelist check has to happen here and nowhere else.
+fn build_patch_sql(cols: &[&str]) -> Result<String, String> {
+    if let Some(bad) = cols.iter().find(|c| !PATCHABLE.contains(c)) {
+        return Err(format!("field not patchable: {}", bad));
+    }
+    let placeholders = vec!["?"; cols.len()].join(", ");
+    let sets = cols
+        .iter()
+        .map(|c| format!("{c}=excluded.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!(
+        "INSERT INTO daily_logs (log_date, {}, updated_at) VALUES (?, {}, datetime('now'))
+         ON CONFLICT(log_date) DO UPDATE SET {}, updated_at=datetime('now')",
+        cols.join(", "),
+        placeholders,
+        sets
+    ))
+}
+
+/// Write exactly the fields a page owns, and no others.
+///
+/// `upsert_daily_log` COALESCEs, so a null means "leave as-is" — which makes it
+/// impossible to *clear* a value. That was tolerable behind a Save button; with
+/// the Daily Log page autosaving it isn't, because emptying a field would appear
+/// to work and then silently revert on reload. Here the JSON map distinguishes
+/// the two cases properly: a key that is absent is left alone, a key whose value
+/// is null is cleared.
+#[tauri::command]
+pub async fn patch_daily_log(
+    pool: State<'_, SqlitePool>,
+    date: String,
+    fields: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let cols: Vec<&str> = fields.keys().map(|k| k.as_str()).collect();
+    let sql = build_patch_sql(&cols)?;
+
+    let mut q = sqlx::query(&sql).bind(&date);
+    for col in &cols {
+        // SQLite column affinity converts a bound f64 back to INTEGER where the
+        // column calls for it (e.g. steps), so numbers need no per-column typing.
+        q = match &fields[*col] {
+            serde_json::Value::Null => q.bind(None::<f64>),
+            serde_json::Value::Bool(b) => q.bind(*b),
+            serde_json::Value::Number(n) => q.bind(n.as_f64()),
+            serde_json::Value::String(s) => q.bind(s.clone()),
+            other => return Err(format!("unsupported value for {}: {}", col, other)),
+        };
+    }
+    q.execute(&*pool).await.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Manual sleep entry from the Sleep page. Unlike `upsert_daily_log` this writes
+/// the five sleep columns *explicitly* rather than with COALESCE: a blank field
+/// means "clear it", which is what you want when the watch sync recorded a night
+/// wrongly (e.g. merged an afternoon nap into it). Every other column on the row
+/// is left untouched.
+///
+/// Saving marks the day `sleep_source = 'manual'`, which makes the entry sticky —
+/// a later CSV sync won't overwrite it. Saving with every field blank clears the
+/// marker instead, handing the night back to the sync.
+#[tauri::command]
+pub async fn upsert_sleep_breakdown(
+    pool: State<'_, SqlitePool>,
+    breakdown: SleepBreakdown,
+) -> Result<(), String> {
+    let has_value = breakdown.sleep_time_head_on_pillow.is_some()
+        || breakdown.sleep_actual_asleep.is_some()
+        || breakdown.sleep_rem.is_some()
+        || breakdown.sleep_deep.is_some()
+        || breakdown.sleep_awake.is_some();
+    let source = if has_value { Some("manual") } else { None };
+
+    sqlx::query(
+        "INSERT INTO daily_logs (log_date, sleep_time_head_on_pillow, sleep_actual_asleep,
+         sleep_rem, sleep_deep, sleep_awake, sleep_source, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(log_date) DO UPDATE SET
+         sleep_time_head_on_pillow=excluded.sleep_time_head_on_pillow,
+         sleep_actual_asleep=excluded.sleep_actual_asleep,
+         sleep_rem=excluded.sleep_rem,
+         sleep_deep=excluded.sleep_deep,
+         sleep_awake=excluded.sleep_awake,
+         sleep_source=excluded.sleep_source,
+         updated_at=datetime('now')"
+    )
+    .bind(&breakdown.log_date)
+    .bind(breakdown.sleep_time_head_on_pillow)
+    .bind(breakdown.sleep_actual_asleep)
+    .bind(breakdown.sleep_rem)
+    .bind(breakdown.sleep_deep)
+    .bind(breakdown.sleep_awake)
+    .bind(source)
+    .execute(&*pool)
+    .await
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn list_daily_logs(
     pool: State<'_, SqlitePool>,
@@ -90,4 +203,29 @@ pub async fn list_daily_logs(
         .fetch_all(&*pool)
         .await
         .map_err(|e| e.to_string())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patch_sql_sets_only_the_given_columns() {
+        let sql = build_patch_sql(&["fatigue_rating", "notes"]).unwrap();
+        assert!(sql.contains("INSERT INTO daily_logs (log_date, fatigue_rating, notes, updated_at)"));
+        assert!(sql.contains("VALUES (?, ?, ?, datetime('now'))"));
+        assert!(sql.contains("fatigue_rating=excluded.fatigue_rating"));
+        assert!(sql.contains("notes=excluded.notes"));
+        // No COALESCE: a bound null must clear the column, not preserve it.
+        assert!(!sql.contains("COALESCE"));
+        // Columns the caller didn't name are untouched.
+        assert!(!sql.contains("sleep_rem"));
+    }
+
+    #[test]
+    fn patch_sql_rejects_unknown_columns() {
+        // Column names are interpolated, so anything off the whitelist — typo or
+        // injection attempt — must not reach the SQL.
+        assert!(build_patch_sql(&["notes", "sleep_rem"]).is_err());
+        assert!(build_patch_sql(&["notes = 1, id"]).is_err());
+    }
 }

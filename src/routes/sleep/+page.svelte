@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { formatDateLong, formatDateShort, todayISO, shiftISO } from '$lib/formatDate';
+  import { showToast } from '$lib/stores/toast.svelte';
   import Chart from '$lib/Chart.svelte';
 
   let today = $state(todayISO());
@@ -13,24 +14,40 @@
   let rangeDays = $state(30);
 
   onMount(async () => {
+    await loadLogs();
+    loading = false;
+  });
+
+  async function loadLogs() {
     try {
       logs = await invoke('list_daily_logs', { limit: 60, offset: 0 });
     } catch (e) {
       console.error('Error loading sleep data:', e);
-    } finally {
-      loading = false;
     }
-  });
+  }
 
   $effect(() => {
-    currentLog = logs.find((l: any) => l.log_date === selectedDate) || null;
+    const date = selectedDate;
+    const fromList = logs.find((l: any) => l.log_date === date);
+    if (fromList) {
+      currentLog = fromList;
+      return;
+    }
+    // Older than the 60 days loaded for the trend — fetch that one day, so a
+    // day with data never reads as blank (and never gets typed over by mistake).
+    currentLog = null;
+    invoke('get_daily_log', { date })
+      .then((l: any) => { if (selectedDate === date) currentLog = l ?? null; })
+      .catch(() => {});
   });
 
   // Oldest first, limited to the selected range.
   let trendLogs = $derived([...logs].reverse().slice(-rangeDays));
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); }
+  // Changing day closes the editor rather than re-pointing a half-typed form at
+  // a different night.
+  function prevDay() { editing = false; selectedDate = shiftISO(selectedDate, -1); }
+  function nextDay() { editing = false; selectedDate = shiftISO(selectedDate, 1); }
 
   let selectedMetric = $state('score');
 
@@ -84,6 +101,104 @@
 
   let chartLabels = $derived(trendLogs.map((l: any) => formatDateShort(l.log_date)));
   let chartData = $derived(trendLogs.map((l: any) => fieldOf(l, curMetric.field)));
+
+  // ── Manual entry ──────────────────────────────────────────────────────────
+  // The stage breakdown normally arrives from the watch CSV import (Settings →
+  // sync). Nights the watch wasn't worn, or didn't upload, leave the day blank —
+  // this form writes the same five columns by hand for the selected date.
+
+  interface SleepForm {
+    inbed: number | null;
+    asleep: number | null;
+    rem: number | null;
+    deep: number | null;
+    awake: number | null;
+  }
+
+  let isManual = $derived(currentLog?.sleep_source === 'manual');
+  let editing = $state(false);
+  let saving = $state(false);
+  let form = $state<SleepForm>({ inbed: null, asleep: null, rem: null, deep: null, awake: null });
+
+  // <input type="number"> binds to undefined (not null) when emptied.
+  function num(v: number | null | undefined): number | null {
+    return v == null || Number.isNaN(v) ? null : v;
+  }
+
+  function openEditor() {
+    form = {
+      inbed: currentLog?.sleep_time_head_on_pillow ?? null,
+      asleep: currentLog?.sleep_actual_asleep ?? null,
+      rem: currentLog?.sleep_rem ?? null,
+      deep: currentLog?.sleep_deep ?? null,
+      awake: currentLog?.sleep_awake ?? null,
+    };
+    editing = true;
+  }
+
+  // Leaving "in bed" blank mirrors what the sync does: asleep + awake.
+  let derivedInBed = $derived(
+    num(form.asleep) != null || num(form.awake) != null
+      ? (num(form.asleep) ?? 0) + (num(form.awake) ?? 0)
+      : null
+  );
+  let effectiveInBed = $derived(num(form.inbed) ?? derivedInBed);
+  let formLight = $derived(
+    num(form.asleep) != null ? num(form.asleep)! - (num(form.deep) ?? 0) - (num(form.rem) ?? 0) : null
+  );
+
+  // Blocking: values that can't be stored. Warnings: values that are merely odd,
+  // which still save — a stage breakdown that doesn't quite add up is better
+  // than no record of the night at all.
+  let formErrors = $derived.by(() => {
+    const errs: string[] = [];
+    const fields: [string, number | null][] = [
+      ['Time in bed', num(form.inbed)], ['Time asleep', num(form.asleep)],
+      ['REM', num(form.rem)], ['Deep', num(form.deep)], ['Awake', num(form.awake)],
+    ];
+    for (const [label, v] of fields) {
+      if (v != null && v < 0) errs.push(`${label} can't be negative.`);
+      if (v != null && v > 24) errs.push(`${label} can't be more than 24 hours.`);
+    }
+    return errs;
+  });
+
+  let formWarnings = $derived.by(() => {
+    const warns: string[] = [];
+    if (formLight != null && formLight < -0.05) warns.push('Deep + REM add up to more than the time asleep.');
+    const inBed = effectiveInBed, asleep = num(form.asleep);
+    if (inBed != null && asleep != null && asleep > inBed + 0.05) warns.push('Time asleep is longer than time in bed.');
+    return warns;
+  });
+
+  let formEmpty = $derived(
+    num(form.inbed) == null && num(form.asleep) == null && num(form.rem) == null &&
+    num(form.deep) == null && num(form.awake) == null
+  );
+
+  async function saveBreakdown() {
+    if (formErrors.length > 0) return;
+    saving = true;
+    try {
+      await invoke('upsert_sleep_breakdown', {
+        breakdown: {
+          log_date: selectedDate,
+          sleep_time_head_on_pillow: effectiveInBed,
+          sleep_actual_asleep: num(form.asleep),
+          sleep_rem: num(form.rem),
+          sleep_deep: num(form.deep),
+          sleep_awake: num(form.awake),
+        },
+      });
+      await loadLogs();
+      editing = false;
+      showToast(formEmpty ? 'Cleared — the watch sync owns this night again' : 'Sleep breakdown saved');
+    } catch (e) {
+      showToast(`Couldn't save sleep: ${e}`, 'error');
+    } finally {
+      saving = false;
+    }
+  }
 </script>
 
 <div class="page-header">
@@ -101,19 +216,109 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>
     </div>
+    <button class="manual-btn" onclick={openEditor} disabled={editing}>
+      {currentLog ? 'Edit sleep' : 'Enter manually'}
+    </button>
   </div>
 </div>
+
+{#if editing}
+  <div class="card editor-card">
+    <div class="card-heading-row">
+      <div>
+        <div class="card-title">Sleep breakdown · {formatDateLong(selectedDate)}</div>
+        <div class="card-subtitle">For nights the watch sync missed or got wrong. Leave a field blank to clear it. Sleep ratings live on the Daily Log page.</div>
+      </div>
+      {#if isManual}
+        <span class="manual-badge">Manual</span>
+      {/if}
+    </div>
+
+    <div class="field-grid">
+      <div class="text-field">
+        <label for="f-asleep">Time asleep</label>
+        <div class="input-unit">
+          <input id="f-asleep" type="number" min="0" max="24" step="0.1" bind:value={form.asleep} placeholder="—" />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+      <div class="text-field">
+        <label for="f-awake">Awake</label>
+        <div class="input-unit">
+          <input id="f-awake" type="number" min="0" max="24" step="0.1" bind:value={form.awake} placeholder="—" />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+      <div class="text-field">
+        <label for="f-inbed">Time in bed <span class="label-hint">· optional</span></label>
+        <div class="input-unit">
+          <input id="f-inbed" type="number" min="0" max="24" step="0.1" bind:value={form.inbed} placeholder={derivedInBed != null ? derivedInBed.toFixed(1) : '—'} />
+          <span class="unit-label">h</span>
+        </div>
+        <div class="field-hint">Blank = asleep + awake{derivedInBed != null ? ` (${derivedInBed.toFixed(1)}h)` : ''}</div>
+      </div>
+      <div class="text-field">
+        <label for="f-deep">Deep</label>
+        <div class="input-unit">
+          <input id="f-deep" type="number" min="0" max="24" step="0.1" bind:value={form.deep} placeholder="—" />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+      <div class="text-field">
+        <label for="f-rem">REM</label>
+        <div class="input-unit">
+          <input id="f-rem" type="number" min="0" max="24" step="0.1" bind:value={form.rem} placeholder="—" />
+          <span class="unit-label">h</span>
+        </div>
+      </div>
+      <div class="text-field">
+        <span class="pseudo-label">Light <span class="label-hint">· calculated</span></span>
+        <div class="computed-box">{formLight != null ? formLight.toFixed(1) : '—'}<span class="unit-label"> h</span></div>
+        <div class="field-hint">Asleep − deep − REM</div>
+      </div>
+    </div>
+
+    {#each formErrors as err}
+      <div class="form-msg error">{err}</div>
+    {/each}
+    {#each formWarnings as warn}
+      <div class="form-msg warn">{warn}</div>
+    {/each}
+
+    <div class="editor-footer">
+      <span class="editor-note">
+        {#if formEmpty}
+          Saving with every field blank hands this night back to the watch sync.
+        {:else}
+          Saved values stick — a later watch sync won't overwrite them.
+        {/if}
+      </span>
+      <div class="editor-actions">
+        <button class="cancel-btn" onclick={() => (editing = false)} disabled={saving}>Cancel</button>
+        <button class="save-btn" onclick={saveBreakdown} disabled={saving || formErrors.length > 0}>
+          {saving ? 'Saving…' : 'Save breakdown'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if loading}
   <p class="loading-text">Loading...</p>
 {:else if !currentLog}
   <div class="empty-card">
     <p>No sleep data recorded for this date.</p>
+    {#if !editing}
+      <button class="save-btn" onclick={openEditor}>Enter it manually</button>
+    {/if}
   </div>
 {:else}
   <div class="last-night-card">
     <div class="last-night-left">
-      <div class="section-label">Last night · sleep score</div>
+      <div class="section-label">
+        Last night · sleep score
+        {#if isManual}<span class="manual-badge" title="Typed in by hand — the watch sync won't overwrite it">Manual</span>{/if}
+      </div>
       <div class="big-hours">{scoreVal != null ? scoreVal.toFixed(1) : '—'}<span class="big-unit"> /10</span></div>
       <div class="last-night-sub">{timeInBed != null ? timeInBed.toFixed(1) : '—'}h in bed · {currentLog.sleep_actual_asleep != null ? currentLog.sleep_actual_asleep.toFixed(1) : '—'}h asleep</div>
     </div>
@@ -238,7 +443,34 @@
   .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
   .day-label { font-weight:700; font-size:13px; padding:0 6px; min-width:108px; text-align:center; }
   .loading-text { color:var(--ts); padding:32px; text-align:center; }
-  .empty-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:32px; box-shadow:var(--shadow); text-align:center; color:var(--ts); }
+  .empty-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:32px; box-shadow:var(--shadow); text-align:center; color:var(--ts); display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .manual-btn { background:var(--card); border:1px solid var(--border); color:var(--ts); border-radius:999px; padding:9px 14px; font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .manual-btn:disabled { color:var(--tm); cursor:default; }
+  .manual-badge { display:inline-block; margin-left:8px; font-size:9.5px; letter-spacing:.06em; font-weight:800; color:var(--accent-fg); background:var(--accent-soft); border-radius:999px; padding:2px 8px; vertical-align:middle; }
+
+  .card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:18px; }
+  .editor-card { margin-bottom:16px; }
+  .card-heading-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+  .field-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+  .text-field { display:flex; flex-direction:column; gap:8px; }
+  .text-field label, .pseudo-label { font-size:13.5px; font-weight:600; color:var(--tp); }
+  .label-hint { font-weight:500; color:var(--tm); font-size:11.5px; }
+  .field-hint { font-size:11px; color:var(--tm); }
+  .input-unit { display:flex; align-items:center; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:4px 6px; }
+  .input-unit input { width:100%; background:transparent; border:none; padding:7px; font-size:13.5px; color:var(--tp); font-variant-numeric:tabular-nums; }
+  .unit-label { font-size:12px; color:var(--tm); padding-right:8px; white-space:nowrap; }
+  .computed-box { display:flex; align-items:center; border:1px dashed var(--border); border-radius:12px; padding:11px 13px; font-size:13.5px; color:var(--ts); font-variant-numeric:tabular-nums; }
+
+  .form-msg { font-size:12.5px; border-radius:12px; padding:9px 13px; }
+  .form-msg.error { color:var(--amber-fg); background:var(--inset); border:1px solid var(--amber); }
+  .form-msg.warn { color:var(--ts); background:var(--inset); border:1px solid var(--border); }
+
+  .editor-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .editor-note { font-size:11.5px; color:var(--tm); }
+  .editor-actions { display:flex; align-items:center; gap:10px; }
+  .cancel-btn { background:transparent; border:1px solid var(--border); color:var(--ts); border-radius:999px; padding:10px 18px; font-size:13px; font-weight:600; cursor:pointer; }
+  .save-btn { background:var(--accent); color:#fff; border:none; border-radius:999px; padding:11px 22px; font-size:13.5px; font-weight:700; cursor:pointer; }
+  .save-btn:disabled { opacity:.55; cursor:not-allowed; }
 
   .last-night-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; gap:28px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
   .last-night-left { display:flex; flex-direction:column; gap:3px; min-width:120px; }

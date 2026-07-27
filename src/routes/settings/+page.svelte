@@ -138,6 +138,11 @@
       const r: any = await invoke('import_health_csv', { root: csvRoot, full });
       lastSync = r.last_sync;
       syncMsg = `Synced ${r.days_updated} day${r.days_updated === 1 ? '' : 's'} from ${r.files_processed} file${r.files_processed === 1 ? '' : 's'} (${r.files_skipped} unchanged). Steps ${r.steps_days}, HR ${r.hr_days}, sleep ${r.sleep_days}, energy ${r.energy_days}.`;
+      // Manual sleep entries win over the watch — say so rather than counting
+      // those nights as synced.
+      if (r.sleep_kept_manual > 0) {
+        syncMsg += ` Kept your manual sleep entry on ${r.sleep_kept_manual} night${r.sleep_kept_manual === 1 ? '' : 's'}.`;
+      }
       if (r.errors && r.errors.length) {
         syncErr = true;
         syncMsg += ` · ${r.errors.length} issue(s): ${r.errors.slice(0, 3).join('; ')}`;

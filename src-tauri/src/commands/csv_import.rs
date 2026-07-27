@@ -34,6 +34,8 @@ pub struct CsvImportResult {
     pub steps_days: i64,
     pub hr_days: i64,
     pub sleep_days: i64,
+    /// Nights the CSV had sleep for, but the Sleep page's manual entry won.
+    pub sleep_kept_manual: i64,
     pub energy_days: i64,
     pub errors: Vec<String>,
     pub last_sync: String,
@@ -222,6 +224,21 @@ pub async fn import_health_csv(
     }
 
     // ── Upsert ──
+    // Days whose breakdown was typed in on the Sleep page keep it; upsert_day
+    // enforces that, and this counts them so the sync can say what it left alone
+    // rather than silently reporting a night as synced.
+    let manual_dates: std::collections::HashSet<String> =
+        sqlx::query_scalar::<_, String>("SELECT log_date FROM daily_logs WHERE sleep_source = 'manual'")
+            .fetch_all(&*pool)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    let sleep_kept_manual = days
+        .iter()
+        .filter(|(date, a)| a.sleep_actual_asleep.is_some() && manual_dates.contains(*date))
+        .count() as i64;
+
     let days_updated = days.len() as i64;
     for (date, a) in &days {
         if let Err(e) = upsert_day(&pool, date, a).await {
@@ -242,6 +259,7 @@ pub async fn import_health_csv(
         steps_days,
         hr_days,
         sleep_days,
+        sleep_kept_manual,
         energy_days,
         errors,
         last_sync,
@@ -410,6 +428,9 @@ fn agg_sleep(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Resu
 }
 
 async fn upsert_day(pool: &SqlitePool, date: &str, a: &DayAgg) -> Result<(), String> {
+    // A day the user filled in by hand keeps its sleep breakdown: the CASE below
+    // holds the five sleep columns at their stored values when sleep_source is
+    // 'manual'. Everything else on the row (steps, HR, energy) still syncs.
     sqlx::query(
         "INSERT INTO daily_logs (log_date, steps, activity_calories, ave_hr, hr_min, hr_max,
             sleep_actual_asleep, sleep_rem, sleep_deep, sleep_awake, sleep_time_head_on_pillow, updated_at)
@@ -420,11 +441,21 @@ async fn upsert_day(pool: &SqlitePool, date: &str, a: &DayAgg) -> Result<(), Str
             ave_hr=COALESCE(excluded.ave_hr, daily_logs.ave_hr),
             hr_min=COALESCE(excluded.hr_min, daily_logs.hr_min),
             hr_max=COALESCE(excluded.hr_max, daily_logs.hr_max),
-            sleep_actual_asleep=COALESCE(excluded.sleep_actual_asleep, daily_logs.sleep_actual_asleep),
-            sleep_rem=COALESCE(excluded.sleep_rem, daily_logs.sleep_rem),
-            sleep_deep=COALESCE(excluded.sleep_deep, daily_logs.sleep_deep),
-            sleep_awake=COALESCE(excluded.sleep_awake, daily_logs.sleep_awake),
-            sleep_time_head_on_pillow=COALESCE(excluded.sleep_time_head_on_pillow, daily_logs.sleep_time_head_on_pillow),
+            sleep_actual_asleep=CASE WHEN COALESCE(daily_logs.sleep_source,'')='manual'
+                THEN daily_logs.sleep_actual_asleep
+                ELSE COALESCE(excluded.sleep_actual_asleep, daily_logs.sleep_actual_asleep) END,
+            sleep_rem=CASE WHEN COALESCE(daily_logs.sleep_source,'')='manual'
+                THEN daily_logs.sleep_rem
+                ELSE COALESCE(excluded.sleep_rem, daily_logs.sleep_rem) END,
+            sleep_deep=CASE WHEN COALESCE(daily_logs.sleep_source,'')='manual'
+                THEN daily_logs.sleep_deep
+                ELSE COALESCE(excluded.sleep_deep, daily_logs.sleep_deep) END,
+            sleep_awake=CASE WHEN COALESCE(daily_logs.sleep_source,'')='manual'
+                THEN daily_logs.sleep_awake
+                ELSE COALESCE(excluded.sleep_awake, daily_logs.sleep_awake) END,
+            sleep_time_head_on_pillow=CASE WHEN COALESCE(daily_logs.sleep_source,'')='manual'
+                THEN daily_logs.sleep_time_head_on_pillow
+                ELSE COALESCE(excluded.sleep_time_head_on_pillow, daily_logs.sleep_time_head_on_pillow) END,
             updated_at=datetime('now')",
     )
     .bind(date)

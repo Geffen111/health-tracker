@@ -17,6 +17,8 @@ pub fn run() {
             commands::daily_log::get_daily_log,
             commands::daily_log::upsert_daily_log,
             commands::daily_log::list_daily_logs,
+            commands::daily_log::patch_daily_log,
+            commands::daily_log::upsert_sleep_breakdown,
             commands::medications::list_medications,
             commands::medications::create_medication,
             commands::medications::update_medication,

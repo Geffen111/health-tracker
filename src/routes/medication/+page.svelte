@@ -12,8 +12,6 @@
   let allDoses = $state<any[]>([]);   // every logged dose, for the history tree
   let loading = $state(true);
 
-  // Supplements (stored on the daily log) — toggled here, above today's doses.
-  let supplements = $state({ multivitamin: false, vitamin_c: false });
 
   let today = $state(todayISO());
   let selectedDate = $state(today);
@@ -47,12 +45,11 @@
 
   async function loadAll() {
     try {
-      const [meds, sched, hist, doses, dlog, all] = await Promise.all([
+      const [meds, sched, hist, doses, all] = await Promise.all([
         invoke<any[]>('list_medications'),
         invoke<any[]>('get_medication_schedule', { medicationId: null }),
         invoke<any[]>('get_medication_history', { medicationId: null }),
         invoke<any[]>('get_doses_for_date', { date: selectedDate }),
-        invoke<any>('get_daily_log', { date: selectedDate }),
         invoke<any[]>('get_all_doses'),
       ]);
       medications = meds;
@@ -60,22 +57,9 @@
       history = hist;
       todayDoses = doses;
       allDoses = all;
-      supplements.multivitamin = !!dlog?.multivitamin;
-      supplements.vitamin_c = !!dlog?.vitamin_c;
     } catch (e) {
       console.error('Error loading meds:', e);
     }
-  }
-
-  async function toggleSupplement(key: 'multivitamin' | 'vitamin_c') {
-    supplements[key] = !supplements[key];
-    await invoke('upsert_daily_log', {
-      log: {
-        log_date: selectedDate,
-        multivitamin: supplements.multivitamin,
-        vitamin_c: supplements.vitamin_c,
-      },
-    });
   }
 
   function isOccasional(m: any): boolean {
@@ -442,22 +426,6 @@
     </div>
 
     <div class="right-col">
-      <div class="supplements-card">
-        <div class="card-heading" style="margin-bottom:12px;">Supplements</div>
-        <div class="toggle-row">
-          <span>Multivitamin</span>
-          <button class="toggle" class:active={supplements.multivitamin} onclick={() => toggleSupplement('multivitamin')} aria-label="Toggle multivitamin">
-            <span class="toggle-knob"></span>
-          </button>
-        </div>
-        <div class="toggle-divider"></div>
-        <div class="toggle-row">
-          <span>Vitamin C</span>
-          <button class="toggle" class:active={supplements.vitamin_c} onclick={() => toggleSupplement('vitamin_c')} aria-label="Toggle vitamin C">
-            <span class="toggle-knob"></span>
-          </button>
-        </div>
-      </div>
       <div class="doses-card">
         <div class="doses-header">
           <span class="card-heading">Doses</span>
@@ -636,14 +604,6 @@
   .dose-cancel { background:transparent;border:none;color:var(--ts);font-size:12px;font-weight:600;cursor:pointer; }
 
   .right-col { display:flex; flex-direction:column; gap:16px; }
-  .supplements-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); padding:18px 20px; }
-  .toggle-row { display:flex; align-items:center; justify-content:space-between; }
-  .toggle-row span { font-size:13.5px; color:var(--tp); }
-  .toggle { width:46px; height:26px; border-radius:999px; background:var(--inset); border:1px solid var(--border); position:relative; cursor:pointer; padding:0; flex-shrink:0; }
-  .toggle.active { background:var(--accent); border-color:var(--accent); }
-  .toggle-knob { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:var(--card); box-shadow:0 1px 3px rgba(0,0,0,.12); transition:left .15s; }
-  .toggle.active .toggle-knob { left:22px; background:#fff; box-shadow:0 1px 3px rgba(0,0,0,.2); }
-  .toggle-divider { height:1px; background:var(--border); margin:12px 0; }
   .doses-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
   .doses-header { display:flex; justify-content:space-between; align-items:center; padding:16px 18px 12px; }
   .doses-date { font-size:11.5px; color:var(--tm); }

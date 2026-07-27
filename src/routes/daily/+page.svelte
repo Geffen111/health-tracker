@@ -1,7 +1,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { formatDate, formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
+  import { showToast } from '$lib/stores/toast.svelte';
 
   let today = $state(todayISO());
   let selectedDate = $state(today);
@@ -24,9 +25,21 @@
   let prevSteps = $state<number | null>(null);
   let prevCalories = $state<number | null>(null);
   let stepsDate = $derived(shiftISO(selectedDate, -1));
-  let saved = $state(false);
 
-  onMount(async () => loadDate(selectedDate));
+  onMount(() => {
+    void loadDate(selectedDate);
+    // A pending debounce would be lost if the window closed mid-edit.
+    window.addEventListener('beforeunload', flushSync);
+  });
+
+  // Leaving the page (nav link, app close) flushes whatever is still pending.
+  // The invoke outlives the component, so it lands even though nothing awaits it.
+  onDestroy(() => {
+    window.removeEventListener('beforeunload', flushSync);
+    void flush();
+  });
+
+  function flushSync() { void flush(); }
 
   // A fresh day starts at 0 fatigue / 0 headache (not blank), and every other
   // field clears — so navigating to a day with no entry never shows the previous
@@ -49,6 +62,7 @@
   }
 
   async function loadDate(date: string) {
+    loaded = false;
     Object.assign(log, freshLog(date));
     try {
       const existing = await invoke('get_daily_log', { date });
@@ -65,37 +79,141 @@
       prevSteps = p?.steps ?? null;
       prevCalories = p?.activity_calories ?? null;
     } catch { prevSteps = null; prevCalories = null; }
+    // Everything the autosave watches is now in place — anything that changes
+    // from here is a real edit.
+    baseline = snapshot();
+    stepsBaseline = stepsSnapshot();
+    loaded = true;
   }
 
-  async function save() {
-    log.log_date = selectedDate;
+  // ── Autosave ──────────────────────────────────────────────────────────────
+  // Every field saves itself; there is no Save button. Edits are debounced while
+  // you type, and flushed immediately whenever you leave a field, change day, or
+  // leave the page — so nothing typed can be lost by navigating away.
+
+  const DEBOUNCE_MS = 700;
+
+  let saveState = $state<'clean' | 'pending' | 'saving' | 'saved' | 'error'>('clean');
+  let loaded = $state(false);
+  let baseline = '';
+  let stepsBaseline = '';
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight: Promise<void> | null = null;
+  let savedTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Identity of the editable state. The $effect below reads it, so touching any
+  // field re-runs the effect; comparing against `baseline` tells a real edit
+  // apart from loadDate() populating the form.
+  function snapshot() {
+    return JSON.stringify([
+      log.fatigue_rating, log.fatigue_desc, log.headache_rating, log.headache_desc,
+      log.headache_duration_hours, log.my_sleep_rating, log.phone_sleep_rating,
+      log.alcohol_std_drinks, log.notes, symptomList, prevSteps, prevCalories,
+    ]);
+  }
+
+  // Steps/calories live on the *previous* day's row. Tracked separately so an
+  // edit here never writes an otherwise-empty row for a day you didn't touch.
+  function stepsSnapshot() {
+    return JSON.stringify([prevSteps, prevCalories]);
+  }
+
+  $effect(() => {
+    const snap = snapshot();
+    if (!loaded || snap === baseline) return;
+    scheduleSave();
+  });
+
+  function scheduleSave() {
+    if (timer) clearTimeout(timer);
+    saveState = 'pending';
+    timer = setTimeout(() => { timer = null; void doSave(); }, DEBOUNCE_MS);
+  }
+
+  /// Save now rather than at the end of the debounce. Safe to call when nothing
+  /// is pending.
+  async function flush() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (loaded && snapshot() !== baseline) await doSave();
+    if (inFlight) await inFlight;
+  }
+
+  async function doSave() {
+    // Serialise: a second save must not overtake the first and lose its write.
+    if (inFlight) await inFlight;
+
+    const date = selectedDate;
+    const stepsFor = shiftISO(date, -1);
+    const snap = snapshot();
+    const stepsSnap = stepsSnapshot();
+    const stepsChanged = stepsSnap !== stepsBaseline;
     // Sleep Score Avg = mean of my rating and the Samsung score; if only one is
     // present, use that. Stored so the dashboard and PEM model read one field.
     const m = log.my_sleep_rating, p = log.phone_sleep_rating;
-    log.sleep_avg = (m != null && p != null) ? (m + p) / 2 : (m ?? p ?? null);
-    // Persist the symptom chips back to the single other_symptoms field.
-    log.other_symptoms = symptomList.join(', ');
-    await invoke('upsert_daily_log', { log });
-    // Steps & active calories are full-day metrics → the previous day's row.
-    await invoke('upsert_daily_log', { log: { log_date: stepsDate, steps: prevSteps, activity_calories: prevCalories } });
-    saved = true;
-    setTimeout(() => saved = false, 2000);
+    const sleepAvg = (m != null && p != null) ? (m + p) / 2 : (m ?? p ?? null);
+
+    saveState = 'saving';
+    const run = (async () => {
+      await invoke('patch_daily_log', {
+        date,
+        fields: {
+          fatigue_rating: log.fatigue_rating ?? null,
+          fatigue_desc: log.fatigue_desc ?? '',
+          headache_rating: log.headache_rating ?? null,
+          headache_desc: log.headache_desc ?? '',
+          headache_duration_hours: log.headache_duration_hours ?? null,
+          // The chips are stored as one comma-separated field.
+          other_symptoms: symptomList.join(', '),
+          my_sleep_rating: log.my_sleep_rating ?? null,
+          phone_sleep_rating: log.phone_sleep_rating ?? null,
+          sleep_avg: sleepAvg,
+          alcohol_std_drinks: log.alcohol_std_drinks ?? null,
+          notes: log.notes ?? '',
+        },
+      });
+      // Steps & active calories are full-day metrics → the previous day's row.
+      if (stepsChanged) {
+        await invoke('patch_daily_log', {
+          date: stepsFor,
+          fields: { steps: prevSteps ?? null, activity_calories: prevCalories ?? null },
+        });
+      }
+    })();
+    inFlight = run;
+
+    try {
+      await run;
+      log.log_date = date;
+      log.sleep_avg = sleepAvg;
+      // Anything edited while the save was in flight differs from `snap`, so the
+      // effect schedules a follow-up save on its own.
+      baseline = snap;
+      stepsBaseline = stepsSnap;
+      saveState = 'saved';
+      if (savedTimer) clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => { if (saveState === 'saved') saveState = 'clean'; }, 2000);
+    } catch (e) {
+      saveState = 'error';
+      showToast(`Couldn't save: ${e}`, 'error');
+    } finally {
+      if (inFlight === run) inFlight = null;
+    }
   }
 
-  function prevDay() {
-    selectedDate = shiftISO(selectedDate, -1);
-    loadDate(selectedDate);
+  // Leaving a field commits it immediately instead of waiting out the debounce.
+  function commitOnBlur() { void flush(); }
+
+  // Day navigation flushes first, so pending edits land on the day they were
+  // typed on rather than following you to the next one.
+  async function goToDate(date: string) {
+    await flush();
+    selectedDate = date;
+    await loadDate(date);
   }
 
-  function nextDay() {
-    selectedDate = shiftISO(selectedDate, 1);
-    loadDate(selectedDate);
-  }
-
-  function goToday() {
-    selectedDate = today;
-    loadDate(today);
-  }
+  function prevDay() { void goToDate(shiftISO(selectedDate, -1)); }
+  function nextDay() { void goToDate(shiftISO(selectedDate, 1)); }
+  function goToday() { void goToDate(today); }
 
   let symptomList = $state<string[]>([]);
 
@@ -136,10 +254,21 @@
       </button>
     </div>
     <button class="today-btn" onclick={goToday}>Today</button>
+    <span class="save-status" class:is-error={saveState === 'error'}>
+      {#if saveState === 'saving' || saveState === 'pending'}
+        Saving…
+      {:else if saveState === 'saved'}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+        Saved
+      {:else if saveState === 'error'}
+        Not saved — retrying on your next edit
+      {/if}
+    </span>
   </div>
 </div>
 
-<div class="two-col">
+<!-- Leaving any field commits it, so nothing waits on the debounce to survive. -->
+<div class="two-col" onfocusout={commitOnBlur}>
   <div class="left-col">
     <div class="card">
       <div class="card-heading">How you're feeling</div>
@@ -249,17 +378,6 @@
       </div>
     </div>
 
-    <div class="save-row">
-      {#if saved}
-        <span class="save-status">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-          All changes saved
-        </span>
-      {:else}
-        <span></span>
-      {/if}
-      <button class="save-btn" onclick={save}>Save day</button>
-    </div>
   </div>
 </div>
 
@@ -308,7 +426,7 @@
 
   .notes-area { width:100%; min-height:104px; resize:vertical; background:var(--inset); border:1px solid var(--border); border-radius:12px; padding:12px 13px; font-size:13.5px; color:var(--tp); line-height:1.55; }
 
-  .save-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-  .save-status { font-size:12px; color:var(--tm); display:flex; align-items:center; gap:6px; }
-  .save-btn { background:var(--accent); color:#fff; border:none; border-radius:999px; padding:11px 22px; font-size:13.5px; font-weight:700; cursor:pointer; }
+  /* Reserves its width so the header doesn't shift as the status changes. */
+  .save-status { font-size:12px; color:var(--tm); display:flex; align-items:center; gap:6px; min-width:132px; }
+  .save-status.is-error { color:var(--amber-fg); }
 </style>
