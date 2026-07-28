@@ -54,6 +54,21 @@
     { href: '/settings', label: 'Settings', svg: '<path d="M4 8h16M4 16h16"/><circle cx="14" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/>' },
   ];
 
+  // ── Window chrome ─────────────────────────────────────────────────────────
+  // The window is undecorated (`decorations: false`) and launches maximized, so
+  // this bar replaces the native one. It stays tucked above the top edge and
+  // slides down when the pointer reaches the first few pixels of the window.
+  //
+  // The window API is imported lazily inside the handlers: reaching for it at
+  // module scope throws outside Tauri (there's no `__TAURI_INTERNALS__`), which
+  // would take the whole app down when the frontend is opened in a browser.
+  async function winAction(action: 'minimize' | 'toggleMaximize' | 'close') {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow()[action]();
+    } catch {}
+  }
+
   // Collapsed (icons-only) sidebar, remembered across launches.
   let collapsed = $state(false);
   function toggleCollapse() {
@@ -84,6 +99,25 @@
 </svelte:head>
 
 <div class="app-layout" class:dark={theme.dark}>
+  <!-- Hover target is only a few pixels tall until the pointer enters it, so the
+       hidden bar never sits over the page and swallows clicks. -->
+  <div class="titlebar-zone">
+    <div class="titlebar" data-tauri-drag-region>
+      <span class="titlebar-title" data-tauri-drag-region>Health Tracker</span>
+      <div class="titlebar-buttons">
+        <button class="tb-btn" onclick={() => winAction('minimize')} aria-label="Minimise" title="Minimise">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M0 5h10"/></svg>
+        </button>
+        <button class="tb-btn" onclick={() => winAction('toggleMaximize')} aria-label="Maximise or restore" title="Maximise / restore">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.1"><rect x="0.6" y="0.6" width="8.8" height="8.8" rx="1"/></svg>
+        </button>
+        <button class="tb-btn is-close" onclick={() => winAction('close')} aria-label="Close" title="Close">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <aside class="sidebar" class:collapsed>
     <div class="sidebar-brand">
       <div class="brand-icon">
@@ -143,7 +177,7 @@
       </div>
     </div>
   </aside>
-  <main class="main-content">
+  <main class="main-content" class:wide={$page.url.pathname === '/daily'}>
     {@render children()}
   </main>
 </div>
@@ -430,5 +464,70 @@
     min-width: 0;
     max-width: 1180px;
     overflow-y: auto;
+  }
+  /* The Daily Log shows two days side by side, so it wants the width a
+     maximized window actually offers rather than the reading-width cap. */
+  .main-content.wide {
+    max-width: 1560px;
+  }
+
+  /* Undecorated window: this replaces the native title bar. Hidden above the top
+     edge, revealed by hovering the first few pixels of the window. */
+  .titlebar-zone {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 6px;
+    z-index: 900;
+  }
+  .titlebar-zone:hover {
+    height: 34px;
+  }
+  .titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 34px;
+    padding-left: 15px;
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    transform: translateY(-100%);
+    transition: transform 0.16s ease;
+  }
+  .titlebar-zone:hover .titlebar {
+    transform: none;
+  }
+  .titlebar-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ts);
+    letter-spacing: 0.01em;
+    pointer-events: none;
+  }
+  .titlebar-buttons {
+    display: flex;
+    height: 100%;
+  }
+  .tb-btn {
+    width: 44px;
+    height: 100%;
+    border: none;
+    background: transparent;
+    color: var(--ts);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .tb-btn:hover {
+    background: var(--accent-soft);
+    color: var(--accent-fg);
+  }
+  .tb-btn.is-close:hover {
+    background: var(--red);
+    color: #fff;
   }
 </style>

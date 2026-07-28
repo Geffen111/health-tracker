@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "health-tracker",
-        "width": 800,
-        "height": 600
+        "title": "Health Tracker",
+        "width": 1280,
+        "height": 860,
+        "maximized": true,
+        "decorations": false
       }
     ],
     "security": {
