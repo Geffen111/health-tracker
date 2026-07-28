@@ -1,7 +1,9 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { formatDate, todayISO, shiftISO, formatDateLong, weekdayIndex } from '$lib/formatDate';
+  import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { showToast } from '$lib/stores/toast.svelte';
   import { confirmAction } from '$lib/stores/confirm.svelte';
 
@@ -14,11 +16,11 @@
 
 
   let today = $state(todayISO());
-  let selectedDate = $state(today);
+  let selectedDate = $state(dateFromUrl($page.url));
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadAll(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadAll(); }
-  function goToday() { selectedDate = today; loadAll(); }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadAll(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadAll(); }
+  function goToday() { selectedDate = today; pushDate(selectedDate); loadAll(); }
 
   // Inline "log a dose" form, keyed by medication id.
   let openId = $state<number | null>(null);

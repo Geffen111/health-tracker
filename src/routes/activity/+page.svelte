@@ -1,11 +1,13 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
+  import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { computeDayLoad } from '$lib/load';
 
   let today = $state(todayISO());
-  let selectedDate = $state(today);
+  let selectedDate = $state(dateFromUrl($page.url));
   let categories = $state<any[]>([]);
   let activityTypes = $state<any[]>([]);
   let entries = $state<any[]>([]);
@@ -97,8 +99,8 @@
     await loadEntries();
   }
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadEntries(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadEntries(); }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadEntries(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadEntries(); }
 
   let loadBuckets = $derived.by(() => {
     const { phys, cog, sens, total } = computeDayLoad(entries, activityTypes, categories);

@@ -40,6 +40,12 @@ calamine). Register new commands in `src-tauri/src/lib.rs`.
 - Svelte 5: `<slot>` is deprecated — use `{@render children()}` (one warning remains in
   `+layout.svelte`).
 - Frontend calls the backend via `invoke('<command>', { ... })` from `@tauri-apps/api/core`.
+- **Date-scoped pages carry their day in `?date=YYYY-MM-DD`** (`$lib/dateParam.ts`): initialise
+  `selectedDate` with `dateFromUrl($page.url)` and call `pushDate()` from the day arrows, so a
+  link from one page to another lands on the same day. Link across with `dateHref()`.
+- **One editor per column.** The Daily Log owns entry for `daily_logs`; Cardio, Sleep and the
+  Dashboard display those fields read-only. Two autosaving editors for one column is how you
+  get edits that quietly revert.
 
 ## Workflow
 Git repo, `origin` = github.com/Geffen111/health-tracker. Solo project — commit and

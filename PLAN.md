@@ -52,6 +52,7 @@ PEM Model → risk predictions → Dashboard
 | 9 | Chart.js integration (replace static SVG trends with interactive charts) | ✅ Done 2026-06-27 — Chart.svelte wrapper, Dashboard compare-signals dual-line chart, Sleep 30-day selectable-metric chart, Dashboard sleep sparkline |
 
 | 10 | AI Ask + Insights (OpenRouter, like Family Finance) | ✅ Done 2026-06-27 — `/ask` route, NL→SQL `ask_question`, `get_insights`/`refresh_insights`, API key in Settings |
+| 11 | Entry restructure — day carried in `?date=`; Daily Log rebuilt as two dated columns (previous day + selected day) absorbing resting HR and BP; Cardio becomes analysis-only | ✅ Done 2026-07-28 |
 
 **AI integration (Phase 10):** OpenRouter (`deepseek/deepseek-v4-flash`), mirroring Family
 Finance. `commands/ai.rs` (shared client), `commands/ask.rs` (hybrid text-to-SQL — schema sent,

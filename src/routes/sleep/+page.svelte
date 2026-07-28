@@ -1,12 +1,14 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { formatDateLong, formatDateShort, todayISO, shiftISO } from '$lib/formatDate';
+  import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { showToast } from '$lib/stores/toast.svelte';
   import Chart from '$lib/Chart.svelte';
 
   let today = $state(todayISO());
-  let selectedDate = $state(today);
+  let selectedDate = $state(dateFromUrl($page.url));
   let logs = $state<any[]>([]);
   let loading = $state(true);
   let currentLog = $state<any>(null);
@@ -46,8 +48,8 @@
 
   // Changing day closes the editor rather than re-pointing a half-typed form at
   // a different night.
-  function prevDay() { editing = false; selectedDate = shiftISO(selectedDate, -1); }
-  function nextDay() { editing = false; selectedDate = shiftISO(selectedDate, 1); }
+  function prevDay() { editing = false; selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); }
+  function nextDay() { editing = false; selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); }
 
   let selectedMetric = $state('score');
 

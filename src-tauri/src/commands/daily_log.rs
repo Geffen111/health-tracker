@@ -82,8 +82,8 @@ pub async fn upsert_daily_log(
 const PATCHABLE: &[&str] = &[
     "day_name", "fatigue_desc", "fatigue_rating", "headache_desc", "headache_rating",
     "headache_duration_hours", "other_symptoms", "my_sleep_rating", "phone_sleep_rating",
-    "sleep_avg", "steps", "activity_calories", "alcohol_std_drinks", "multivitamin",
-    "vitamin_c", "add_meds", "compression_socks", "notes",
+    "sleep_avg", "steps", "activity_calories", "ave_resting_hr", "alcohol_std_drinks",
+    "multivitamin", "vitamin_c", "add_meds", "compression_socks", "notes",
 ];
 
 /// Build the upsert for a set of columns, rejecting any that isn't in

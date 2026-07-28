@@ -38,6 +38,16 @@ export function formatDateLong(dateStr: string | null | undefined): string {
   return `${dow} ${dd}/${mm}/${yy}`;
 }
 
+const MONTHS_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAYS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** "Monday 27 July 2026" — for headings where the day needs to be unmistakable. */
+export function formatDateFull(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—';
+  const d = parseDate(dateStr);
+  return `${DAYS_FULL[d.getDay()]} ${d.getDate()} ${MONTHS_FULL[d.getMonth()]} ${d.getFullYear()}`;
+}
+
 export function formatTime(timeStr: string | null | undefined): string {
   if (!timeStr) return '—';
   return timeStr;

@@ -1,10 +1,12 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { formatDate, formatDateLong, todayISO, shiftISO, weekdayIndex } from '$lib/formatDate';
+  import { dateFromUrl, pushDate } from '$lib/dateParam';
 
   let today = $state(todayISO());
-  let selectedDate = $state(today);
+  let selectedDate = $state(dateFromUrl($page.url));
   let saved = $state(false);
 
   // Defaults from Settings (full work day hours + which weekdays are work days).
@@ -51,11 +53,13 @@
 
   function prevDay() {
     selectedDate = shiftISO(selectedDate, -1);
+    pushDate(selectedDate);
     loadDate(selectedDate);
   }
 
   function nextDay() {
     selectedDate = shiftISO(selectedDate, 1);
+    pushDate(selectedDate);
     loadDate(selectedDate);
   }
 

@@ -1,23 +1,24 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { formatDateLong, formatDateShort, todayISO, shiftISO } from '$lib/formatDate';
+  import { dateFromUrl, pushDate, dateHref } from '$lib/dateParam';
   import Chart from '$lib/Chart.svelte';
 
   let today = $state(todayISO());
   let nowTime = new Date().toTimeString().slice(0, 5);
-  let selectedDate = $state(today);
+  let selectedDate = $state(dateFromUrl($page.url));
   let bpReadings = $state<any[]>([]);
   // The HR section always reports the day BEFORE the selected date. Today's synced
   // figures aren't complete until the day ends, and for consistency every selected
-  // day shows its prior day (the "Yesterday" label makes this explicit). Resting HR
-  // is entered against that same prior day, so stepping back a day shows the day
-  // before it — the value never appears to "copy" onto the previous day.
+  // day shows its prior day (the "Yesterday" label makes this explicit).
+  //
+  // Read-only: resting HR is typed on the Daily Log, in the full-day totals band of
+  // its previous-day column — the same date this card shows. Two autosaving editors
+  // for one column is how you get edits that quietly revert.
   let hrLog = $state<any>(null);
   let hrDate = $derived(shiftISO(selectedDate, -1));
-  // Resting HR isn't reliably populated by health sync, so it's manually editable.
-  let restingEdit = $state<number | null>(null);
-  let restingSaved = $state(false);
   let banner = $state(false);
   let calDays = $state<number | null>(null);
   let lastCal = $state<any>(null);
@@ -152,22 +153,7 @@
     try {
       const logs: any[] = await invoke('list_daily_logs', { limit: 30, offset: 0 });
       hrLog = logs.find((l: any) => l.log_date === hrDate) || null;
-      // Resting HR follows hrDate too, so all four HR tiles (and the card's
-      // "Yesterday" note) refer to the same day.
-      restingEdit = hrLog?.ave_resting_hr ?? null;
     } catch (e) { console.error('Error loading daily logs:', e); }
-  }
-
-  // Manually save resting HR for the day the HR card shows (hrDate = yesterday when
-  // viewing today), keeping it in step with the synced avg/min/max tiles.
-  async function saveResting() {
-    try {
-      const v = restingEdit === null || (restingEdit as any) === '' ? null : Math.round(Number(restingEdit));
-      await invoke('upsert_daily_log', { log: { log_date: hrDate, ave_resting_hr: v } });
-      await Promise.all([loadDailyLog(), loadHistory()]);
-      restingSaved = true;
-      setTimeout(() => restingSaved = false, 1500);
-    } catch (e) { console.error('Error saving resting HR:', e); }
   }
 
   async function loadCal() {
@@ -187,8 +173,8 @@
     } catch (e) { console.error('Error deleting calibration:', e); }
   }
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); loadBP(); loadDailyLog(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); loadBP(); loadDailyLog(); }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadBP(); loadDailyLog(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadBP(); loadDailyLog(); }
 
   async function addReading() {
     if (!nSys || !nDia) return;
@@ -322,11 +308,8 @@
     </div>
     <div class="hr-grid">
       <div class="hr-tile">
-        <div class="hr-tile-label">Resting <span class="hr-manual">· manual{restingSaved ? ' · saved' : ''}</span></div>
-        <div class="hr-edit">
-          <input class="hr-input" type="number" min="0" max="250" bind:value={restingEdit} onchange={saveResting} placeholder="—" aria-label="Resting heart rate" />
-          <span class="hr-unit">bpm</span>
-        </div>
+        <div class="hr-tile-label">Resting</div>
+        <div class="hr-tile-val">{hrLog?.ave_resting_hr ?? '—'}<span class="hr-unit"> bpm</span></div>
       </div>
       <div class="hr-tile">
         <div class="hr-tile-label">Average</div>
@@ -341,7 +324,11 @@
         <div class="hr-tile-val">{hrLog?.hr_max ?? '—'}<span class="hr-unit"> bpm</span></div>
       </div>
     </div>
-    <div class="hr-note">Today's heart-rate figures aren't complete until the day ends, so this shows the most recent full day. Min &amp; max come from the watch's continuous monitoring.</div>
+    <div class="hr-note">
+      Today's heart-rate figures aren't complete until the day ends, so this shows the most recent full day.
+      Min &amp; max come from the watch's continuous monitoring; resting HR is typed on the
+      <a class="hr-link" href={dateHref('/daily', selectedDate)}>Daily Log</a>.
+    </div>
   </div>
 </div>
 
@@ -470,11 +457,8 @@
   .hr-tile-label { font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--ts); }
   .hr-tile-val { font-family:'Source Serif 4',serif; font-size:25px; font-weight:600; color:var(--tp); }
   .hr-unit { font-size:12px; color:var(--tm); }
-  .hr-manual { font-size:9.5px; letter-spacing:0; text-transform:none; font-weight:600; color:var(--tm); }
-  .hr-edit { display:flex; align-items:baseline; gap:6px; margin-top:2px; }
-  .hr-input { width:70px; background:var(--card); border:1px solid var(--border); border-radius:9px; padding:4px 8px; font-family:'Source Serif 4',serif; font-size:22px; font-weight:600; color:var(--tp); font-variant-numeric:tabular-nums; }
-  .hr-input:focus { outline:none; border-color:var(--accent); }
   .hr-note { font-size:11.5px; color:var(--ts); line-height:1.5; }
+  .hr-link { color:var(--accent-fg); font-weight:700; text-decoration:none; }
 
   .cal-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); display:flex; align-items:center; gap:24px; flex-wrap:wrap; }
   .cal-icon { width:46px;height:46px;border-radius:13px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--accent); }
