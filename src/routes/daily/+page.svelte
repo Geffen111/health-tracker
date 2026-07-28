@@ -350,17 +350,21 @@
   </div>
 </div>
 
-{#snippet dayHeader(d: Day, col: string)}
+{#snippet dayHeader(d: Day, col: string, jumps: boolean)}
   <div class="day-head col-{col}">
     <div class="day-head-text">
       <span class="day-head-date">{formatDateFull(d.date)}</span>
       {#if relLabel(d.date)}<span class="day-head-rel">{relLabel(d.date)}</span>{/if}
     </div>
-    <div class="day-jump">
-      <a class="jump-btn" href={dateHref('/medication', d.date)}>Meds</a>
-      <a class="jump-btn" href={dateHref('/activity', d.date)}>Activity</a>
-      <a class="jump-btn" href={dateHref('/work', d.date)}>Work</a>
-    </div>
+    <!-- The selected day carries these as full-size tiles in the card below, so
+         it doesn't need them up here as well. -->
+    {#if jumps}
+      <div class="day-jump">
+        <a class="jump-btn" href={dateHref('/medication', d.date)}>Meds</a>
+        <a class="jump-btn" href={dateHref('/activity', d.date)}>Activity</a>
+        <a class="jump-btn" href={dateHref('/work', d.date)}>Work</a>
+      </div>
+    {/if}
   </div>
 {/snippet}
 
@@ -405,11 +409,23 @@
   </div>
 {/snippet}
 
-{#snippet intakeCard(d: Day, col: string)}
-  <div class="card col-{col}">
-    <div class="card-heading-row">
-      <span class="card-heading">Intake</span>
-      <span class="card-hint">running total</span>
+{#snippet todayCard(d: Day, col: string)}
+  <!-- Stretches to the totals card opposite, and the tiles absorb the slack —
+       otherwise this row leaves a hole in the selected day's column. -->
+  <div class="card is-stretch col-{col}">
+    <div class="quick-grid">
+      <a class="quick-btn" href={dateHref('/medication', d.date)}>
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="6" rx="3"/><path d="M12 9v6"/></svg>
+        <span>Medication</span>
+      </a>
+      <a class="quick-btn" href={dateHref('/activity', d.date)}>
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.5l2-6 3.5 12 2.5-6H21"/></svg>
+        <span>Activity</span>
+      </a>
+      <a class="quick-btn" href={dateHref('/work', d.date)}>
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8 7V5.5A1.5 1.5 0 0 1 9.5 4h5A1.5 1.5 0 0 1 16 5.5V7"/></svg>
+        <span>Work</span>
+      </a>
     </div>
 
     <div class="text-field">
@@ -554,12 +570,21 @@
 <!-- Leaving any field commits it, so nothing waits on the debounce to survive.
      Cards are emitted in row order (left, right, left, right …) so the grid keeps
      matching fields level across the two days. -->
+<div class="day-canvas">
+  <!-- Two washes behind the columns, on their own grid with the same tracks, so
+       each day reads as one block. Purely decorative — kept out of the card grid
+       so it can't disturb the row placement. -->
+  <div class="col-bg" aria-hidden="true">
+    <div class="bg-past"></div>
+    <div class="bg-today"></div>
+  </div>
+
 <div class="day-grid" onfocusout={commitOnBlur}>
-  {@render dayHeader(dayA, 'a')}
-  {@render dayHeader(dayB, 'b')}
+  {@render dayHeader(dayA, 'a', true)}
+  {@render dayHeader(dayB, 'b', false)}
 
   {@render totalsCard(dayA, 'a')}
-  {@render intakeCard(dayB, 'b')}
+  {@render todayCard(dayB, 'b')}
 
   {@render feelingCard(dayA, 'a')}
   {@render feelingCard(dayB, 'b')}
@@ -572,6 +597,7 @@
 
   {@render notesCard(dayA, 'a')}
   {@render notesCard(dayB, 'b')}
+</div>
 </div>
 
 <style>
@@ -587,7 +613,24 @@
 
   /* One grid, cards emitted in row order — a row is as tall as its taller card,
      so fatigue sits level with fatigue across the two days. */
-  .day-grid { display:grid; grid-template-columns:1fr 1.12fr; gap:16px; align-items:start; }
+  .day-canvas { position:relative; }
+  .day-grid { position:relative; z-index:1; display:grid; grid-template-columns:1fr 1.12fr; gap:16px; align-items:start; }
+
+  /* Same tracks as the card grid, so the washes land exactly under their column.
+     Each bleeds well past its outer edge and only slightly inward, leaving a
+     narrow gutter between the two blocks. */
+  .col-bg { position:absolute; inset:0; z-index:0; pointer-events:none; display:grid; grid-template-columns:1fr 1.12fr; gap:16px; }
+  .col-bg > div { border-radius:22px; }
+  .bg-past { margin:-16px -4px -16px -14px; background:var(--col-past); }
+  .bg-today { margin:-16px -14px -16px -4px; background:var(--col-today); }
+
+  .card.is-stretch { align-self:stretch; }
+
+  /* Fills the slack opposite the totals card, so the tiles grow to whatever the
+     row leaves rather than the row leaving a hole. */
+  .quick-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; flex:1; min-height:148px; }
+  .quick-btn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:11px; text-decoration:none; background:var(--inset); border:1px solid var(--border); border-radius:16px; color:var(--ts); font-size:12.5px; font-weight:700; transition:background .14s, color .14s, border-color .14s; }
+  .quick-btn:hover { background:var(--accent-soft); border-color:var(--accent); color:var(--accent-fg); }
 
   /* Kept to one line at the narrower of the two column widths, so the two day
      headings stay the same height as each other. */
@@ -659,5 +702,7 @@
     .day-grid { grid-template-columns:1fr; }
     .col-b { order:0; }
     .col-a { order:1; }
+    /* One column at a time — nothing left to tell apart. */
+    .col-bg { display:none; }
   }
 </style>

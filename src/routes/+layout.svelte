@@ -224,6 +224,9 @@
     --coral: #D48A6A; --coral-soft: #F3E4DC;
     --sky: #7AADC8; --sky-soft: #E0EEF5;
     --sidebar: #FBFDFC;
+    /* Washes behind a day column on the Daily Log — just enough separation to
+       read as two blocks without competing with the cards sitting on them. */
+    --col-past: rgba(37,51,47,.04); --col-today: rgba(79,140,129,.07);
     --shadow: 0 4px 16px rgba(40,65,60,.05); --shadow-lg: 0 6px 22px rgba(40,65,60,.08);
   }
 
@@ -241,6 +244,7 @@
     --coral: #E0A585; --coral-soft: rgba(224,165,133,.15);
     --sky: #94C2DA; --sky-soft: rgba(148,194,218,.15);
     --sidebar: #16201E;
+    --col-past: rgba(231,240,237,.035); --col-today: rgba(98,169,156,.10);
     --shadow: 0 4px 16px rgba(0,0,0,.28); --shadow-lg: 0 6px 22px rgba(0,0,0,.32);
   }
 
