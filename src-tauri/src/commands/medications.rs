@@ -274,15 +274,16 @@ pub async fn add_schedule_item(
     label: Option<String>,
     dose_amount: Option<f64>,
     time_of_day: Option<String>,
+    bulk_routine: Option<String>,
 ) -> Result<i64, String> {
     // Next free slot for this medication.
     let next: (i64,) = sqlx::query_as(
         "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM medication_schedule WHERE medication_id = ?")
         .bind(medication_id).fetch_one(&*pool).await.map_err(|e| e.to_string())?;
     sqlx::query(
-        "INSERT INTO medication_schedule (medication_id, sort_order, label, dose_amount, time_of_day)
-         VALUES (?, ?, ?, ?, ?)")
-        .bind(medication_id).bind(next.0).bind(&label).bind(dose_amount).bind(&time_of_day)
+        "INSERT INTO medication_schedule (medication_id, sort_order, label, dose_amount, time_of_day, bulk_routine)
+         VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(medication_id).bind(next.0).bind(&label).bind(dose_amount).bind(&time_of_day).bind(&bulk_routine)
         .execute(&*pool).await.map(|r| r.last_insert_rowid()).map_err(|e| e.to_string())
 }
 
@@ -293,10 +294,11 @@ pub async fn update_schedule_item(
     label: Option<String>,
     dose_amount: Option<f64>,
     time_of_day: Option<String>,
+    bulk_routine: Option<String>,
 ) -> Result<(), String> {
     sqlx::query(
-        "UPDATE medication_schedule SET label = ?, dose_amount = ?, time_of_day = ? WHERE id = ?")
-        .bind(&label).bind(dose_amount).bind(&time_of_day).bind(id)
+        "UPDATE medication_schedule SET label = ?, dose_amount = ?, time_of_day = ?, bulk_routine = ? WHERE id = ?")
+        .bind(&label).bind(dose_amount).bind(&time_of_day).bind(&bulk_routine).bind(id)
         .execute(&*pool).await.map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -374,5 +376,27 @@ pub async fn delete_dose(
     .execute(&*pool)
     .await
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ── Database Settings (Synced) ──
+
+#[tauri::command]
+pub async fn get_db_setting(pool: State<'_, SqlitePool>, key: String) -> Result<Option<String>, String> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT value FROM app_settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(row.map(|r| r.0))
+}
+
+#[tauri::command]
+pub async fn save_db_setting(pool: State<'_, SqlitePool>, key: String, value: String) -> Result<(), String> {
+    sqlx::query("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(key).bind(value)
+        .execute(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }

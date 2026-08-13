@@ -38,7 +38,7 @@
 
   // Schedule slot editing.
   let manageScheduleId = $state<number | null>(null);
-  let newSlot = $state({ label: '', dose_amount: '', time_of_day: '' });
+  let newSlot = $state({ label: '', dose_amount: '', time_of_day: '', bulk_routine: null as string | null });
 
   // Per-row actions (edit / pause / delete) live in a 3-dot menu so each med fits
   // on a single condensed row. Only one menu is open at a time.
@@ -51,18 +51,22 @@
 
   async function loadAll() {
     try {
-      const [meds, sched, hist, doses, all] = await Promise.all([
+      const [meds, sched, hist, doses, all, morningTime, eveningTime] = await Promise.all([
         invoke<any[]>('list_medications'),
         invoke<any[]>('get_medication_schedule', { medicationId: null }),
         invoke<any[]>('get_medication_history', { medicationId: null }),
         invoke<any[]>('get_doses_for_date', { date: selectedDate }),
         invoke<any[]>('get_all_doses'),
+        invoke<string | null>('get_db_setting', { key: 'morning_bulk_time' }),
+        invoke<string | null>('get_db_setting', { key: 'evening_bulk_time' }),
       ]);
       medications = meds;
       schedule = sched;
       history = hist;
       todayDoses = doses;
       allDoses = all;
+      dbMorningTime = morningTime || '07:00';
+      dbEveningTime = eveningTime || '20:00';
     } catch (e) {
       console.error('Error loading meds:', e);
     }
@@ -167,7 +171,7 @@
   // ── Schedule slot management ──
   function startManageSchedule(medId: number) {
     manageScheduleId = medId;
-    newSlot = { label: '', dose_amount: '', time_of_day: '' };
+    newSlot = { label: '', dose_amount: '', time_of_day: '', bulk_routine: null };
   }
 
   async function updateSlot(slot: any) {
@@ -176,6 +180,7 @@
       label: slot.label || null,
       doseAmount: slot.dose_amount ? parseFloat(slot.dose_amount) : null,
       timeOfDay: slot.time_of_day || null,
+      bulkRoutine: slot.bulk_routine || null,
     });
     schedule = await invoke('get_medication_schedule', { medicationId: null });
     showToast('Button updated');
@@ -187,8 +192,9 @@
       label: newSlot.label || null,
       doseAmount: newSlot.dose_amount ? parseFloat(newSlot.dose_amount) : null,
       timeOfDay: newSlot.time_of_day || null,
+      bulkRoutine: null,
     });
-    newSlot = { label: '', dose_amount: '', time_of_day: '' };
+    newSlot = { label: '', dose_amount: '', time_of_day: '', bulk_routine: null };
     schedule = await invoke('get_medication_schedule', { medicationId: null });
     showToast('Button added');
   }
@@ -249,6 +255,74 @@
     if (!ok) return;
     await invoke('delete_medication_history', { id });
     history = await invoke('get_medication_history', { medicationId: null });
+  }
+
+  // ── Bulk Add Routines ──
+  let dbMorningTime = $state('07:00');
+  let dbEveningTime = $state('20:00');
+  let editBulkId = $state<string | null>(null);
+  let editBulkTime = $state('');
+  
+  let useBulkId = $state<string | null>(null);
+  let useBulkTime = $state('');
+  let useBulkSlots = $state<any[]>([]);
+
+  function startEditBulk(routine: string) {
+    editBulkId = routine;
+    editBulkTime = routine === 'Morning' ? dbMorningTime : dbEveningTime;
+  }
+
+  async function saveEditBulk(routine: string) {
+    await invoke('save_db_setting', {
+      key: routine === 'Morning' ? 'morning_bulk_time' : 'evening_bulk_time',
+      value: editBulkTime,
+    });
+    if (routine === 'Morning') dbMorningTime = editBulkTime;
+    if (routine === 'Evening') dbEveningTime = editBulkTime;
+    editBulkId = null;
+    showToast('Bulk routine updated');
+  }
+
+  async function toggleSlotRoutine(slot: any, routine: string, active: boolean) {
+    slot.bulk_routine = active ? routine : null;
+    await invoke('update_schedule_item', {
+      id: slot.id,
+      label: slot.label || null,
+      doseAmount: slot.dose_amount ? parseFloat(slot.dose_amount) : null,
+      timeOfDay: slot.time_of_day || null,
+      bulkRoutine: slot.bulk_routine,
+    });
+    schedule = await invoke('get_medication_schedule', { medicationId: null });
+  }
+
+  function startUseBulk(routine: string) {
+    useBulkId = routine;
+    useBulkTime = routine === 'Morning' ? dbMorningTime : dbEveningTime;
+    // Deep clone the slots in this routine so we can locally edit doses/checked state
+    useBulkSlots = schedule
+      .filter((s) => s.bulk_routine === routine)
+      .map((s) => ({ ...s, checked: true, logAmount: s.dose_amount ?? medications.find((m) => m.id === s.medication_id)?.default_dose ?? '' }));
+  }
+
+  async function logBulk(routine: string) {
+    const toLog = useBulkSlots.filter(s => s.checked);
+    for (const slot of toLog) {
+      await invoke('upsert_dose', {
+        dose: {
+          medication_id: slot.medication_id,
+          log_date: selectedDate,
+          time_taken: useBulkTime || null,
+          dose_amount: slot.logAmount ? parseFloat(slot.logAmount) : null,
+          notes: null,
+        }
+      });
+    }
+    useBulkId = null;
+    [todayDoses, allDoses] = await Promise.all([
+      invoke<any[]>('get_doses_for_date', { date: selectedDate }),
+      invoke<any[]>('get_all_doses'),
+    ]);
+    showToast(`${toLog.length} doses logged`);
   }
 
   function getMedName(medId: number): string {
@@ -382,6 +456,113 @@
   {/if}
   <div class="med-layout">
     <div class="med-list-card">
+      <div class="section-divider">Typical doses - quick add</div>
+      <div class="med-row">
+        <div class="med-info"><span class="med-name" style="background:var(--inset);">Morning</span></div>
+        <div class="dose-buttons">
+          <button class="slot-btn" onclick={() => startUseBulk('Morning')}>Log Morning Doses</button>
+        </div>
+        <div class="med-menu">
+          <button class="icon-btn menu-trigger" onclick={() => startEditBulk('Morning')} aria-label="Edit routine">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
+        </div>
+      </div>
+      {#if editBulkId === 'Morning'}
+        <div class="schedule-edit">
+          <div class="schedule-header" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>Configure Morning Routine</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="dose-label" style="text-transform:none;">Default time</span>
+              <input type="time" bind:value={editBulkTime} class="edit-sm wide" />
+            </div>
+          </div>
+          {#each schedule as slot}
+            <div class="schedule-slot-row">
+              <input type="checkbox" checked={slot.bulk_routine === 'Morning'} onchange={(e) => toggleSlotRoutine(slot, 'Morning', e.currentTarget.checked)} style="margin-right:8px;" />
+              <span style="font-size:13px; font-weight:600; color:var(--tp); min-width:120px;">{getMedName(slot.medication_id)}</span>
+              <span style="font-size:12px; color:var(--ts);">{slot.label ?? 'Dose'}{slot.dose_amount != null ? ` ${slot.dose_amount}${getMedUnit(slot.medication_id)}` : ''}</span>
+            </div>
+          {/each}
+          <div class="schedule-actions">
+            <button class="dose-save" onclick={() => saveEditBulk('Morning')}>Save Configuration</button>
+            <button class="dose-cancel" onclick={() => editBulkId = null}>Cancel</button>
+          </div>
+        </div>
+      {/if}
+      {#if useBulkId === 'Morning'}
+        <div class="dose-inline">
+          <span class="dose-label">Logging Morning Doses</span>
+          {#each useBulkSlots as slot}
+            <div class="schedule-slot-row" style="width:100%;">
+              <input type="checkbox" bind:checked={slot.checked} style="margin-right:8px;" />
+              <span style="font-size:13px; font-weight:600; color:var(--tp); min-width:120px;">{getMedName(slot.medication_id)}</span>
+              <input bind:value={slot.logAmount} class="dose-input" style="margin-left:auto;" />
+              <span class="dose-unit">{getMedUnit(slot.medication_id)}</span>
+            </div>
+          {/each}
+          <div class="schedule-slot-row" style="width:100%; border-top:1px solid var(--border); padding-top:12px; margin-top:8px;">
+            <span class="dose-label">Time</span>
+            <input type="time" bind:value={useBulkTime} class="dose-input wide" />
+            <button class="dose-save" style="margin-left:auto;" onclick={() => logBulk('Morning')}>Add these medications</button>
+            <button class="dose-cancel" onclick={() => useBulkId = null}>Cancel</button>
+          </div>
+        </div>
+      {/if}
+
+      <div class="med-row">
+        <div class="med-info"><span class="med-name" style="background:var(--inset);">Evening</span></div>
+        <div class="dose-buttons">
+          <button class="slot-btn" onclick={() => startUseBulk('Evening')}>Log Evening Doses</button>
+        </div>
+        <div class="med-menu">
+          <button class="icon-btn menu-trigger" onclick={() => startEditBulk('Evening')} aria-label="Edit routine">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
+        </div>
+      </div>
+      {#if editBulkId === 'Evening'}
+        <div class="schedule-edit">
+          <div class="schedule-header" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>Configure Evening Routine</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span class="dose-label" style="text-transform:none;">Default time</span>
+              <input type="time" bind:value={editBulkTime} class="edit-sm wide" />
+            </div>
+          </div>
+          {#each schedule as slot}
+            <div class="schedule-slot-row">
+              <input type="checkbox" checked={slot.bulk_routine === 'Evening'} onchange={(e) => toggleSlotRoutine(slot, 'Evening', e.currentTarget.checked)} style="margin-right:8px;" />
+              <span style="font-size:13px; font-weight:600; color:var(--tp); min-width:120px;">{getMedName(slot.medication_id)}</span>
+              <span style="font-size:12px; color:var(--ts);">{slot.label ?? 'Dose'}{slot.dose_amount != null ? ` ${slot.dose_amount}${getMedUnit(slot.medication_id)}` : ''}</span>
+            </div>
+          {/each}
+          <div class="schedule-actions">
+            <button class="dose-save" onclick={() => saveEditBulk('Evening')}>Save Configuration</button>
+            <button class="dose-cancel" onclick={() => editBulkId = null}>Cancel</button>
+          </div>
+        </div>
+      {/if}
+      {#if useBulkId === 'Evening'}
+        <div class="dose-inline">
+          <span class="dose-label">Logging Evening Doses</span>
+          {#each useBulkSlots as slot}
+            <div class="schedule-slot-row" style="width:100%;">
+              <input type="checkbox" bind:checked={slot.checked} style="margin-right:8px;" />
+              <span style="font-size:13px; font-weight:600; color:var(--tp); min-width:120px;">{getMedName(slot.medication_id)}</span>
+              <input bind:value={slot.logAmount} class="dose-input" style="margin-left:auto;" />
+              <span class="dose-unit">{getMedUnit(slot.medication_id)}</span>
+            </div>
+          {/each}
+          <div class="schedule-slot-row" style="width:100%; border-top:1px solid var(--border); padding-top:12px; margin-top:8px;">
+            <span class="dose-label">Time</span>
+            <input type="time" bind:value={useBulkTime} class="dose-input wide" />
+            <button class="dose-save" style="margin-left:auto;" onclick={() => logBulk('Evening')}>Add these medications</button>
+            <button class="dose-cancel" onclick={() => useBulkId = null}>Cancel</button>
+          </div>
+        </div>
+      {/if}
+
       {#each [{ label: 'Regular', meds: regularMeds }, { label: 'Occasional', meds: occasionalMeds }, { label: 'Ceased', meds: ceasedMeds }] as section}
         {#if section.label !== 'Ceased' || section.meds.length > 0}
         <div class="section-divider">{section.label}</div>
@@ -472,7 +653,7 @@
                   <div class="schedule-slot-row">
                     <input bind:value={slot.label} placeholder="Label (e.g. Morning)" class="edit-sm wide" />
                     <input bind:value={slot.dose_amount} placeholder="Amount" class="edit-sm" />
-                    <input type="time" bind:value={slot.time_of_day} class="edit-sm" />
+                    <input type="time" bind:value={slot.time_of_day} class="edit-sm wide" />
                     <button class="icon-btn danger" onclick={() => deleteSlot(slot.id)} aria-label="Delete button">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
                     </button>
@@ -482,7 +663,7 @@
                 <div class="schedule-slot-row new">
                   <input bind:value={newSlot.label} placeholder="New label" class="edit-sm wide" />
                   <input bind:value={newSlot.dose_amount} placeholder="Amount" class="edit-sm" />
-                  <input type="time" bind:value={newSlot.time_of_day} class="edit-sm" />
+                  <input type="time" bind:value={newSlot.time_of_day} class="edit-sm wide" />
                   <button class="dose-save" onclick={() => addSlot(med.id)}>Add</button>
                 </div>
                 <div class="schedule-actions">

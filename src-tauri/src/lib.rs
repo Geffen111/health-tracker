@@ -36,6 +36,8 @@ pub fn run() {
             commands::medications::add_medication_history,
             commands::medications::update_medication_history,
             commands::medications::delete_medication_history,
+            commands::medications::get_db_setting,
+            commands::medications::save_db_setting,
             commands::watch_calibration::log_watch_calibration,
             commands::watch_calibration::list_watch_calibrations,
             commands::watch_calibration::delete_watch_calibration,

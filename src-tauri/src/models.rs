@@ -87,6 +87,7 @@ pub struct MedicationScheduleItem {
     pub label: Option<String>,
     pub dose_amount: Option<f64>,
     pub time_of_day: Option<String>,
+    pub bulk_routine: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
