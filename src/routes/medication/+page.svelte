@@ -36,6 +36,10 @@
   let histEditId = $state<number | null>(null);
   let histEdit = $state({ event_date: '', detail: '' });
 
+  // Schedule slot editing.
+  let manageScheduleId = $state<number | null>(null);
+  let newSlot = $state({ label: '', dose_amount: '', time_of_day: '' });
+
   // Per-row actions (edit / pause / delete) live in a 3-dot menu so each med fits
   // on a single condensed row. Only one menu is open at a time.
   let openMenuId = $state<number | null>(null);
@@ -158,6 +162,40 @@
     editId = null;
     await loadAll();
     showToast('Medication updated');
+  }
+
+  // ── Schedule slot management ──
+  function startManageSchedule(medId: number) {
+    manageScheduleId = medId;
+    newSlot = { label: '', dose_amount: '', time_of_day: '' };
+  }
+
+  async function updateSlot(slot: any) {
+    await invoke('update_schedule_item', {
+      id: slot.id,
+      label: slot.label || null,
+      doseAmount: slot.dose_amount ? parseFloat(slot.dose_amount) : null,
+      timeOfDay: slot.time_of_day || null,
+    });
+    schedule = await invoke('get_medication_schedule', { medicationId: null });
+    showToast('Button updated');
+  }
+
+  async function addSlot(medId: number) {
+    await invoke('add_schedule_item', {
+      medicationId: medId,
+      label: newSlot.label || null,
+      doseAmount: newSlot.dose_amount ? parseFloat(newSlot.dose_amount) : null,
+      timeOfDay: newSlot.time_of_day || null,
+    });
+    newSlot = { label: '', dose_amount: '', time_of_day: '' };
+    schedule = await invoke('get_medication_schedule', { medicationId: null });
+    showToast('Button added');
+  }
+
+  async function deleteSlot(slotId: number) {
+    await invoke('delete_schedule_item', { id: slotId });
+    schedule = await invoke('get_medication_schedule', { medicationId: null });
   }
 
   // Sub-label under a med name: "usual 5mg · 08:00", omitting absent parts so a
@@ -365,7 +403,7 @@
               <button class="dose-cancel" onclick={() => editId = null}>Cancel</button>
             </div>
           {:else}
-            <div class="med-row" class:dimmed={!med.active}>
+            <div class="med-row" class:dimmed={!med.active} class:menu-open={openMenuId === med.id}>
               <div class="med-info">
                 <span class="med-name" style={med.active ? `background:var(${medColor(med.id)}-soft);` : ''}>{med.name}</span>
                 {#if medDetail(med)}<div class="med-detail">{medDetail(med)}</div>{/if}
@@ -402,6 +440,12 @@
                         Restart
                       {/if}
                     </button>
+                    {#if med.active}
+                      <button class="menu-item" role="menuitem" onclick={() => { startManageSchedule(med.id); openMenuId = null; }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                        Manage buttons
+                      </button>
+                    {/if}
                     <button class="menu-item danger" role="menuitem" onclick={() => { removeMed(med); openMenuId = null; }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
                       Delete
@@ -419,6 +463,31 @@
                 <input type="time" bind:value={dosing[med.id].time} class="dose-input wide" />
                 <button class="dose-save" onclick={() => saveDose(med.id)}>Log dose</button>
                 <button class="dose-cancel" onclick={cancelDose}>Cancel</button>
+              </div>
+            {/if}
+            {#if manageScheduleId === med.id}
+              <div class="schedule-edit">
+                <div class="schedule-header">Quick-add buttons</div>
+                {#each slotsFor(med.id) as slot}
+                  <div class="schedule-slot-row">
+                    <input bind:value={slot.label} placeholder="Label (e.g. Morning)" class="edit-sm wide" />
+                    <input bind:value={slot.dose_amount} placeholder="Amount" class="edit-sm" />
+                    <input type="time" bind:value={slot.time_of_day} class="edit-sm" />
+                    <button class="icon-btn danger" onclick={() => deleteSlot(slot.id)} aria-label="Delete button">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                    </button>
+                    <button class="dose-save" onclick={() => updateSlot(slot)}>Save</button>
+                  </div>
+                {/each}
+                <div class="schedule-slot-row new">
+                  <input bind:value={newSlot.label} placeholder="New label" class="edit-sm wide" />
+                  <input bind:value={newSlot.dose_amount} placeholder="Amount" class="edit-sm" />
+                  <input type="time" bind:value={newSlot.time_of_day} class="edit-sm" />
+                  <button class="dose-save" onclick={() => addSlot(med.id)}>Add</button>
+                </div>
+                <div class="schedule-actions">
+                  <button class="dose-cancel" onclick={() => manageScheduleId = null}>Done</button>
+                </div>
               </div>
             {/if}
           {/if}
@@ -570,7 +639,9 @@
   .section-empty { font-size:12.5px; color:var(--tm); padding:4px 18px 12px; }
 
   .med-row { display:flex; align-items:center; gap:10px; padding:9px 18px; border-top:1px solid var(--border); }
+  .med-row.menu-open { position: relative; z-index: 51; }
   .med-row.dimmed { opacity:.6; }
+  .med-row.dimmed.menu-open { opacity: 1; }
   .med-info { flex:1; min-width:0; display:flex; flex-direction:row; align-items:baseline; gap:9px; flex-wrap:wrap; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); display:inline-block; padding:3px 9px; border-radius:7px; }
   .med-detail { font-size:11.5px; color:var(--tm); }
@@ -604,6 +675,13 @@
   .dose-unit { font-size:12px; color:var(--tm); }
   .dose-save { background:var(--accent);color:#fff;border:none;border-radius:999px;padding:8px 15px;font-size:12px;font-weight:700;cursor:pointer; }
   .dose-cancel { background:transparent;border:none;color:var(--ts);font-size:12px;font-weight:600;cursor:pointer; }
+
+  .schedule-edit { display:flex; flex-direction:column; gap:10px; padding:12px 18px; border-top:1px solid var(--border); background:var(--inset); }
+  .schedule-header { font-size:12px; font-weight:700; color:var(--ts); text-transform:uppercase; letter-spacing:0.05em; }
+  .schedule-slot-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .schedule-slot-row.new { margin-top:4px; padding-top:10px; border-top:1px dashed var(--border); }
+  .edit-sm.wide { flex:1; min-width:140px; }
+  .schedule-actions { display:flex; justify-content:flex-end; margin-top:4px; }
 
   .right-col { display:flex; flex-direction:column; gap:16px; }
   .doses-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
