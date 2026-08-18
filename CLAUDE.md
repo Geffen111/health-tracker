@@ -30,9 +30,9 @@ pnpm tauri dev
   runtime (`CARGO_MANIFEST_DIR` only exists on the build machine).
 
 ## Backend layout (`src-tauri/src/commands/`)
-`daily_log`, `medications` (+ dose logging), `blood_pressure`, `activity`, `pem`
-(risk model + calibration), `dashboard`, `import_xlsx` (one-time spreadsheet import via
-calamine). Register new commands in `src-tauri/src/lib.rs`.
+`daily_log`, `medications` (+ dose logging), `blood_pressure`, `activity`, `pacing`
+(descriptive activity/exertion history), `dashboard`, `import_xlsx` (one-time spreadsheet
+import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 
 ## Conventions / gotchas
 - Dates stored `YYYY-MM-DD`; spreadsheet dates are Excel serials (convert on import).
@@ -43,6 +43,11 @@ calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **Date-scoped pages carry their day in `?date=YYYY-MM-DD`** (`$lib/dateParam.ts`): initialise
   `selectedDate` with `dateFromUrl($page.url)` and call `pushDate()` from the day arrows, so a
   link from one page to another lands on the same day. Link across with `dateHref()`.
+- **Nothing predicts forward.** The PEM risk model and its next-day fatigue estimate were
+  removed in migration 20240622 after measuring no better than a constant (see PLAN.md).
+  Exertion has no measurable correlation with the next day's fatigue in this log, and low
+  activity *follows* a bad day rather than preceding it. Don't reintroduce a risk score,
+  crash flag or predicted-fatigue number without new evidence — describe, don't forecast.
 - **One editor per column.** The Daily Log owns entry for `daily_logs`; Cardio, Sleep and the
   Dashboard display those fields read-only. Two autosaving editors for one column is how you
   get edits that quietly revert.

@@ -15,8 +15,10 @@ pub struct DashboardSummary {
     pub sleep_last_30d: Option<f64>,
     pub steps_last_7d: Option<f64>,
     pub steps_last_30d: Option<f64>,
-    pub current_risk_band: Option<String>,
-    pub crash_count_30d: i64,
+    /// Days in the last 30 where fatigue was logged at 8 or worse. Replaces the old
+    /// `crash_count_30d`, which counted a modelled threshold breach rather than an
+    /// observed bad day (see migration 20240622).
+    pub bad_days_30d: i64,
     pub sick_leave_total: Option<f64>,
     pub headache_days_30d: i64,
 }
@@ -57,10 +59,7 @@ pub async fn get_dashboard_summary(pool: State<'_, SqlitePool>) -> Result<Dashbo
     let st30: Option<(Option<f64>,)> = sqlx::query_as("SELECT AVG(steps) FROM daily_logs WHERE steps IS NOT NULL AND log_date >= date('now', '-30 days')")
         .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
 
-    let risk: Option<(Option<String>,)> = sqlx::query_as("SELECT risk_band FROM pem_predictions WHERE log_date = date('now')")
-        .fetch_optional(&*pool).await.map_err(|e| e.to_string())?;
-
-    let crashes: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pem_predictions WHERE crash_flag = 1 AND log_date >= date('now', '-30 days')")
+    let bad_days: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM daily_logs WHERE fatigue_rating >= 8 AND log_date >= date('now', '-30 days')")
         .fetch_one(&*pool).await.map_err(|e| e.to_string())?;
 
     let sick: Option<(Option<f64>,)> = sqlx::query_as("SELECT SUM(sick_leave_hours) FROM daily_logs WHERE sick_leave_hours IS NOT NULL AND log_date >= date('now', '-30 days')")
@@ -81,8 +80,7 @@ pub async fn get_dashboard_summary(pool: State<'_, SqlitePool>) -> Result<Dashbo
         sleep_last_30d: s30.and_then(|r| r.0),
         steps_last_7d: st7.and_then(|r| r.0),
         steps_last_30d: st30.and_then(|r| r.0),
-        current_risk_band: risk.and_then(|r| r.0),
-        crash_count_30d: crashes.0,
+        bad_days_30d: bad_days.0,
         sick_leave_total: sick.and_then(|r| r.0),
         headache_days_30d: headaches.0,
     })

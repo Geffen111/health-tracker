@@ -21,7 +21,7 @@ Daily entries (steps, HR, sleep stages) auto-populated
       ↓
 DailySummary (category hours from ActivityLog)
       ↓
-PEM Model → risk predictions → Dashboard
+Pacing view → activity & fatigue history → Dashboard
 ```
 
 - **DB:** `%OneDrive%\Apps\HealthTracker\health.db` (OneDrive sync across devices); falls
@@ -53,6 +53,7 @@ PEM Model → risk predictions → Dashboard
 
 | 10 | AI Ask + Insights (OpenRouter, like Family Finance) | ✅ Done 2026-06-27 — `/ask` route, NL→SQL `ask_question`, `get_insights`/`refresh_insights`, API key in Settings |
 | 11 | Entry restructure — day carried in `?date=`; Daily Log rebuilt as two dated columns (previous day + selected day) absorbing resting HR and BP; Cardio becomes analysis-only | ✅ Done 2026-07-28 |
+| 12 | Retire the PEM risk model; `/pem-model` → `/pacing` (descriptive activity & fatigue history) | ✅ Done 2026-08-19 — see "Retired: the PEM risk model" below |
 
 **AI integration (Phase 10):** OpenRouter (`deepseek/deepseek-v4-flash`), mirroring Family
 Finance. `commands/ai.rs` (shared client), `commands/ask.rs` (hybrid text-to-SQL — schema sent,
@@ -136,53 +137,64 @@ upsert and is unaffected.)
   context. Awaiting Claude Design comps (`.dc.html` + screenshots + ICONS.md) to come back,
   then section B implementation.
 
-## PEM model formulas (Spreadsheet V5 — authoritative)
+## Retired: the PEM risk model (2026-08-19)
 
-```
-Physical Load (G) =
-  Pre-ActivityLog:  (Steps/2000)*0.4 + (Calories/500)*0.6
-  Post-ActivityLog: AVERAGE(base, activity_physical)   [÷3]
+The `predicted_pem_risk` score and the `predicted_next_day_fatigue` estimate were removed,
+along with `pem_predictions`, `pem_calibration` and the 33 calibration params. Migration
+`20240622_retire_pem_predictions.sql` carries the full rationale; the measurements, taken
+over the whole activity era (2026-05-08 → 08-18, 102 consecutive-day pairs — double the 52
+the June refit used):
 
-Cognitive Load (H) =
-  Pre:  (OfficeHrs*1.2 + WFHHrs*0.9)/3
-  Post: AVERAGE(base, activity_cognitive)              [÷3]
+| Predicting next-day fatigue | RMSE |
+|---|---|
+| Shipped model (in-sample) | 1.88 |
+| "Always guess the mean (5.9)" | 1.90 |
+| "Tomorrow = today" | 2.05 |
 
-Sensory/Social Load (I) =
-  Pre: 0
-  Post: activity_sensory_social / 3
+- Across 88 predictions the model emitted **Medium 66x, High 22x, Low 0x** against an actual
+  41 High / 40 Medium / 7 Low. It never once predicted a good day; output spanned 3.6–8.1
+  against an actual 2.5–9.5.
+- Correlation with next-day fatigue: today's fatigue +0.371, calories +0.098, work hours
+  +0.078, steps +0.077, sleep −0.062, high-energy hours −0.022, activity hours −0.097.
+  Every exertion input is noise.
+- **Reverse causation dominates.** Steps vs *same-day* fatigue is −0.222 and calories −0.270,
+  both stronger than any forward effect: low exertion follows a bad day rather than preceding
+  one, so a load→risk formula fights the sign.
+- `recovery_debt` was computed from the same day's `fatigue_rating`, so the 0.457 same-day
+  correlation that justified the June refit was largely self-reference.
+- Fatigue autocorrelation: +0.37 at lag 1, +0.19 at lag 2, −0.03 at lag 3. No recoverable
+  delayed-PEM structure at daily resolution.
+- Best honest model by leave-one-out CV is today's fatigue alone (CV R² 0.104, RMSE 1.73).
+  Too weak to display as a number, so nothing predicts forward any more.
 
-Sensitivity (J) = 1 + Fatigue/9
+This is a null result about **daily aggregates**, not about pacing. The likely reasons the
+signal is absent: pacing already compresses the exertion range, daily totals are too coarse
+for what triggers PEM, and reverse causation swamps the forward effect. A finer-grained
+record (an explicit "did I overdo it?" flag, or intensity peaks rather than daily sums) is
+the data-collection change that could carry signal — not another model on the same inputs.
 
-3-Day Weighted (K) = (G+H+I) * 0.55   [single day, no carry-forward]
+### What replaced it
 
-Recovery Debt (L) = MAX(0, K + fatigue_penalty - recovery_credit + active_penalty)
-  fatigue_penalty = MAX(0, Fatigue-5) * 0.2
-  recovery_credit = (10-Fatigue) * 0.14   [more credit when fatigue low]
-  active_penalty  = IF(Fatigue>=6, HighEnergyHours * 0.1, 0)
+`commands/pacing.rs` — `get_daily_loads` and `get_activity_history`, both purely descriptive
+and computed on demand (nothing is stored). Load is
+`duration x activity_categories.energy_weight x energy-cost factor` (Low 0.7 / Medium 1.0 /
+High 2.0), kept in step with `src/lib/load.ts` so a day reads the same everywhere.
 
-Threshold Penalty (M) = IF(L > 4.0, (L-4.0)^1.3, 0)
+The `/pem-model` route became `/pacing`:
+- Headline tiles — 7-day fatigue with week-on-week delta, 7-day activity hours, days since a
+  bad day (fatigue ≥ 8), bad days in the last 30.
+- **Activity over time** — stacked bars of hours per week or month, grouped by category or by
+  individual activity, with average fatigue overlaid on a right axis. The activity picker
+  ranks by *load*, not hours, so demanding work surfaces above screen time; chips isolate a
+  chosen few (e.g. Yard Work + Walking).
+- **Fatigue over time** — daily rating plus a 7-day rolling average.
+- **Signal check** — the correlations above, recomputed live from the log each time the page
+  opens, so the honesty survives as the data grows.
+- **Recent days** — 14 days of fatigue, hours, high-energy hours, steps and longest activity.
 
-Predicted PEM Risk (N) = MIN(10, (K*J + L*0.9 + M*1.1 + sleep_penalty) / 2.5)
-  sleep_penalty = MAX(0, 8 - SleepAvg) * 0.2
-
-Risk Band = N >= 4.5 → High, N >= 2 → Medium, else Low
-Crash Flag = M > 0   [threshold penalty exists; not transition detection]
-Next-Day Fatigue = 0.466 * Risk + 4.004
-```
-
-## Calibration parameters (33, stored in `pem_calibration`)
-
-Key values that differ from naive defaults:
-- `debt_persistence=0.55`, `recovery_credit=0.14`, `crash_threshold=4.0`, `threshold_exponent=1.3`
-- `fatigue_sensitivity_divisor=9.0`, `fatigue_load_penalty=0.2`, `risk_divisor=2.5`
-- `low_risk_band_cutoff=2.0`, `medium_risk_band_cutoff=4.5`
-- `energy_factor_low=0.7`, `medium=1.0`, `high=2.0`
-- `weight_physical_active=1.0`, `domestic=0.5`, `cognitive=1.4`, `hobby=0.5`, `social=0.6`, `screen=0.3`
-- `sleep_weight=0.2`, `sleep_baseline=8.0`
-- `fatigue_map_slope=0.466`, `intercept=4.004`, `prediction_range=1.6`
-- `steps_normaliser=2000`, `steps_weight=0.4`, `calories_normaliser=500`, `calories_weight=0.6`
-- `activity_log_start_date=46150` (Excel serial)
-- `high_energy_fatigued_multiplier=0.1`
+Dashboard: the risk gauge now shows today's *logged* fatigue; recovery debt became
+"Activity · last 7 days"; the "Risk · last 7 days" dots (which were **hardcoded**, not real
+data) became actual banded fatigue dots; `crash_count_30d` became `bad_days_30d`.
 
 ## Family Finance patterns to follow
 

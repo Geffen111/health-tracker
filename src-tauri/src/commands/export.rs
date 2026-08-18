@@ -1,15 +1,15 @@
 use crate::db::get_data_dir;
 use crate::models::{
     ActivityCategory, ActivityEntry, ActivityType, BloodPressure, DailyLog, Medication,
-    MedicationDose, MedicationHistoryEntry, PemCalibration, WatchCalibration,
+    MedicationDose, MedicationHistoryEntry, WatchCalibration,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-/// All source tables, fetched once and reused by both exporters. Derived data
-/// (pem_predictions) is regenerable via the PEM model, so it's not exported.
+/// All source tables, fetched once and reused by both exporters. Everything here is
+/// hand-entered or imported; nothing is derived, so an export round-trips the whole log.
 struct Tables {
     daily_logs: Vec<DailyLog>,
     medications: Vec<Medication>,
@@ -20,7 +20,6 @@ struct Tables {
     activity_types: Vec<ActivityType>,
     activity_log: Vec<ActivityEntry>,
     watch_calibration: Vec<WatchCalibration>,
-    pem_calibration: Vec<PemCalibration>,
 }
 
 async fn fetch_all(pool: &SqlitePool) -> Result<Tables, String> {
@@ -44,7 +43,6 @@ async fn fetch_all(pool: &SqlitePool) -> Result<Tables, String> {
         activity_types: q(pool, "SELECT * FROM activity_types ORDER BY id").await?,
         activity_log: q(pool, "SELECT * FROM activity_log ORDER BY log_date, id").await?,
         watch_calibration: q(pool, "SELECT * FROM watch_calibration ORDER BY cal_date, id").await?,
-        pem_calibration: q(pool, "SELECT * FROM pem_calibration ORDER BY id").await?,
     })
 }
 
@@ -84,7 +82,6 @@ pub async fn export_csv(pool: State<'_, SqlitePool>) -> Result<String, String> {
     write(&dir, "activity_types.csv", &t.activity_types)?;
     write(&dir, "activity_log.csv", &t.activity_log)?;
     write(&dir, "watch_calibration.csv", &t.watch_calibration)?;
-    write(&dir, "pem_calibration.csv", &t.pem_calibration)?;
 
     Ok(dir.to_string_lossy().to_string())
 }
@@ -106,7 +103,6 @@ pub async fn export_json(pool: State<'_, SqlitePool>) -> Result<String, String> 
         activity_types: &'a [ActivityType],
         activity_log: &'a [ActivityEntry],
         watch_calibration: &'a [WatchCalibration],
-        pem_calibration: &'a [PemCalibration],
     }
 
     let export = FullExport {
@@ -120,7 +116,6 @@ pub async fn export_json(pool: State<'_, SqlitePool>) -> Result<String, String> 
         activity_types: &t.activity_types,
         activity_log: &t.activity_log,
         watch_calibration: &t.watch_calibration,
-        pem_calibration: &t.pem_calibration,
     };
 
     let json = serde_json::to_string_pretty(&export).map_err(|e| e.to_string())?;

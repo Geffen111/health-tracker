@@ -1,0 +1,33 @@
+-- Retire the PEM risk model: drop the predictions and the parameters that fed them.
+--
+-- Why (analysis run 2026-08-19 over the full activity era, 2026-05-08 → 08-18,
+-- 102 consecutive-day pairs — double the 52 days the June refit used):
+--
+--   * predicted_next_day_fatigue scored RMSE 1.88 against actual next-day fatigue.
+--     "Always guess the mean (5.9)" scores 1.90. The model was 1% better than a
+--     constant — and that 1.88 is IN-SAMPLE, since the intercept/slope in migration
+--     20240615 were fitted on much of the same data.
+--   * Across 88 predictions it emitted Medium 66×, High 22×, Low 0×, while reality
+--     was 41 High / 40 Medium / 7 Low. It never once predicted a good day, and its
+--     output spanned 3.6–8.1 against an actual range of 2.5–9.5.
+--   * Every exertion input is uncorrelated with next-day fatigue: steps r=+0.08,
+--     activity hours r=-0.10, high-energy hours r=-0.02, sleep r=-0.06, work r=+0.08.
+--   * Reverse causation dominates. Steps vs SAME-day fatigue is r=-0.22 and calories
+--     r=-0.27 — both stronger than any forward effect. Low exertion follows a bad day
+--     rather than preceding one, so a load→risk formula is fighting the sign.
+--   * recovery_debt was computed from the same day's fatigue_rating (its penalty and
+--     credit terms), so the 0.46 same-day correlation that justified the June refit
+--     was largely self-reference, not signal.
+--   * Fatigue autocorrelation: +0.37 at 1 day, +0.19 at 2, -0.03 at 3. No recoverable
+--     multi-day delayed-PEM structure at daily resolution.
+--
+-- The best honest model is today's fatigue alone (CV R2 0.10, RMSE 1.73) — too weak
+-- to display as a number. Activity logging is kept and is now presented descriptively
+-- on the Pacing screen; nothing predicts forward any more.
+--
+-- Load weights survive in activity_categories.energy_weight (identical values to the
+-- old weight_* params), which the frontend already used, so pem_calibration has no
+-- remaining reader.
+
+DROP TABLE IF EXISTS pem_predictions;
+DROP TABLE IF EXISTS pem_calibration;

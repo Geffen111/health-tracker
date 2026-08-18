@@ -1,8 +1,8 @@
 export type Band = 'Low' | 'Medium' | 'High';
 
 /**
- * Band for a predicted fatigue score (0–10). Shared by the dashboard risk card
- * and the PEM page so the number and its Low/Medium/High label always agree.
+ * Band for a logged fatigue score (0–10). Shared by the dashboard and the Pacing
+ * page so a number and its Low/Medium/High label always agree.
  * Thresholds: Low 0–3, Medium 3.1–6, High 6.1–10.
  */
 export function fatigueBand(score: number | null | undefined): Band | null {

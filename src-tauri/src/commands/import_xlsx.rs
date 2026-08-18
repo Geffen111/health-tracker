@@ -18,7 +18,6 @@ pub async fn import_spreadsheet(
 
     let mut total_daily = 0;
     let mut total_activities = 0;
-    let mut total_calibration = 0;
     let mut errors: Vec<String> = Vec::new();
 
     // ── Sheet 1: Fatigue Log ──
@@ -62,42 +61,8 @@ pub async fn import_spreadsheet(
         }
     }
 
-    // ── Sheet 3: Calibration ──
-    // The PEM model (commands/pem.rs) reads ONLY canonical snake_case params
-    // (steps_weight, fatigue_from_debt_slope, debt_persistence, ...). Those params are
-    // seeded and tuned by migrations and edited in-app, so the DB — not the spreadsheet —
-    // is their source of truth. The Calibration sheet still uses the old human-readable
-    // names ("Steps weight (Physical Load)", "Fatigue-map slope", ...) whose values have
-    // since diverged from the CV-fitted canonical values. So we UPDATE existing params by
-    // name only and never INSERT: a spreadsheet row that doesn't match an existing param
-    // is skipped rather than added as a dead, never-read duplicate.
-    if let Ok(range) = workbook.worksheet_range("Calibration") {
-        for raw_row in range.rows() {
-            let row: Vec<calamine::Data> = raw_row.to_vec();
-            if row.len() < 2 {
-                continue;
-            }
-            let param_name = match &row[0] {
-                Data::String(s) => s.trim().to_string(),
-                _ => continue,
-            };
-            if param_name.is_empty() || param_name == "Parameter" {
-                continue;
-            }
-            if let Some(val) = row[1].get_float() {
-                let result = sqlx::query(
-                    "UPDATE pem_calibration SET param_value = ? WHERE param_name = ?"
-                )
-                .bind(val).bind(&param_name)
-                .execute(&*pool).await;
-                // Only count rows that matched an existing canonical param; unknown
-                // (e.g. legacy Title-Case) names affect zero rows and are skipped.
-                if matches!(result, Ok(r) if r.rows_affected() > 0) {
-                    total_calibration += 1;
-                }
-            }
-        }
-    }
+    // The spreadsheet's Calibration sheet is no longer read. It only ever fed the PEM
+    // risk model, which was retired in migration 20240622 along with pem_calibration.
 
     // Record the import
     sqlx::query(
@@ -105,15 +70,15 @@ pub async fn import_spreadsheet(
          VALUES ('xlsx_import', ?, ?, ?)"
     )
     .bind(path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
-    .bind(total_daily + total_activities + total_calibration)
+    .bind(total_daily + total_activities)
     .bind(errors.len() as i64)
     .execute(&*pool)
     .await
     .map_err(|e| e.to_string())?;
 
     let summary = format!(
-        "✅ Imported {} daily logs, {} activities, {} calibration params. {} errors.",
-        total_daily, total_activities, total_calibration, errors.len()
+        "✅ Imported {} daily logs, {} activities. {} errors.",
+        total_daily, total_activities, errors.len()
     );
 
     if errors.is_empty() {

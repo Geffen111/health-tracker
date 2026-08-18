@@ -49,7 +49,7 @@
     try {
       const count: any = await invoke('get_dashboard_summary');
       if (count?.date_count > 0) {
-        lastImportInfo = `${count.date_count} days, ${count.headache_days_30d} with headaches, ${count.crash_count_30d} crashes.`;
+        lastImportInfo = `${count.date_count} days, ${count.headache_days_30d} with headaches, ${count.bad_days_30d} at fatigue 8+.`;
       }
     } catch {}
     try {
@@ -398,11 +398,11 @@
 
   <div class="card row-card">
     <div>
-      <div class="card-heading">PEM calibration</div>
-      <div class="card-subtitle">33 model parameters — view on the PEM Model screen.</div>
+      <div class="card-heading">Pacing &amp; activity history</div>
+      <div class="card-subtitle">Activity over time, fatigue trends and the signal check.</div>
     </div>
-    <a href="/pem-model" class="nav-link">
-      Open PEM Model
+    <a href="/pacing" class="nav-link">
+      Open Pacing
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
     </a>
   </div>

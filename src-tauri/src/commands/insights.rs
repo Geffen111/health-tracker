@@ -65,12 +65,12 @@ struct Aggregates {
     avg_steps: Option<f64>,
     avg_resting_hr: Option<f64>,
     sick_leave_hours: f64,
-    pem_days: i64,
-    crash_days: i64,
-    avg_risk: Option<f64>,
-    high_band: i64,
-    medium_band: i64,
-    low_band: i64,
+    /// Observed bad days (fatigue >= 8) and good days (<= 4). These replace the old
+    /// modelled crash/risk-band counts, retired in migration 20240622.
+    bad_days: i64,
+    good_days: i64,
+    activity_hours: f64,
+    high_energy_hours: f64,
     activity_by_category: Vec<(String, f64)>,
     worst_days: Vec<(String, f64)>,
     fatigue_first_half: Option<f64>,
@@ -94,17 +94,24 @@ async fn aggregate(pool: &SqlitePool, start: &str, end: &str) -> Result<Aggregat
         .bind(start).bind(end)
         .fetch_one(pool).await.map_err(|e| format!("DB error stats: {}", e))?;
 
-    let pem: (i64, i64, Option<f64>, i64, i64, i64) = sqlx::query_as(
-        "SELECT COUNT(*),
-                CAST(COALESCE(SUM(CASE WHEN crash_flag = 1 THEN 1 ELSE 0 END), 0) AS INTEGER),
-                CAST(AVG(predicted_pem_risk) AS REAL),
-                CAST(COALESCE(SUM(CASE WHEN risk_band = 'High' THEN 1 ELSE 0 END), 0) AS INTEGER),
-                CAST(COALESCE(SUM(CASE WHEN risk_band = 'Medium' THEN 1 ELSE 0 END), 0) AS INTEGER),
-                CAST(COALESCE(SUM(CASE WHEN risk_band = 'Low' THEN 1 ELSE 0 END), 0) AS INTEGER)
-         FROM pem_predictions WHERE log_date >= ? AND log_date <= ?",
+    let days: (i64, i64) = sqlx::query_as(
+        "SELECT CAST(COALESCE(SUM(CASE WHEN fatigue_rating >= 8 THEN 1 ELSE 0 END), 0) AS INTEGER),
+                CAST(COALESCE(SUM(CASE WHEN fatigue_rating <= 4 THEN 1 ELSE 0 END), 0) AS INTEGER)
+         FROM daily_logs WHERE log_date >= ? AND log_date <= ?",
     )
     .bind(start).bind(end)
-    .fetch_one(pool).await.map_err(|e| format!("DB error pem: {}", e))?;
+    .fetch_one(pool).await.map_err(|e| format!("DB error day counts: {}", e))?;
+
+    let exertion: (f64, f64) = sqlx::query_as(
+        "SELECT CAST(COALESCE(SUM(al.duration_hours), 0) AS REAL),
+                CAST(COALESCE(SUM(CASE WHEN COALESCE(al.energy_cost, at.default_energy_cost) = 'High'
+                     THEN al.duration_hours END), 0) AS REAL)
+         FROM activity_log al
+         JOIN activity_types at ON al.activity_type_id = at.id
+         WHERE al.log_date >= ? AND al.log_date <= ?",
+    )
+    .bind(start).bind(end)
+    .fetch_one(pool).await.map_err(|e| format!("DB error exertion: {}", e))?;
 
     let activity_by_category: Vec<(String, f64)> = sqlx::query_as(
         "SELECT ac.name, CAST(COALESCE(SUM(al.duration_hours), 0) AS REAL) AS hours
@@ -139,12 +146,10 @@ async fn aggregate(pool: &SqlitePool, start: &str, end: &str) -> Result<Aggregat
         avg_steps: stats.4,
         avg_resting_hr: stats.5,
         sick_leave_hours: stats.6,
-        pem_days: pem.0,
-        crash_days: pem.1,
-        avg_risk: pem.2,
-        high_band: pem.3,
-        medium_band: pem.4,
-        low_band: pem.5,
+        bad_days: days.0,
+        good_days: days.1,
+        activity_hours: exertion.0,
+        high_energy_hours: exertion.1,
         activity_by_category,
         worst_days,
         fatigue_first_half,
@@ -259,8 +264,8 @@ Average sleep: {sleep}h (first half {s1}h -> second half {s2}h)
 Average steps/day: {steps}
 Average resting HR: {hr} bpm
 Sick-leave hours (total): {sick:.1}
-PEM days modelled: {pemdays}; crash days flagged: {crashes}; average predicted risk: {risk}/10
-Risk bands: High {high}, Medium {med}, Low {low}
+Bad days (fatigue >= 8): {bad}; good days (fatigue <= 4): {good}
+Logged activity: {acthrs:.1}h total, of which {highhrs:.1}h was high-energy
 Activity hours by category: {activities}
 Worst fatigue days: {worst}",
         days = a.days_logged,
@@ -274,12 +279,10 @@ Worst fatigue days: {worst}",
         steps = fmt_opt(a.avg_steps),
         hr = fmt_opt(a.avg_resting_hr),
         sick = a.sick_leave_hours,
-        pemdays = a.pem_days,
-        crashes = a.crash_days,
-        risk = fmt_opt(a.avg_risk),
-        high = a.high_band,
-        med = a.medium_band,
-        low = a.low_band,
+        bad = a.bad_days,
+        good = a.good_days,
+        acthrs = a.activity_hours,
+        highhrs = a.high_energy_hours,
         activities = activities,
         worst = worst,
     )
@@ -300,10 +303,15 @@ Period: {start} to {end}
 Aggregated data:
 {data}
 
-Analyse the data and surface concrete, data-grounded observations (e.g. links between activity load,
-sleep, and fatigue/crashes; trends across the two halves; notable outliers). Be supportive and
-practical. Describe what the data shows — do NOT give medical diagnoses or prescribe treatment;
-frame suggestions as gentle, pacing-oriented experiments.
+Analyse the data and surface concrete, data-grounded observations (trends across the two halves,
+notable outliers, how much the period varied). Be supportive and practical. Describe what the data
+shows — do NOT give medical diagnoses or prescribe treatment; frame suggestions as gentle,
+pacing-oriented experiments.
+
+Important: over this log, exertion measures (steps, activity hours, high-energy hours, work hours)
+have shown no measurable correlation with the NEXT day's fatigue (all |r| <= 0.10 over 102 day-pairs),
+and low activity tends to FOLLOW a bad day rather than precede one. Do not claim that a given
+activity level caused or predicts a later crash. Stick to describing what happened.
 
 Respond with JSON only, no markdown. severity is one of "positive", "warning", "critical". icon is a single emoji.
 {{

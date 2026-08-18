@@ -6,7 +6,7 @@
 
   let summary = $state<any>(null);
   let todayLog = $state<any>(null);
-  let predictions = $state<any[]>([]);
+  let dailyLoads = $state<any[]>([]);
   let logs = $state<any[]>([]);
   let bpHistory = $state<any[]>([]);
   let rolling = $state<any[]>([]);
@@ -25,19 +25,19 @@
     steps: { label: 'Steps', field: 'steps', color: 'var(--amber)', format: (v) => Math.round(v).toLocaleString() },
     restingHr: { label: 'Resting HR', field: 'ave_resting_hr', color: 'var(--purple)', format: (v) => v.toFixed(0) },
     headache: { label: 'Headache', field: 'headache_rating', color: 'var(--red)', format: (v) => v.toFixed(1) },
-    pemRisk: { label: 'PEM Risk', field: 'predicted_pem_risk', color: 'var(--coral)', format: (v) => v.toFixed(1) },
+    load: { label: 'Activity load', field: 'total_load', color: 'var(--coral)', format: (v) => v.toFixed(1) },
   };
 
   onMount(async () => {
     try {
-      const [s, log, preds] = await Promise.all([
+      const [s, log, loads] = await Promise.all([
         invoke<any>('get_dashboard_summary'),
         invoke<any>('get_daily_log', { date: todayISO() }),
-        invoke<any[]>('get_pem_predictions', { limit: 60 }),
+        invoke<any[]>('get_daily_loads', { from: shiftISO(todayISO(), -90) }),
       ]);
       summary = s;
       todayLog = log;
-      predictions = preds;
+      dailyLoads = loads;
       logs = await invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 });
       bpHistory = await invoke<any[]>('get_bp_history', { days: 7 });
       [rolling, monthly] = await Promise.all([
@@ -80,11 +80,33 @@
       ?? [...bpHistory].sort((a: any, b: any) => b.log_date.localeCompare(a.log_date))[0]
       ?? null;
   });
-  // Today's crash risk is the PEM prediction computed from yesterday's load.
-  let yesterdayPred = $derived(predictions?.find((p: any) => p.log_date === shiftISO(todayISO(), -1)) ?? null);
-  let riskScore = $derived(yesterdayPred?.predicted_next_day_fatigue ?? null);
-  // Band reflects the predicted fatigue score (Low 0–3 / Med 3.1–6 / High 6.1–10).
-  let riskBand = $derived(fatigueBand(riskScore));
+  // The headline is today's LOGGED fatigue, not a prediction — the PEM risk model was
+  // retired in migration 20240622 after measuring no better than a constant.
+  let fatigueBandToday = $derived(fatigueBand(fatigue));
+  let loadByDate = $derived(new Map(dailyLoads.map((d: any) => [d.log_date, d])));
+  let yesterdayLoad = $derived(loadByDate.get(shiftISO(todayISO(), -1)) ?? null);
+
+  // Trailing-window helpers for the fatigue/activity summaries.
+  function windowDates(back: number, span: number): string[] {
+    return Array.from({ length: span }, (_, i) => shiftISO(todayISO(), -(back + i)));
+  }
+  let fatigueByDate = $derived(new Map(
+    logs.filter((l: any) => l.fatigue_rating != null).map((l: any) => [l.log_date, l.fatigue_rating as number])
+  ));
+  let last7Fatigue = $derived(windowDates(0, 7).reverse().map((d) => fatigueByDate.get(d) ?? null));
+  let fatigue7 = $derived.by(() => {
+    const xs = last7Fatigue.filter((v): v is number => v != null);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  });
+  let daysSinceBad = $derived.by(() => {
+    for (let i = 0; i < 400; i++) {
+      const f = fatigueByDate.get(shiftISO(todayISO(), -i));
+      if (f != null && f >= 8) return i;
+    }
+    return null;
+  });
+  let hours7 = $derived(windowDates(0, 7).reduce((s, d) => s + (loadByDate.get(d)?.total_hours ?? 0), 0));
+  let hoursPrev7 = $derived(windowDates(7, 7).reduce((s, d) => s + (loadByDate.get(d)?.total_hours ?? 0), 0));
 
   function gaugeArc(score: number | null): { pct: number; color: string } {
     if (score == null) return { pct: 0, color: 'var(--inset)' };
@@ -94,7 +116,7 @@
     return { pct, color };
   }
 
-  let gauge = $derived(gaugeArc(riskScore));
+  let gauge = $derived(gaugeArc(fatigue));
 
   function bandColor(band: string | null): string {
     if (band === 'High') return 'var(--red-fg)';
@@ -112,11 +134,11 @@
   // must use the same π→2π half-circle. The old 0.75π→2.25π (270°) geometry drew a
   // floating arc that didn't sit on the track.
   let gaugeArcPath = $derived.by(() => {
-    if (riskScore == null) return '';
+    if (fatigue == null) return '';
     const r = 68, cx = 85, cy = 88;
     const startAngle = Math.PI;
     const endAngle = Math.PI * 2;
-    const pct = Math.min(1, Math.max(0, riskScore / 10));
+    const pct = Math.min(1, Math.max(0, fatigue / 10));
     const angle = startAngle + pct * (endAngle - startAngle);
     const sx = cx + r * Math.cos(startAngle);
     const sy = cy + r * Math.sin(startAngle);
@@ -128,36 +150,28 @@
   function num(v: number | null | undefined, dp = 1): string {
     return v == null ? '—' : v.toFixed(dp);
   }
-  let recoveryDebt = $derived(yesterdayPred?.recovery_debt ?? null);
-  let crashFlag = $derived(!!yesterdayPred?.crash_flag);
-  // Recovery-debt card: progress + colour + copy relative to the 4.0 crash line.
-  const DEBT_THRESHOLD = 4.0;
-  let debtPct = $derived(Math.min(100, ((recoveryDebt ?? 0) / DEBT_THRESHOLD) * 100));
-  let debtColor = $derived(
-    recoveryDebt == null ? 'var(--inset)'
-    : recoveryDebt >= DEBT_THRESHOLD ? 'var(--red)'
-    : recoveryDebt >= DEBT_THRESHOLD * 0.75 ? 'var(--amber)'
-    : 'var(--accent)'
+  // Activity card: this week's logged hours against the week before. Descriptive only —
+  // there is no threshold to be "over", because none was ever found in the data.
+  let hoursBarPct = $derived(
+    Math.min(100, (hours7 / Math.max(hours7, hoursPrev7, 1)) * 100)
   );
-  let debtDesc = $derived(
-    recoveryDebt == null ? 'No prediction yet'
-    : recoveryDebt >= DEBT_THRESHOLD ? 'Over the crash line'
-    : recoveryDebt >= DEBT_THRESHOLD * 0.75 ? 'Approaching the crash line'
-    : 'Comfortably below crash line'
+  let hoursDesc = $derived(
+    hoursPrev7 === 0 ? 'No prior week to compare'
+    : `${hours7 - hoursPrev7 >= 0 ? '+' : ''}${(hours7 - hoursPrev7).toFixed(1)}h vs the week before`
   );
 
   let todayStr = $derived(formatDate(todayISO()));
 
   function bandLabel(band: string | null): string {
-    if (band === 'High') return 'High — rest today';
-    if (band === 'Medium') return 'Medium — pace gently';
-    return 'Low — good to go';
+    if (band === 'High') return 'A heavy day — go gently';
+    if (band === 'Medium') return 'A middling day';
+    if (band === 'Low') return 'A good day';
+    return 'Not logged yet today';
   }
 
   function fieldVal(log: any, field: string): number | null {
-    if (field === 'predicted_pem_risk') {
-      const p = predictions.find((x: any) => x.log_date === log.log_date);
-      return p?.predicted_pem_risk ?? null;
+    if (field === 'total_load') {
+      return loadByDate.get(log.log_date)?.total_load ?? null;
     }
     if (field === 'sleep_avg') return sleepScore(log);
     return log[field] ?? null;
@@ -303,29 +317,29 @@
             <path d={gaugeArcPath} fill="none" stroke={gauge.color} stroke-width="14" stroke-linecap="round"/>
           {/if}
         </svg>
-        <div class="gauge-value">{riskScore != null ? riskScore.toFixed(1) : '—'}</div>
-        <div class="gauge-of">predicted · of 10</div>
+        <div class="gauge-value">{fatigue != null ? fatigue.toFixed(1) : '—'}</div>
+        <div class="gauge-of">logged · of 10</div>
       </div>
       <div class="risk-info">
         <div class="risk-header">
-          <div class="risk-label">Predicted fatigue</div>
-          <span class="risk-band" style="color:{bandColor(riskBand)};background:{bandBg(riskBand)};">
-            {riskBand ?? '—'}
+          <div class="risk-label">Today's fatigue</div>
+          <span class="risk-band" style="color:{bandColor(fatigueBandToday)};background:{bandBg(fatigueBandToday)};">
+            {fatigueBandToday ?? '—'}
           </span>
         </div>
-        <div class="risk-desc">{bandLabel(riskBand)}</div>
+        <div class="risk-desc">{bandLabel(fatigueBandToday)}</div>
         <div class="risk-stats">
           <div class="rs-tile">
-            <div class="rs-label">Recovery debt</div>
-            <div class="rs-val">{num(recoveryDebt, 1)}<span class="rs-sub"> / 4.0</span></div>
+            <div class="rs-label">7-day average</div>
+            <div class="rs-val">{num(fatigue7, 1)}<span class="rs-sub"> /10</span></div>
           </div>
           <div class="rs-tile">
-            <div class="rs-label">Crash flag</div>
-            <div class="rs-val" style="color:{crashFlag ? 'var(--amber-fg)' : 'var(--accent-fg)'};">{crashFlag ? '⚠ Active' : 'None'}</div>
+            <div class="rs-label">Since a bad day</div>
+            <div class="rs-val">{daysSinceBad ?? '—'}<span class="rs-sub"> days</span></div>
           </div>
           <div class="rs-tile">
-            <div class="rs-label">Today's fatigue</div>
-            <div class="rs-val">{fatigue != null ? fatigue.toFixed(1) : '—'}<span class="rs-sub"> /10</span></div>
+            <div class="rs-label">Activity · yday</div>
+            <div class="rs-val">{num(yesterdayLoad?.total_hours, 1)}<span class="rs-sub"> h</span></div>
           </div>
           <div class="rs-tile">
             <div class="rs-label">Sleep</div>
@@ -397,15 +411,15 @@
 
   <div class="bottom-row">
     <div class="stat-card">
-      <div class="stat-label">Recovery debt</div>
+      <div class="stat-label">Activity · last 7 days</div>
       <div class="stat-row">
-        <span class="stat-value">{num(recoveryDebt, 1)}</span>
-        <span class="stat-threshold">/ 4.0 threshold</span>
+        <span class="stat-value">{num(hours7, 1)}</span>
+        <span class="stat-threshold">hours logged</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" style="width:{debtPct}%;background:{debtColor};"></div>
+        <div class="progress-fill" style="width:{hoursBarPct}%;background:var(--accent);"></div>
       </div>
-      <div class="stat-desc">{debtDesc}</div>
+      <div class="stat-desc">{hoursDesc}</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-header">
@@ -428,17 +442,21 @@
       <div class="stat-desc">Fairly steady this fortnight</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Risk · last 7 days</div>
+      <div class="stat-label">Fatigue · last 7 days</div>
       <div class="risk-dots">
-        <span class="risk-dot low"></span>
-        <span class="risk-dot low"></span>
-        <span class="risk-dot med"></span>
-        <span class="risk-dot low"></span>
-        <span class="risk-dot low"></span>
-        <span class="risk-dot med"></span>
-        <span class="risk-dot med"></span>
+        {#each last7Fatigue as f}
+          {@const b = fatigueBand(f)}
+          <span
+            class="risk-dot"
+            class:low={b === 'Low'}
+            class:med={b === 'Medium'}
+            class:high={b === 'High'}
+            class:none={b === null}
+            title={f != null ? `${f.toFixed(1)}/10` : 'Not logged'}
+          ></span>
+        {/each}
       </div>
-      <div class="stat-desc">{summary.crash_count_30d > 0 ? `${summary.crash_count_30d} crashes in 30 days` : 'No crashes in 30 days'}</div>
+      <div class="stat-desc">{summary.bad_days_30d > 0 ? `${summary.bad_days_30d} bad days (8+) in 30` : 'No days at 8 or worse in 30'}</div>
     </div>
   </div>
 
@@ -916,8 +934,11 @@
     border-radius: 7px;
     border: 1px solid var(--border);
   }
+  .risk-dot { flex: 1; }
   .risk-dot.low { background: var(--accent-soft); }
   .risk-dot.med { background: var(--amber-soft); }
+  .risk-dot.high { background: var(--red-soft); }
+  .risk-dot.none { background: var(--inset); }
 
   .monthly-card, .rolling-card {
     background: var(--card);

@@ -166,17 +166,9 @@ pub struct ActivityEntry {
     pub notes: Option<String>,
 }
 
-// ── PEM Model ──
-
-#[derive(Debug, Serialize, Deserialize, FromRow)]
-pub struct PemCalibration {
-    pub id: i64,
-    pub param_name: String,
-    pub param_value: f64,
-    pub description: Option<String>,
-}
-
-// PemPrediction is defined in commands/pem.rs
+// The PEM risk model's types (PemCalibration, PemPrediction) were removed with the
+// model itself — see migration 20240622. Activity load is now computed on demand in
+// commands/pacing.rs and never stored.
 
 // ── AI: Ask & Insights ──
 

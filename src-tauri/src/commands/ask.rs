@@ -36,12 +36,6 @@ daily_logs(log_date, day_name, fatigue_rating REAL, fatigue_desc, headache_ratin
   add_meds, compression_socks INTEGER, notes)
   - One row per day. sleep_* are hours. fatigue_rating/headache_rating may be NULL on un-logged days.
 
-pem_predictions(log_date, physical_load REAL, cognitive_load REAL, sensory_social_load REAL,
-  three_day_weighted_load REAL, recovery_debt REAL, threshold_penalty REAL, predicted_pem_risk REAL,
-  risk_band TEXT 'Low'|'Medium'|'High', crash_flag INTEGER, predicted_next_day_fatigue REAL,
-  predicted_low REAL, predicted_high REAL)
-  - PEM = post-exertional malaise (a crash). crash_flag = 1 means a crash was flagged that day.
-
 medications(id, name, short_code, default_dose REAL, dose_unit, category, active INTEGER, notes)
 medication_doses(id, medication_id, log_date, time_taken, dose_amount REAL, notes)
   - join medication_doses.medication_id = medications.id for the med name.
@@ -53,6 +47,9 @@ activity_categories(id, name, energy_weight REAL)   -- e.g. 'Physical / Active',
 activity_types(id, name, category_id, default_energy_cost TEXT 'Low'|'Medium'|'High')
 activity_log(id, log_date, activity_type_id, duration_hours REAL, energy_cost, notes)
   - join activity_log.activity_type_id = activity_types.id = activity_categories.id for names/categories.
+  - "activity load" = duration_hours * activity_categories.energy_weight *
+    (energy_cost 'Low'=0.7, 'Medium'=1.0, 'High'=2.0). There is no stored risk score or crash
+    prediction: PEM = post-exertional malaise, but this log holds only what was observed.
 
 watch_calibration(id, cal_date, cal_time, notes)   -- blood-pressure-monitor calibration events.
 

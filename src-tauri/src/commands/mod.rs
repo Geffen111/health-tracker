@@ -2,7 +2,7 @@ pub mod daily_log;
 pub mod medications;
 pub mod blood_pressure;
 pub mod activity;
-pub mod pem;
+pub mod pacing;
 pub mod dashboard;
 pub mod monthly_activity;
 pub mod import_xlsx;
