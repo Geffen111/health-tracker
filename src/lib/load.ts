@@ -1,8 +1,7 @@
 // Per-category activity load for a day: duration × category energy weight ×
-// energy-cost factor.
-//   Physical          = Physical / Active + Domestic
-//   Cognitive         = Cognitive / Active + Hobby / Creative
-//   Sensory / social  = everything else (Social, Screen / Sedentary)
+// energy-cost factor. A category's `load_group` says which bucket it feeds
+// ('physical' | 'cognitive' | 'sensory'); it is stored per category and edited on the
+// Activity page, so this no longer guesses from the category name.
 // Kept in step with `LOAD_EXPR`/`BUCKET_EXPR` in src-tauri/src/commands/pacing.rs so a
 // day reads the same on the Activity page as it does in the Pacing charts.
 
@@ -24,9 +23,8 @@ export function computeDayLoad(entries: any[], activityTypes: any[], categories:
     const cost = entry.energy_cost ?? type.default_energy_cost;
     const weight = cost === 'Low' ? 0.7 : cost === 'High' ? 2.0 : 1.0;
     const v = entry.duration_hours * (cat.energy_weight ?? 1) * weight;
-    const name = (cat.name ?? '').toLowerCase();
-    if (name.includes('physical') || name.includes('domestic') || name === 'active') phys += v;
-    else if (name.includes('cognitive') || name.includes('hobby')) cog += v;
+    if (cat.load_group === 'physical') phys += v;
+    else if (cat.load_group === 'cognitive') cog += v;
     else sens += v;
   }
   return { phys, cog, sens, total: phys + cog + sens };

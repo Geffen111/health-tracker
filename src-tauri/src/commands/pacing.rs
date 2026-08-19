@@ -22,12 +22,10 @@ const LOAD_EXPR: &str = "al.duration_hours * COALESCE(ac.energy_weight, 1.0) * \
      CASE COALESCE(al.energy_cost, at.default_energy_cost) \
        WHEN 'Low' THEN 0.7 WHEN 'High' THEN 2.0 ELSE 1.0 END";
 
-/// Which of the three load buckets a category falls into. Mirrors `computeDayLoad`
-/// in `src/lib/load.ts`.
-const BUCKET_EXPR: &str = "CASE \
-     WHEN LOWER(ac.name) LIKE '%physical%' OR LOWER(ac.name) LIKE '%domestic%' THEN 'physical' \
-     WHEN LOWER(ac.name) LIKE '%cognitive%' OR LOWER(ac.name) LIKE '%hobby%' THEN 'cognitive' \
-     ELSE 'sensory' END";
+/// Which of the three load buckets a category feeds. Stored per category and edited on the
+/// Activity page (migration 20240623); previously guessed from substrings of the name, in two
+/// places that had to be kept in step by hand. Mirrors `computeDayLoad` in `src/lib/load.ts`.
+const BUCKET_EXPR: &str = "ac.load_group";
 
 /// One day's logged activity, rolled up. Purely descriptive.
 #[derive(Debug, Serialize, sqlx::FromRow)]

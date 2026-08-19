@@ -20,15 +20,38 @@
   let addTypeId = $state<number | null>(null);
   let addDuration = $state('');
 
+  // ── Manage panel ──
+  // Categories and activity types were seed-only until now; this panel is the only place
+  // they can be created, retuned or removed. Collapsed by default so it stays out of the
+  // way of daily entry.
+  let showManage = $state(false);
+  let typeUsage = $state<any[]>([]);
+  let manageError = $state('');
+  const LOAD_GROUPS = [
+    { value: 'physical',  label: 'Physical' },
+    { value: 'cognitive', label: 'Cognitive' },
+    { value: 'sensory',   label: 'Sensory / social' },
+  ];
+  const ENERGY_COSTS = ['Low', 'Medium', 'High'];
+
+  let newCatName = $state('');
+  let newCatWeight = $state('1.0');
+  let newCatGroup = $state('physical');
+  let newTypeName = $state('');
+  let newTypeCatId = $state<number | null>(null);
+  let newTypeCost = $state('Medium');
+
   onMount(async () => {
     try {
-      const [cats, types, prefs] = await Promise.all([
+      const [cats, types, prefs, usage] = await Promise.all([
         invoke<any[]>('list_activity_categories'),
         invoke<any[]>('list_activity_types', { categoryId: null }),
         invoke<any>('get_app_prefs'),
+        invoke<any[]>('list_activity_types_with_usage'),
       ]);
       categories = cats;
       activityTypes = types;
+      typeUsage = usage;
       if (prefs?.activity_defaults?.length) activityDefaults = prefs.activity_defaults;
       await loadEntries();
     } catch (e) {
@@ -98,6 +121,95 @@
     addDuration = '';
     await loadEntries();
   }
+
+  // ── Manage: categories & activity types ──
+  // Every write re-reads the lists so the day's rows, the load bars and the manage panel
+  // can't drift apart, and surfaces the backend's message (duplicate name, still-in-use)
+  // rather than failing silently.
+  async function reloadDefinitions() {
+    const [cats, types, usage] = await Promise.all([
+      invoke<any[]>('list_activity_categories'),
+      invoke<any[]>('list_activity_types', { categoryId: null }),
+      invoke<any[]>('list_activity_types_with_usage'),
+    ]);
+    categories = cats;
+    activityTypes = types;
+    typeUsage = usage;
+  }
+
+  async function run(fn: () => Promise<unknown>) {
+    manageError = '';
+    try {
+      await fn();
+      await reloadDefinitions();
+    } catch (e) {
+      manageError = String(e);
+    }
+  }
+
+  function saveCategory(cat: any) {
+    const weight = parseFloat(cat.energy_weight);
+    return run(() => invoke('update_activity_category', {
+      id: cat.id,
+      name: cat.name,
+      energyWeight: isNaN(weight) ? 1 : weight,
+      loadGroup: cat.load_group,
+    }));
+  }
+
+  function addCategory() {
+    const weight = parseFloat(newCatWeight);
+    return run(async () => {
+      await invoke('create_activity_category', {
+        name: newCatName,
+        energyWeight: isNaN(weight) ? 1 : weight,
+        loadGroup: newCatGroup,
+      });
+      newCatName = '';
+      newCatWeight = '1.0';
+    });
+  }
+
+  function removeCategory(id: number) {
+    return run(() => invoke('delete_activity_category', { id }));
+  }
+
+  function saveType(t: any) {
+    return run(() => invoke('update_activity_type', {
+      id: t.id,
+      name: t.name,
+      categoryId: Number(t.category_id),
+      defaultEnergyCost: t.default_energy_cost ?? 'Medium',
+    }));
+  }
+
+  function addType() {
+    return run(async () => {
+      await invoke('create_activity_type', {
+        name: newTypeName,
+        categoryId: Number(newTypeCatId),
+        defaultEnergyCost: newTypeCost,
+      });
+      newTypeName = '';
+      newTypeCatId = null;
+    });
+  }
+
+  function removeType(id: number) {
+    return run(() => invoke('delete_activity_type', { id }));
+  }
+
+  function usageFor(id: number): number {
+    return typeUsage.find((u: any) => u.id === id)?.entry_count ?? 0;
+  }
+
+  // Types grouped under their category, so the (long) list is scannable.
+  let typesByCategory = $derived(
+    categories.map((c: any) => ({
+      cat: c,
+      types: activityTypes.filter((t: any) => t.category_id === c.id),
+    }))
+  );
 
   function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadEntries(); }
   function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadEntries(); }
@@ -222,9 +334,115 @@
         </div>
         <span class="total-tag">{loadBuckets.cog > loadBuckets.phys ? 'Cognitive-heavy' : loadBuckets.phys > 0 ? 'Physically active' : 'Light day'}</span>
       </div>
-      <div class="load-note">Default activities &amp; energy weights are set in Settings. Activities feed today's PEM risk.</div>
+      <div class="load-note">
+        Load = hours &times; the category's energy weight &times; the activity's energy cost
+        (Low 0.7 / Medium 1.0 / High 2.0). Tune those in <strong>Manage activities</strong> below;
+        the same figures drive the <a href="/pacing">Pacing</a> charts.
+      </div>
     </div>
   </div>
+</div>
+
+<div class="manage-card">
+  <button class="manage-toggle" onclick={() => showManage = !showManage}>
+    <div class="manage-left">
+      <span class="manage-icon">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h16M4 16h16"/><circle cx="14" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg>
+      </span>
+      <div>
+        <div class="card-heading">Manage activities &amp; categories</div>
+        <div class="card-subtitle">{activityTypes.length} activities in {categories.length} categories &middot; add, rename, retune or remove</div>
+      </div>
+    </div>
+    <span class="manage-label">{showManage ? 'Hide' : 'Show'}</span>
+  </button>
+
+  {#if showManage}
+    <div class="manage-content">
+      {#if manageError}
+        <div class="manage-error">{manageError}</div>
+      {/if}
+
+      <div class="manage-section">
+        <div class="section-heading">Categories</div>
+        <div class="section-note">
+          The energy weight scales every hour logged in the category; the load group decides
+          which of the three bars it feeds. Both apply to your whole history &mdash; past days are
+          recomputed from these settings, never rewritten.
+        </div>
+        <div class="grid-head cat-grid">
+          <span>Name</span><span>Energy weight</span><span>Load group</span><span></span>
+        </div>
+        {#each categories as cat (cat.id)}
+          <div class="grid-row cat-grid">
+            <input class="cell-input" bind:value={cat.name} onchange={() => saveCategory(cat)} aria-label="Category name" />
+            <input class="cell-input num" type="number" step="0.1" min="0" bind:value={cat.energy_weight} onchange={() => saveCategory(cat)} aria-label="Energy weight" />
+            <select class="cell-input" bind:value={cat.load_group} onchange={() => saveCategory(cat)} aria-label="Load group">
+              {#each LOAD_GROUPS as g}<option value={g.value}>{g.label}</option>{/each}
+            </select>
+            <button class="del-btn" onclick={() => removeCategory(cat.id)} aria-label="Delete category" title="Delete category">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+        {/each}
+        <div class="grid-row cat-grid add">
+          <input class="cell-input" placeholder="New category&hellip;" bind:value={newCatName} />
+          <input class="cell-input num" type="number" step="0.1" min="0" bind:value={newCatWeight} aria-label="Energy weight" />
+          <select class="cell-input" bind:value={newCatGroup} aria-label="Load group">
+            {#each LOAD_GROUPS as g}<option value={g.value}>{g.label}</option>{/each}
+          </select>
+          <button class="add-mini" onclick={addCategory} disabled={!newCatName.trim()}>Add</button>
+        </div>
+      </div>
+
+      <div class="manage-section">
+        <div class="section-heading">Activities</div>
+        <div class="section-note">
+          Energy cost is the default applied to new entries. Days already logged keep the cost
+          stored on them, so history doesn't shift when you retune an activity. An activity that
+          appears on any logged day can't be deleted until those entries are cleared.
+        </div>
+        <div class="grid-head type-grid">
+          <span>Name</span><span>Category</span><span>Energy cost</span><span>Logged</span><span></span>
+        </div>
+        {#each typesByCategory as group (group.cat.id)}
+          {#if group.types.length}
+            <div class="group-label">{group.cat.name}</div>
+            {#each group.types as t (t.id)}
+              {@const used = usageFor(t.id)}
+              <div class="grid-row type-grid">
+                <input class="cell-input" bind:value={t.name} onchange={() => saveType(t)} aria-label="Activity name" />
+                <select class="cell-input" bind:value={t.category_id} onchange={() => saveType(t)} aria-label="Category">
+                  {#each categories as c}<option value={c.id}>{c.name}</option>{/each}
+                </select>
+                <select class="cell-input" bind:value={t.default_energy_cost} onchange={() => saveType(t)} aria-label="Energy cost">
+                  {#each ENERGY_COSTS as c}<option value={c}>{c}</option>{/each}
+                </select>
+                <span class="used-count">{used || '\u2014'}</span>
+                <button class="del-btn" onclick={() => removeType(t.id)} disabled={used > 0}
+                  aria-label="Delete activity"
+                  title={used > 0 ? `Logged on ${used} day${used === 1 ? '' : 's'} - clear those first` : 'Delete activity'}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              </div>
+            {/each}
+          {/if}
+        {/each}
+        <div class="grid-row type-grid add">
+          <input class="cell-input" placeholder="New activity&hellip;" bind:value={newTypeName} />
+          <select class="cell-input" bind:value={newTypeCatId} aria-label="Category">
+            <option value={null}>Category&hellip;</option>
+            {#each categories as c}<option value={c.id}>{c.name}</option>{/each}
+          </select>
+          <select class="cell-input" bind:value={newTypeCost} aria-label="Energy cost">
+            {#each ENERGY_COSTS as c}<option value={c}>{c}</option>{/each}
+          </select>
+          <span></span>
+          <button class="add-mini" onclick={addType} disabled={!newTypeName.trim() || newTypeCatId == null}>Add</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -279,5 +497,35 @@
   .total-label { font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:800; color:var(--ts); }
   .total-val { font-family:'Source Serif 4',serif; font-size:26px; font-weight:600; color:var(--tp); }
   .total-tag { font-size:11.5px; font-weight:700; color:var(--amber-fg); background:var(--amber-soft); padding:4px 11px; border-radius:999px; }
+
+  /* Manage activities & categories */
+  .manage-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; margin-top:16px; }
+  .manage-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 22px; background:transparent; border:none; cursor:pointer; text-align:left; font-family:inherit; }
+  .manage-left { display:flex; align-items:center; gap:12px; }
+  .manage-icon { width:34px; height:34px; border-radius:10px; background:var(--inset); display:flex; align-items:center; justify-content:center; color:var(--ts); flex-shrink:0; }
+  .manage-label { font-size:12.5px; font-weight:700; color:var(--accent-fg); white-space:nowrap; }
+  .manage-content { padding:4px 22px 22px; border-top:1px solid var(--border); }
+  .manage-error { background:var(--red-soft); color:var(--red-fg); font-size:12.5px; font-weight:600; padding:10px 14px; border-radius:11px; margin-top:14px; }
+  .manage-section { margin-top:20px; }
+  .section-heading { font-family:'Source Serif 4',serif; font-size:15px; font-weight:600; color:var(--tp); }
+  .section-note { font-size:12px; color:var(--tm); line-height:1.55; margin:3px 0 12px; max-width:78ch; }
+
+  .cat-grid { grid-template-columns:1fr 130px 165px 34px; }
+  .type-grid { grid-template-columns:1fr 190px 120px 62px 34px; }
+  .grid-head, .grid-row { display:grid; gap:10px; align-items:center; }
+  .grid-head { padding:0 0 6px; }
+  .grid-head span { font-size:10px; letter-spacing:.05em; text-transform:uppercase; font-weight:800; color:var(--tm); }
+  .grid-row { padding:4px 0; }
+  .grid-row.add { margin-top:8px; padding-top:12px; border-top:1px solid var(--border); }
+  .group-label { font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--ts); margin:14px 0 4px; }
+  .cell-input { width:100%; background:var(--inset); border:1px solid var(--border); border-radius:10px; padding:8px 10px; font-size:13px; color:var(--tp); font-family:inherit; }
+  .cell-input.num { text-align:right; font-variant-numeric:tabular-nums; }
+  select.cell-input { cursor:pointer; }
+  .used-count { font-size:12.5px; color:var(--tm); text-align:right; font-variant-numeric:tabular-nums; }
+  .del-btn { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:9px; background:transparent; border:1px solid var(--border); color:var(--ts); cursor:pointer; }
+  .del-btn:hover:not(:disabled) { background:var(--red-soft); color:var(--red-fg); border-color:var(--red-soft); }
+  .del-btn:disabled { opacity:.3; cursor:not-allowed; }
+  .add-mini { background:var(--accent); color:#fff; border:none; border-radius:10px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; }
+  .add-mini:disabled { opacity:.45; cursor:not-allowed; }
   .load-note { font-size:11.5px; color:var(--ts); line-height:1.5; }
 </style>

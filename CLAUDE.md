@@ -43,6 +43,11 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **Date-scoped pages carry their day in `?date=YYYY-MM-DD`** (`$lib/dateParam.ts`): initialise
   `selectedDate` with `dateFromUrl($page.url)` and call `pushDate()` from the day arrows, so a
   link from one page to another lands on the same day. Link across with `dateHref()`.
+- **Activity load has one definition, in two places.** `LOAD_EXPR`/`BUCKET_EXPR` in
+  `commands/pacing.rs` and `computeDayLoad` in `src/lib/load.ts` must stay in step:
+  hours x `activity_categories.energy_weight` x energy-cost factor (Low 0.7 / Medium 1.0 /
+  High 2.0), bucketed by the category's `load_group` column. Never re-derive the bucket from
+  the category name — that was the old bug (migration 20240623).
 - **Nothing predicts forward.** The PEM risk model and its next-day fatigue estimate were
   removed in migration 20240622 after measuring no better than a constant (see PLAN.md).
   Exertion has no measurable correlation with the next day's fatigue in this log, and low

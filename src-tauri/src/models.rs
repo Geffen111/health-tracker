@@ -146,6 +146,9 @@ pub struct ActivityCategory {
     pub id: i64,
     pub name: String,
     pub energy_weight: Option<f64>,
+    /// Which load bucket this category feeds: "physical", "cognitive" or "sensory".
+    /// Explicit since migration 20240623 — previously inferred from the name.
+    pub load_group: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]

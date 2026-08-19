@@ -114,3 +114,185 @@ pub async fn delete_activity_entry(pool: State<'_, SqlitePool>, id: i64) -> Resu
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+// ── Category & activity-type management ──
+//
+// Categories and types were seed-only until now: the migrations created them and nothing in
+// the app could add, rename or retune one. These commands make both editable. Deletes are
+// refused while anything still points at the row, so a category can never be orphaned and a
+// logged day can never lose the activity it referenced.
+
+/// Load groups a category may contribute to. Anything else is rejected rather than silently
+/// stored, since `pacing.rs` matches on these exact values.
+const LOAD_GROUPS: [&str; 3] = ["physical", "cognitive", "sensory"];
+/// Energy costs an activity type may default to — the factors applied in `pacing.rs`.
+const ENERGY_COSTS: [&str; 3] = ["Low", "Medium", "High"];
+
+fn validate(value: &str, allowed: &[&str], field: &str) -> Result<(), String> {
+    if allowed.contains(&value) {
+        Ok(())
+    } else {
+        Err(format!("Invalid {}: '{}'. Expected one of {:?}.", field, value, allowed))
+    }
+}
+
+fn clean_name(name: &str) -> Result<String, String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("Name cannot be empty.".into());
+    }
+    Ok(n.to_string())
+}
+
+/// An activity type plus how many logged entries reference it, so the UI can show usage and
+/// disable deletion of a type that is in use.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct ActivityTypeUsage {
+    pub id: i64,
+    pub name: String,
+    pub category_id: i64,
+    pub default_energy_cost: Option<String>,
+    pub entry_count: i64,
+}
+
+#[tauri::command]
+pub async fn list_activity_types_with_usage(
+    pool: State<'_, SqlitePool>,
+) -> Result<Vec<ActivityTypeUsage>, String> {
+    sqlx::query_as::<_, ActivityTypeUsage>(
+        "SELECT at.id, at.name, at.category_id, at.default_energy_cost, \
+                CAST(COUNT(al.id) AS INTEGER) AS entry_count \
+         FROM activity_types at \
+         LEFT JOIN activity_log al ON al.activity_type_id = at.id \
+         GROUP BY at.id ORDER BY at.name",
+    )
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_activity_category(
+    pool: State<'_, SqlitePool>,
+    name: String,
+    energy_weight: f64,
+    load_group: String,
+) -> Result<i64, String> {
+    let name = clean_name(&name)?;
+    validate(&load_group, &LOAD_GROUPS, "load group")?;
+    sqlx::query("INSERT INTO activity_categories (name, energy_weight, load_group) VALUES (?, ?, ?)")
+        .bind(&name).bind(energy_weight).bind(&load_group)
+        .execute(&*pool)
+        .await
+        .map(|r| r.last_insert_rowid())
+        .map_err(|e| if e.to_string().contains("UNIQUE") {
+            format!("A category called '{}' already exists.", name)
+        } else {
+            e.to_string()
+        })
+}
+
+#[tauri::command]
+pub async fn update_activity_category(
+    pool: State<'_, SqlitePool>,
+    id: i64,
+    name: String,
+    energy_weight: f64,
+    load_group: String,
+) -> Result<(), String> {
+    let name = clean_name(&name)?;
+    validate(&load_group, &LOAD_GROUPS, "load group")?;
+    sqlx::query("UPDATE activity_categories SET name = ?, energy_weight = ?, load_group = ? WHERE id = ?")
+        .bind(&name).bind(energy_weight).bind(&load_group).bind(id)
+        .execute(&*pool)
+        .await
+        .map_err(|e| if e.to_string().contains("UNIQUE") {
+            format!("A category called '{}' already exists.", name)
+        } else {
+            e.to_string()
+        })?;
+    Ok(())
+}
+
+/// Refused while any activity type still belongs to the category — deleting it would leave
+/// those types pointing at a missing row, and every load figure that uses them would break.
+#[tauri::command]
+pub async fn delete_activity_category(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
+    let used: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM activity_types WHERE category_id = ?")
+        .bind(id)
+        .fetch_one(&*pool).await.map_err(|e| e.to_string())?;
+    if used.0 > 0 {
+        return Err(format!(
+            "{} {} still in this category. Move {} to another category first.",
+            used.0,
+            if used.0 == 1 { "activity is" } else { "activities are" },
+            if used.0 == 1 { "it" } else { "them" },
+        ));
+    }
+    sqlx::query("DELETE FROM activity_categories WHERE id = ?")
+        .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn create_activity_type(
+    pool: State<'_, SqlitePool>,
+    name: String,
+    category_id: i64,
+    default_energy_cost: String,
+) -> Result<i64, String> {
+    let name = clean_name(&name)?;
+    validate(&default_energy_cost, &ENERGY_COSTS, "energy cost")?;
+    sqlx::query("INSERT INTO activity_types (name, category_id, default_energy_cost) VALUES (?, ?, ?)")
+        .bind(&name).bind(category_id).bind(&default_energy_cost)
+        .execute(&*pool)
+        .await
+        .map(|r| r.last_insert_rowid())
+        .map_err(|e| if e.to_string().contains("UNIQUE") {
+            format!("An activity called '{}' already exists.", name)
+        } else {
+            e.to_string()
+        })
+}
+
+/// Editing the energy cost here changes the DEFAULT applied to future entries. Days already
+/// logged keep the cost stored on their `activity_log` row, so history doesn't shift under you.
+#[tauri::command]
+pub async fn update_activity_type(
+    pool: State<'_, SqlitePool>,
+    id: i64,
+    name: String,
+    category_id: i64,
+    default_energy_cost: String,
+) -> Result<(), String> {
+    let name = clean_name(&name)?;
+    validate(&default_energy_cost, &ENERGY_COSTS, "energy cost")?;
+    sqlx::query("UPDATE activity_types SET name = ?, category_id = ?, default_energy_cost = ? WHERE id = ?")
+        .bind(&name).bind(category_id).bind(&default_energy_cost).bind(id)
+        .execute(&*pool)
+        .await
+        .map_err(|e| if e.to_string().contains("UNIQUE") {
+            format!("An activity called '{}' already exists.", name)
+        } else {
+            e.to_string()
+        })?;
+    Ok(())
+}
+
+/// Refused while any day has this activity logged, so deleting from the manage panel can
+/// never silently erase entries out of the history.
+#[tauri::command]
+pub async fn delete_activity_type(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
+    let used: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM activity_log WHERE activity_type_id = ?")
+        .bind(id)
+        .fetch_one(&*pool).await.map_err(|e| e.to_string())?;
+    if used.0 > 0 {
+        return Err(format!(
+            "This activity is logged on {} {}. Clear those entries first if you really want it gone.",
+            used.0,
+            if used.0 == 1 { "day" } else { "days" },
+        ));
+    }
+    sqlx::query("DELETE FROM activity_types WHERE id = ?")
+        .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    Ok(())
+}

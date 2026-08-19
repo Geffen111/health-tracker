@@ -54,6 +54,7 @@ Pacing view → activity & fatigue history → Dashboard
 | 10 | AI Ask + Insights (OpenRouter, like Family Finance) | ✅ Done 2026-06-27 — `/ask` route, NL→SQL `ask_question`, `get_insights`/`refresh_insights`, API key in Settings |
 | 11 | Entry restructure — day carried in `?date=`; Daily Log rebuilt as two dated columns (previous day + selected day) absorbing resting HR and BP; Cardio becomes analysis-only | ✅ Done 2026-07-28 |
 | 12 | Retire the PEM risk model; `/pem-model` → `/pacing` (descriptive activity & fatigue history) | ✅ Done 2026-08-19 — see "Retired: the PEM risk model" below |
+| 13 | Activity & category management — categories/types editable in-app, `load_group` made explicit | ✅ Done 2026-08-19 |
 
 **AI integration (Phase 10):** OpenRouter (`deepseek/deepseek-v4-flash`), mirroring Family
 Finance. `commands/ai.rs` (shared client), `commands/ask.rs` (hybrid text-to-SQL — schema sent,
@@ -195,6 +196,33 @@ The `/pem-model` route became `/pacing`:
 Dashboard: the risk gauge now shows today's *logged* fatigue; recovery debt became
 "Activity · last 7 days"; the "Risk · last 7 days" dots (which were **hardcoded**, not real
 data) became actual banded fatigue dots; `crash_count_30d` became `bad_days_30d`.
+
+## Activity categories & types (2026-08-19)
+
+Categories and activity types were **seed-only** until now: the migrations created them and
+nothing in the app could add, rename or retune one. Both are now managed from a collapsible
+**Manage activities & categories** panel at the bottom of the Activity page.
+
+- Categories: name, `energy_weight`, and `load_group`.
+- Activity types: name, category, `default_energy_cost`, plus a count of days logged.
+- Commands live in `commands/activity.rs`: `create/update/delete_activity_category`,
+  `create/update/delete_activity_type`, `list_activity_types_with_usage`.
+
+**`load_group` is new** (migration `20240623_activity_category_load_group.sql`). Which load
+bucket a category fed used to be inferred from substrings of its *name*, duplicated in
+`BUCKET_EXPR` (`commands/pacing.rs`) and `computeDayLoad` (`src/lib/load.ts`). That made the
+mapping invisible, fragile (renaming "Domestic" would silently move it to sensory) and
+unsettable for any category the user added. It is now a stored, editable column with values
+`physical` | `cognitive` | `sensory`. The migration backfills exactly what the name rules
+produced — verified identical across all 104 days of history.
+
+Guards, so the manage panel can't corrupt the log:
+- A category with activity types still in it cannot be deleted.
+- An activity type logged on any day cannot be deleted (the button is disabled and says why).
+- Names are UNIQUE; the duplicate error is surfaced in the panel rather than failing silently.
+- Editing a type's energy cost changes the DEFAULT for future entries only — `activity_log`
+  rows keep the cost stored on them, so history doesn't shift underfoot. Editing a category's
+  `energy_weight` or `load_group` *does* apply to history, since load is computed on demand.
 
 ## Family Finance patterns to follow
 
