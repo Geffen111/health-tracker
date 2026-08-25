@@ -208,15 +208,15 @@
       return win.length ? win.reduce((a, b) => a + b, 0) / win.length : null;
     })
   );
-  // The daily reading is the measurement, so it leads: the heavier line in a hue
-  // that contrasts with the accent, with the 7-day mean laid over it as a lighter
-  // trend. `--border` was tried for the daily series and is unreadable as data —
-  // it's a 1.1:1 hairline against the card in either theme.
+  // The 7-day mean is the bold line; the daily reading sits behind it as fine
+  // context. Daily uses `--tm` rather than `--border`: the latter is a 1.1:1
+  // hairline against the card and vanishes in both themes, while a heavier or
+  // more saturated daily series buries the trend in 180-odd points of noise.
   let fatigueDatasets = $derived([
-    { label: 'Daily', data: fatigueSeries, borderColor: 'var(--peri)', backgroundColor: 'var(--peri)',
-      borderWidth: 2.2, pointRadius: 1.8, spanGaps: true },
+    { label: 'Daily', data: fatigueSeries, borderColor: 'var(--tm)', backgroundColor: 'var(--tm)',
+      borderWidth: 1.5, pointRadius: 1.5, spanGaps: true },
     { label: '7-day average', data: fatigueRolling, borderColor: 'var(--accent)', backgroundColor: 'var(--accent)',
-      borderWidth: 1.6, pointRadius: 0, tension: 0.35, spanGaps: true },
+      borderWidth: 2.5, pointRadius: 0, tension: 0.35, spanGaps: true },
   ]);
   let fatigueOptions = {
     interaction: { mode: 'index' as const, intersect: false },
