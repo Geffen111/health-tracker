@@ -68,6 +68,7 @@ pub fn run() {
             commands::import_xlsx::import_spreadsheet,
             commands::export::export_csv,
             commands::export::export_json,
+            commands::chart_export::save_chart_png,
             commands::settings::save_api_key,
             commands::settings::get_api_key,
             commands::settings::get_ai_model,

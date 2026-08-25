@@ -3,6 +3,8 @@
   import { onMount } from 'svelte';
   import { formatDate, formatDateShort, todayISO, shiftISO, weekdayIndex, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
+  import { exportChartPng } from '$lib/chartExport';
+  import { showToast } from '$lib/stores/toast.svelte';
 
   // This page replaced the PEM Model screen. It predicts nothing: the old risk score
   // and next-day fatigue estimate scored no better than a constant (see migration
@@ -221,6 +223,36 @@
     plugins: { legend: { display: true, position: 'bottom' as const, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 10 } } },
   };
 
+  // ── PNG export ──
+  // Re-rendered offscreen at a readable size rather than screenshotting the 220px
+  // canvas on the page — this one is meant to be handed to someone else.
+  let exportingFatigue = $state(false);
+  async function exportFatiguePng() {
+    exportingFatigue = true;
+    try {
+      const range = rangeMonths === 0 ? 'whole log' : `last ${rangeMonths} months`;
+      const first = formatDate(rangeLogs[0].log_date);
+      const last = formatDate(rangeLogs[rangeLogs.length - 1].log_date);
+      const path = await exportChartPng(
+        {
+          type: 'line',
+          labels: rangeLogs.map((l) => formatDateShort(l.log_date)),
+          datasets: fatigueDatasets,
+          options: fatigueOptions,
+          title: 'Fatigue over time',
+          subtitle: `${first} – ${last} · ${rangeLogs.length} logged days · ${range}`,
+        },
+        'fatigue-over-time'
+      );
+      showToast(`Saved to ${path}`);
+    } catch (e) {
+      console.error('Fatigue PNG export failed:', e);
+      showToast('Could not export the chart', 'error');
+    } finally {
+      exportingFatigue = false;
+    }
+  }
+
   // ── Headline tiles ──
   function mean(v: (number | null | undefined)[]): number | null {
     const xs = v.filter((x): x is number => x != null);
@@ -417,6 +449,11 @@
         <div class="card-heading">Fatigue over time</div>
         <div class="card-subtitle">Every logged day, with a 7-day average to show the underlying trend.</div>
       </div>
+      <button
+        class="export-btn"
+        onclick={exportFatiguePng}
+        disabled={exportingFatigue || rangeLogs.length === 0}
+      >{exportingFatigue ? 'Exporting…' : 'Export PNG'}</button>
     </div>
     {#if rangeLogs.length === 0}
       <p class="empty-text">No fatigue logged in this range.</p>
@@ -518,6 +555,10 @@
   .seg-control { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:3px; gap:2px; flex-shrink:0; }
   .seg-btn { background:transparent; border:none; border-radius:9px; padding:7px 12px; font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; }
   .seg-btn.active { background:var(--accent); color:#fff; }
+  .export-btn { background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:8px 14px;
+                font-size:12.5px; font-weight:700; cursor:pointer; color:var(--ts); font-family:inherit; flex-shrink:0; }
+  .export-btn:hover:not(:disabled) { background:var(--accent-soft); color:var(--accent-fg); border-color:var(--accent-soft); }
+  .export-btn:disabled { opacity:.5; cursor:default; }
   .empty-text { color:var(--ts); font-size:13px; padding:12px 0; }
 
   .picker { margin:-4px 0 16px; }

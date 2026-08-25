@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Chart, registerables } from 'chart.js';
   import { theme } from '$lib/stores/theme.svelte';
+  import { resolveDeep } from '$lib/chartTheme';
 
   Chart.register(...registerables);
 
@@ -18,32 +19,10 @@
   let canvas: HTMLCanvasElement;
   let chartInstance: Chart | null = $state(null);
 
-  function resolveCSSVar(v: string): string {
-    if (!v.startsWith('var(--')) return v;
-    const name = v.slice(4, -1);
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || v;
-  }
-
-  // Chart.js draws to a canvas and can't read CSS variables, so every `var(--x)`
-  // anywhere in the config — dataset colours AND caller-supplied axis/grid/legend
-  // colours in `options` — must be resolved to a concrete colour first. A shallow
-  // resolve (colours only on datasets) left axis labels and gridlines unstyled, so
-  // they fell back to Chart.js's grey and looked wrong in dark mode.
-  function resolveDeep(x: any): any {
-    if (typeof x === 'string') return resolveCSSVar(x);
-    if (Array.isArray(x)) return x.map(resolveDeep);
-    if (x && typeof x === 'object') {
-      const out: Record<string, any> = {};
-      for (const k in x) out[k] = resolveDeep(x[k]);
-      return out;
-    }
-    return x; // numbers, null, functions (tooltip callbacks) pass through untouched
-  }
-
   $effect(() => {
     if (!canvas) return;
     // Re-run when the theme flips so the canvas colours follow the CSS variables
-    // (getComputedStyle below then returns the new light/dark values).
+    // (resolveDeep then reads the new light/dark values).
     theme.dark;
 
     const resolvedDatasets = resolveDeep(datasets);
