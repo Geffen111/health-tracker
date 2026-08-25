@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { formatDate, formatDateLong, todayISO, shiftISO, weekdayIndex } from '$lib/formatDate';
+  import { formatDate, formatDateLong, formatMonthLabel, todayISO, shiftISO, weekdayIndex } from '$lib/formatDate';
   import { dateFromUrl, pushDate } from '$lib/dateParam';
 
   let today = $state(todayISO());
@@ -80,7 +80,10 @@
 
   async function loadMonthly() {
     try {
-      logs = await invoke('list_daily_logs', { limit: 60, offset: 0 }) as any[];
+      // The whole log, not a trailing window: history is grouped by month below
+      // and collapsed, so age is what hides a row, not a fetch limit. The old
+      // limit of 60 silently cut the page off ~10 weeks back.
+      logs = await invoke('list_daily_logs', { limit: 5000, offset: 0 }) as any[];
     } catch {}
   }
 
@@ -92,34 +95,68 @@
     return shiftISO(dateStr, -mondayOffset);
   }
 
-  let weekGroups = $derived.by(() => {
-    const sorted = [...logs].sort((a, b) => a.log_date.localeCompare(b.log_date));
-    const groups: { weekStart: string; logs: any[] }[] = [];
-    let currentWeek = '';
-    let currentGroup: any[] = [];
+  // History is months → weeks → days, matching the Medication page's dose history.
+  // Days are bucketed by calendar month first, so a month total is a real calendar
+  // month (what payroll and leave balances are counted in). A week straddling a
+  // month boundary therefore appears under both, holding only that month's days —
+  // its day count in the header says so.
+  interface WeekGroup { weekStart: string; logs: any[] }
+  interface MonthGroup { key: string; label: string; weeks: WeekGroup[]; logs: any[] }
+
+  let monthGroups = $derived.by((): MonthGroup[] => {
+    const sorted = [...logs].sort((a, b) => b.log_date.localeCompare(a.log_date));
+    const months = new Map<string, Map<string, any[]>>();
     for (const log of sorted) {
-      const ws = getWeekStart(log.log_date);
-      if (ws !== currentWeek && currentGroup.length > 0) {
-        groups.push({ weekStart: currentWeek, logs: currentGroup });
-        currentGroup = [];
-      }
-      currentWeek = ws;
-      currentGroup.push(log);
+      const mKey = log.log_date.slice(0, 7);
+      const wKey = getWeekStart(log.log_date);
+      if (!months.has(mKey)) months.set(mKey, new Map());
+      const weeks = months.get(mKey)!;
+      if (!weeks.has(wKey)) weeks.set(wKey, []);
+      weeks.get(wKey)!.push(log);
     }
-    if (currentGroup.length > 0) groups.push({ weekStart: currentWeek, logs: currentGroup });
-    // Most recent week first; days within a week most recent first too.
-    groups.reverse();
-    for (const g of groups) g.logs.reverse();
-    return groups;
+    // Insertion order is newest-first because `sorted` is, so months, weeks and
+    // days all read most-recent first without another pass.
+    return [...months.entries()].map(([key, weeks]) => ({
+      key,
+      label: formatMonthLabel(key),
+      weeks: [...weeks.entries()].map(([weekStart, ls]) => ({ weekStart, logs: ls })),
+      logs: [...weeks.values()].flat(),
+    }));
   });
 
-  // Collapsible weeks: the most recent (index 0) defaults open, the rest closed.
+  // Collapsible months and weeks. The current month opens by default with its most
+  // recent week expanded; everything older stays closed so the page opens short.
+  let openMonths = $state<Record<string, boolean>>({});
   let openWeeks = $state<Record<string, boolean>>({});
-  function isWeekOpen(weekStart: string, index: number): boolean {
-    return weekStart in openWeeks ? openWeeks[weekStart] : index === 0;
+
+  function isMonthOpen(key: string): boolean {
+    return key in openMonths ? openMonths[key] : key === today.slice(0, 7);
   }
-  function toggleWeek(weekStart: string, index: number) {
-    openWeeks[weekStart] = !isWeekOpen(weekStart, index);
+  function toggleMonth(key: string) {
+    openMonths[key] = !isMonthOpen(key);
+  }
+  // Weeks are keyed by month too: a week spanning a month boundary shows up in
+  // both, and the two halves collapse independently.
+  function weekKey(monthKey: string, weekStart: string): string {
+    return `${monthKey}|${weekStart}`;
+  }
+  function isWeekOpen(monthKey: string, weekStart: string, index: number): boolean {
+    const k = weekKey(monthKey, weekStart);
+    return k in openWeeks ? openWeeks[k] : monthKey === today.slice(0, 7) && index === 0;
+  }
+  function toggleWeek(monthKey: string, weekStart: string, index: number) {
+    openWeeks[weekKey(monthKey, weekStart)] = !isWeekOpen(monthKey, weekStart, index);
+  }
+
+  function expandAll(open: boolean) {
+    const m: Record<string, boolean> = {};
+    const w: Record<string, boolean> = {};
+    for (const month of monthGroups) {
+      m[month.key] = open;
+      for (const week of month.weeks) w[weekKey(month.key, week.weekStart)] = open;
+    }
+    openMonths = m;
+    openWeeks = w;
   }
 
   function totalHours(field: string, src: any[]): number {
@@ -209,47 +246,64 @@
 
   <div class="table-card">
     <div class="table-header">
-      <span class="card-heading">Weekly view</span>
-      <span class="table-byweek">Mon–Sun</span>
+      <span class="card-heading">History</span>
+      <div class="table-header-right">
+        <span class="table-byweek">Mon–Sun</span>
+        <button class="expand-btn" onclick={() => expandAll(true)}>Expand all</button>
+        <button class="expand-btn" onclick={() => expandAll(false)}>Collapse all</button>
+      </div>
     </div>
     <div class="table-grid header-row">
       <span>Date</span><span>Status</span><span style="text-align:right;">Rost.</span><span style="text-align:right;">Office</span><span style="text-align:right;">WFH</span><span style="text-align:right;">Sick</span>
     </div>
-    {#each weekGroups as group, i}
-      {@const open = isWeekOpen(group.weekStart, i)}
-      <button class="week-label" class:open onclick={() => toggleWeek(group.weekStart, i)}>
-        <svg class="week-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
-        <span>Week of {formatDate(group.weekStart)}</span>
-        <span class="week-label-summary">{group.logs.length} day{group.logs.length !== 1 ? 's' : ''} · {fmt(totalHours('office_hours', group.logs) + totalHours('wfh_hours', group.logs))} h</span>
+    {#if monthGroups.length === 0}
+      <div class="table-grid data-row"><span style="color:var(--tm);">No days logged yet.</span></div>
+    {/if}
+    {#each monthGroups as month}
+      {@const mOpen = isMonthOpen(month.key)}
+      <button class="month-label" class:open={mOpen} onclick={() => toggleMonth(month.key)}>
+        <svg class="month-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        <span>{month.label}</span>
+        <span class="month-label-summary">{month.logs.length} day{month.logs.length !== 1 ? 's' : ''} · {fmt(totalHours('office_hours', month.logs) + totalHours('wfh_hours', month.logs))} h</span>
       </button>
-      {#if open}
-        {#each group.logs as log}
-          {@const sb = statusBadge(log)}
-          <div class="table-grid data-row">
-            <span>{formatDate(log.log_date)}</span>
-            <span><span class="status-pill {sb.cls}">{sb.label}</span></span>
-            <span style="text-align:right;">{fmt(log.rostered_hours)}</span>
-            <span style="text-align:right;">{fmt(log.office_hours)}</span>
-            <span style="text-align:right;">{fmt(log.wfh_hours)}</span>
-            <span style="text-align:right;color:var(--tm);">{fmt(log.sick_leave_hours)}</span>
-          </div>
+      {#if mOpen}
+        {#each month.weeks as group, i}
+          {@const open = isWeekOpen(month.key, group.weekStart, i)}
+          <button class="week-label" class:open onclick={() => toggleWeek(month.key, group.weekStart, i)}>
+            <svg class="week-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            <span>Week of {formatDate(group.weekStart)}</span>
+            <span class="week-label-summary">{group.logs.length} day{group.logs.length !== 1 ? 's' : ''} · {fmt(totalHours('office_hours', group.logs) + totalHours('wfh_hours', group.logs))} h</span>
+          </button>
+          {#if open}
+            {#each group.logs as log}
+              {@const sb = statusBadge(log)}
+              <div class="table-grid data-row">
+                <span>{formatDate(log.log_date)}</span>
+                <span><span class="status-pill {sb.cls}">{sb.label}</span></span>
+                <span style="text-align:right;">{fmt(log.rostered_hours)}</span>
+                <span style="text-align:right;">{fmt(log.office_hours)}</span>
+                <span style="text-align:right;">{fmt(log.wfh_hours)}</span>
+                <span style="text-align:right;color:var(--tm);">{fmt(log.sick_leave_hours)}</span>
+              </div>
+            {/each}
+            <div class="table-grid data-row week-total">
+              <span>Week total</span><span></span>
+              <span style="text-align:right;">{fmt(totalHours('rostered_hours', group.logs))}</span>
+              <span style="text-align:right;">{fmt(totalHours('office_hours', group.logs))}</span>
+              <span style="text-align:right;">{fmt(totalHours('wfh_hours', group.logs))}</span>
+              <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', group.logs))}</span>
+            </div>
+          {/if}
         {/each}
-        <div class="table-grid data-row week-total">
-          <span>Week total</span><span></span>
-          <span style="text-align:right;">{fmt(totalHours('rostered_hours', group.logs))}</span>
-          <span style="text-align:right;">{fmt(totalHours('office_hours', group.logs))}</span>
-          <span style="text-align:right;">{fmt(totalHours('wfh_hours', group.logs))}</span>
-          <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', group.logs))}</span>
+        <div class="table-grid data-row month-total">
+          <span>{month.label} total</span><span></span>
+          <span style="text-align:right;">{fmt(totalHours('rostered_hours', month.logs))}</span>
+          <span style="text-align:right;">{fmt(totalHours('office_hours', month.logs))}</span>
+          <span style="text-align:right;">{fmt(totalHours('wfh_hours', month.logs))}</span>
+          <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', month.logs))}</span>
         </div>
       {/if}
     {/each}
-    <div class="table-grid data-row month-total">
-      <span style="font-family:'Source Serif 4',serif;">Month to date</span><span></span>
-      <span style="text-align:right;">{fmt(totalHours('rostered_hours', logs))}</span>
-      <span style="text-align:right;">{fmt(totalHours('office_hours', logs))}</span>
-      <span style="text-align:right;">{fmt(totalHours('wfh_hours', logs))}</span>
-      <span style="text-align:right;color:var(--tm);">{fmt(totalHours('sick_leave_hours', logs))}</span>
-    </div>
   </div>
 </div>
 
@@ -291,6 +345,20 @@
   .data-row { font-size:12.5px; color:var(--tp); border-top:1px solid var(--border); }
   .data-row span { white-space:nowrap; }
 
+  .table-header-right { display:flex; align-items:center; gap:10px; }
+  .expand-btn { background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:5px 11px;
+                font-size:11px; font-weight:700; color:var(--ts); cursor:pointer; font-family:inherit; }
+  .expand-btn:hover { background:var(--accent-soft); color:var(--accent-fg); border-color:var(--accent-soft); }
+
+  .month-label { display:flex; align-items:center; gap:9px; width:100%; padding:13px 20px; font-size:13.5px;
+                 font-weight:800; color:var(--tp); background:var(--inset); border:none;
+                 border-top:1px solid var(--border); cursor:pointer; font-family:'Source Serif 4',serif; text-align:left; }
+  .month-label:hover { background:var(--accent-soft); }
+  .month-chevron { flex-shrink:0; transition:transform .15s; color:var(--ts); }
+  .month-label.open .month-chevron { transform:rotate(90deg); }
+  .month-label-summary { margin-left:auto; font-family:inherit; font-size:11.5px; font-weight:700;
+                         color:var(--ts); font-variant-numeric:tabular-nums; }
+
   .week-label { display:flex; align-items:center; gap:8px; width:100%; padding:11px 20px; font-size:10.5px; font-weight:800; color:var(--tm); letter-spacing:.04em; text-transform:uppercase; background:transparent; border:none; border-top:1px solid var(--border); cursor:pointer; font-family:inherit; text-align:left; }
   .week-label:hover { background:var(--inset); color:var(--ts); }
   .week-chevron { flex-shrink:0; transition:transform .15s; }
@@ -303,6 +371,6 @@
   .status-pill.off { color:var(--tm);background:var(--inset); }
 
   .week-total { font-size:12px; font-weight:700; color:var(--ts); background:var(--inset); border-top:1px solid var(--border); }
-  .month-total { font-size:13px; font-weight:800; color:var(--tp); border-top:2px solid var(--border); }
+  .month-total { font-size:13px; font-weight:800; color:var(--tp); background:var(--accent-soft); border-top:1px solid var(--border); }
   .month-total span:first-child { font-family:'Source Serif 4',serif; }
 </style>

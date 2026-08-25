@@ -48,6 +48,12 @@ export function formatDateFull(dateStr: string | null | undefined): string {
   return `${DAYS_FULL[d.getDay()]} ${d.getDate()} ${MONTHS_FULL[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+/** "August 2026" — for month headings, from a YYYY-MM or YYYY-MM-DD key. */
+export function formatMonthLabel(key: string): string {
+  const [y, m] = key.split('-').map(Number);
+  return `${MONTHS_FULL[m - 1]} ${y}`;
+}
+
 export function formatTime(timeStr: string | null | undefined): string {
   if (!timeStr) return '—';
   return timeStr;
