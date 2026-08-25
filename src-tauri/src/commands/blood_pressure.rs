@@ -39,7 +39,11 @@ pub async fn get_bp_for_date(
     date: String,
 ) -> Result<Vec<BloodPressure>, String> {
     sqlx::query_as::<_, BloodPressure>(
-        "SELECT * FROM blood_pressure WHERE log_date = ? ORDER BY reading_num"
+        // Chronological, not by reading_num: the sync appends watch readings as it
+        // finds them, so an early-morning synced reading can carry a higher
+        // reading_num than a manual one taken that afternoon. Undated readings last.
+        "SELECT * FROM blood_pressure WHERE log_date = ?
+         ORDER BY COALESCE(time_taken, '99:99'), reading_num"
     )
     .bind(&date)
     .fetch_all(&*pool)
@@ -53,14 +57,16 @@ pub async fn upsert_bp(
     bp: BloodPressure,
 ) -> Result<i64, String> {
     sqlx::query(
-        "INSERT INTO blood_pressure (log_date, reading_num, time_taken, systolic, diastolic, notes)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO blood_pressure (log_date, reading_num, time_taken, systolic, diastolic, pulse, notes, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(log_date, reading_num) DO UPDATE SET
          time_taken=excluded.time_taken, systolic=excluded.systolic,
-         diastolic=excluded.diastolic, notes=excluded.notes"
+         diastolic=excluded.diastolic, pulse=excluded.pulse,
+         notes=excluded.notes, source=excluded.source"
     )
     .bind(&bp.log_date).bind(bp.reading_num).bind(&bp.time_taken)
-    .bind(bp.systolic).bind(bp.diastolic).bind(&bp.notes)
+    .bind(bp.systolic).bind(bp.diastolic).bind(bp.pulse)
+    .bind(&bp.notes).bind(&bp.source)
     .execute(&*pool)
     .await
     .map(|r| r.last_insert_rowid())

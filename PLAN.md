@@ -29,13 +29,26 @@ Pacing view → activity & fatigue history → Dashboard
 - **Migrations** are embedded via `sqlx::migrate!("./migrations")` — never read from disk
   at runtime.
 - **Source spreadsheet:** `%OneDrive%\Health\Fatigue_Log_V6.xlsx` (V6 is current, not V4/V5).
-- **Health Sync CSVs (Phase 7):** four folders under a Drive root (default `G:\My Drive`):
+- **Health Sync CSVs (Phase 7):** five folders under a Drive root (default `G:\My Drive`):
   `Health Sync Steps` (`Date,Time,Steps` → SUM/day), `Health Sync Heart rate`
   (`Date,Time,Heart rate,Source` → mean/min/max → `ave_hr`/`hr_min`/`hr_max`),
   `Health Sync Energy burned` (`Date,Time,Active/Resting/Total calories` → active → `activity_calories`),
   `Health Sync Sleep` (`Date,Time,Duration in seconds,Sleep stage` → asleep/rem/deep/awake/on-pillow
-  hours, attributed to the **wake day**). COALESCE-upsert; resting HR left untouched. Reprocess by
-  file mtime > last sync. See `commands/csv_import.rs`.
+  hours, attributed to the **wake day**), `Health Sync Blood pressure`
+  (`Date,Time,Diastolic,Systolic,Heart rate,Comment` → rows in `blood_pressure`, keyed on the
+  reading's minute). COALESCE-upsert into `daily_logs`; resting HR left untouched.
+  See `commands/csv_import.rs`.
+- **Which CSVs still need reading is tracked per file** (mtime + size, in a machine-local
+  `csv_state.json`), not by a single "last sync" timestamp. A Health Sync CSV carries the time
+  the *phone* uploaded it, always earlier than the moment Google Drive hands it to a given PC,
+  so a run-time watermark permanently skipped every file that arrived late — which was most of
+  them on a machine that had been switched off. The state must stay machine-local: each PC's
+  Drive client materialises the same files at its own pace.
+- **Blood pressure has two owners.** The sync creates rows with `source = 'watch'` and only ever
+  matches against those (same date + `HH:MM`), refreshing their numbers and leaving their note
+  alone. A hand-typed row — `source` holding a device name, or NULL — is never updated or
+  deleted by it, so an arm-cuff reading taken minutes after a watch reading survives as its own
+  reading. That is the point: the two are there to be compared.
 
 ## Status
 
@@ -48,6 +61,7 @@ Pacing view → activity & fatigue history → Dashboard
 | 5 | Token-based CSS overhaul (adopt Meridian design system) | ✅ Done — full Meridian theme implemented 2026-06-27 |
 | 6 | Settings page — Google Drive CSV path, calibration viewer, data export (CSV/JSON), collapsible import | ✅ Done 2026-06-27 |
 | 7 | Google Drive CSV auto-import (Samsung Health via Health Sync — steps/HR/sleep/energy) | ✅ Done 2026-06-27 — `commands/csv_import.rs`, on-launch + Sync now |
+| 7b | Blood pressure from the same source, per-file change tracking, `pulse`/`source`/note on a reading | ✅ Done 2026-08-25 — migration `20240624`, one-off backfill of 74 days |
 | 8 | Dose-logging UI (frontend for `get_doses_for_date` / `upsert_dose`) | ⬜ TODO |
 | 9 | Chart.js integration (replace static SVG trends with interactive charts) | ✅ Done 2026-06-27 — Chart.svelte wrapper, Dashboard compare-signals dual-line chart, Sleep 30-day selectable-metric chart, Dashboard sleep sparkline |
 

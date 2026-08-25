@@ -56,6 +56,17 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **One editor per column.** The Daily Log owns entry for `daily_logs`; Cardio, Sleep and the
   Dashboard display those fields read-only. Two autosaving editors for one column is how you
   get edits that quietly revert.
+- **The CSV import tracks files individually, never by a clock.** `csv_state.json` (machine-local,
+  next to `secrets.json`) maps each file to `mtime:size`; a file is re-read when that changes.
+  Do not reintroduce a "last sync" watermark: a Health Sync CSV's mtime is when the *phone*
+  uploaded it, which is always before Google Drive delivers it to a given PC, so every
+  late-arriving file fell behind the line and was skipped forever. The state has to stay
+  machine-local for the same reason — one PC having read a file says nothing about another.
+- **`blood_pressure.source` decides who may touch a row.** `'watch'` = created by the sync, which
+  refreshes its numbers but never its note. Anything else (a device name, or NULL) was typed in
+  and the sync leaves it entirely alone — a cuff reading minutes after a watch reading is a
+  second reading, not a correction. Readings are displayed in `time_taken` order; `reading_num`
+  is only an identity key.
 
 ## Workflow
 Git repo, `origin` = github.com/Geffen111/health-tracker. Solo project — commit and

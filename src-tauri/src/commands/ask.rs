@@ -40,7 +40,7 @@ medications(id, name, short_code, default_dose REAL, dose_unit, category, active
 medication_doses(id, medication_id, log_date, time_taken, dose_amount REAL, notes)
   - join medication_doses.medication_id = medications.id for the med name.
 
-blood_pressure(id, log_date, reading_num, time_taken, systolic INTEGER, diastolic INTEGER, notes)
+blood_pressure(id, log_date, reading_num, time_taken, systolic INTEGER, diastolic INTEGER, pulse INTEGER, notes, source)  -- source: 'watch' if synced from the watch, else the device name typed in, or NULL
   - multiple readings per day (reading_num). A "deleted" reading has notes='DELETED' and null systolic/diastolic.
 
 activity_categories(id, name, energy_weight REAL)   -- e.g. 'Physical / Active', 'Screen / Sedentary'

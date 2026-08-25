@@ -29,6 +29,11 @@
   let nTime = $state('');
   let nSys = $state('');
   let nDia = $state('');
+  let nPulse = $state('');
+  let nNote = $state('');
+  // Kept between readings on purpose: when a cuff is being checked against the
+  // watch it is the same device for every reading of the session.
+  let nSource = $state('');
 
   // History chart: a couplet selector + range toggle. Each couplet's two series
   // sit on a left and right y-axis so differing scales read clearly.
@@ -176,6 +181,12 @@
   function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadBP(); loadDailyLog(); }
   function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadBP(); loadDailyLog(); }
 
+  // A reading synced from the watch. The sync owns these rows and refreshes their
+  // numbers; anything else was typed in here and the sync never touches it.
+  const WATCH = 'watch';
+  function isWatch(r: any) { return r.source === WATCH; }
+  function sourceLabel(r: any) { return isWatch(r) ? 'Watch' : (r.source || 'Manual'); }
+
   async function addReading() {
     if (!nSys || !nDia) return;
     try {
@@ -187,12 +198,40 @@
           time_taken: nTime || null,
           systolic: parseInt(nSys),
           diastolic: parseInt(nDia),
-          notes: null,
+          pulse: nPulse ? parseInt(nPulse) : null,
+          notes: nNote.trim() || null,
+          // Typed in here, so never 'watch' — that tag is the sync's alone, and it
+          // is what keeps a cuff reading and a watch reading minutes apart distinct.
+          source: nSource.trim() || null,
         },
       });
-      nTime = ''; nSys = ''; nDia = '';
+      nTime = ''; nSys = ''; nDia = ''; nPulse = ''; nNote = '';
       await loadBP();
     } catch (e) { console.error('Error saving BP:', e); }
+  }
+
+  /// Edit one free-text field on an existing reading. The whole row goes back so
+  /// nothing else is nulled — including `source`, which keeps a synced row synced
+  /// after its note is edited.
+  async function saveField(r: any, field: 'notes' | 'source', value: string) {
+    const next = value.trim() || null;
+    if ((r[field] ?? null) === next) return;
+    try {
+      await invoke('upsert_bp', {
+        bp: {
+          log_date: r.log_date,
+          reading_num: r.reading_num,
+          time_taken: r.time_taken ?? null,
+          systolic: r.systolic,
+          diastolic: r.diastolic,
+          pulse: r.pulse ?? null,
+          notes: r.notes ?? null,
+          source: r.source ?? null,
+          [field]: next,
+        },
+      });
+      await loadBP();
+    } catch (e) { console.error('Error saving BP field:', e); }
   }
 
   async function deleteReading(readingNum: number) {
@@ -274,23 +313,52 @@
       </div>
     </div>
     <div class="bp-list">
-      {#each bpReadings as r}
+      {#each bpReadings as r (r.reading_num)}
         {@const t = tagFor(r.systolic, r.diastolic)}
         <div class="bp-row">
-          <span class="bp-time">{r.time_taken ?? '--:--'}</span>
-          <span class="bp-dot" style="background:{t.dot};"></span>
-          <span class="bp-values"><strong>{r.systolic}/{r.diastolic}</strong> <span class="bp-unit">mmHg</span></span>
-          <span class="bp-tag">{t.tag}</span>
-          <button class="bp-delete" onclick={() => deleteReading(r.reading_num)} aria-label="Delete reading">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
+          <div class="bp-main">
+            <span class="bp-time">{r.time_taken ?? '--:--'}</span>
+            <span class="bp-dot" style="background:{t.dot};"></span>
+            <span class="bp-values">
+              <strong>{r.systolic}/{r.diastolic}</strong> <span class="bp-unit">mmHg</span>
+              {#if r.pulse}<span class="bp-pulse">{r.pulse}<span class="bp-unit"> bpm</span></span>{/if}
+            </span>
+            <span class="bp-tag">{t.tag}</span>
+            {#if isWatch(r)}
+              <span class="bp-src-badge" title="Synced from the watch">{sourceLabel(r)}</span>
+            {:else}
+              <input
+                class="bp-edit src"
+                value={r.source ?? ''}
+                placeholder="Source"
+                aria-label="Source device"
+                title="Which monitor took this reading"
+                onchange={(e) => saveField(r, 'source', e.currentTarget.value)}
+              />
+            {/if}
+            <button class="bp-delete" onclick={() => deleteReading(r.reading_num)} aria-label="Delete reading">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <!-- Editable on every row, synced ones included: an imported comment is a
+               starting point, not the last word. -->
+          <input
+            class="bp-edit note"
+            value={r.notes ?? ''}
+            placeholder="Note"
+            aria-label="Note"
+            onchange={(e) => saveField(r, 'notes', e.currentTarget.value)}
+          />
         </div>
       {/each}
       <div class="bp-add">
-        <input type="time" bind:value={nTime} class="bp-input time" />
+        <input type="time" bind:value={nTime} class="bp-input time" aria-label="Reading time" />
         <input bind:value={nSys} placeholder="Sys" class="bp-input xs" />
         <span class="bp-slash">/</span>
         <input bind:value={nDia} placeholder="Dia" class="bp-input xs" />
+        <input bind:value={nPulse} placeholder="Pulse" class="bp-input xs" aria-label="Pulse" />
+        <input bind:value={nSource} placeholder="Source" class="bp-input src" aria-label="Source device" title="Which monitor took this reading - watch readings are tagged automatically by the sync" />
+        <input bind:value={nNote} placeholder="Note" class="bp-input note" aria-label="Note" />
         <button class="add-reading-btn" onclick={addReading}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           Add reading
@@ -433,19 +501,33 @@
   .bp-avg-unit { font-size:13px; color:var(--tm); }
 
   .bp-list { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:14px; overflow:hidden; }
-  .bp-row { display:flex; align-items:center; gap:14px; padding:12px 16px; border-bottom:1px solid var(--border); }
+  .bp-row { display:flex; flex-direction:column; gap:2px; padding:10px 16px; border-bottom:1px solid var(--border); }
+  .bp-main { display:flex; align-items:center; gap:14px; }
   .bp-time { font-size:12.5px; color:var(--ts); font-variant-numeric:tabular-nums; width:48px; font-weight:600; }
   .bp-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
   .bp-values { flex:1; font-size:14px; color:var(--tp); font-variant-numeric:tabular-nums; }
   .bp-values strong { font-weight:600; }
+  .bp-pulse { margin-left:9px; color:var(--ts); font-size:12.5px; }
   .bp-unit { color:var(--tm); font-size:12px; font-weight:400; }
   .bp-tag { font-size:11.5px; color:var(--tm); }
+  .bp-src-badge { font-size:10.5px; font-weight:700; color:var(--ts); background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:2px 9px; white-space:nowrap; }
   .bp-delete { width:26px;height:26px;border-radius:50%;border:none;background:transparent;color:var(--tm);display:flex;align-items:center;justify-content:center;cursor:pointer; }
 
-  .bp-add { display:flex; align-items:center; gap:8px; padding:12px 14px; background:var(--inset); }
+  /* Reads as plain text until hovered or focused, so a list of readings with no
+     notes stays quiet while every one of them is still directly editable. */
+  .bp-edit { background:transparent; border:1px solid transparent; border-radius:7px; padding:2px 6px; font-size:11.5px; color:var(--ts); font-family:inherit; }
+  .bp-edit::placeholder { color:var(--tm); opacity:.55; }
+  .bp-edit:hover { border-color:var(--border); }
+  .bp-edit:focus { outline:none; border-color:var(--accent); background:var(--card); color:var(--tp); }
+  .bp-edit.src { width:84px; text-align:center; flex-shrink:0; }
+  .bp-edit.note { margin-left:62px; }
+
+  .bp-add { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px 14px; background:var(--inset); }
   .bp-input { background:var(--card); border:1px solid var(--border); border-radius:9px; padding:8px; font-size:12.5px; color:var(--tp); text-align:center; font-variant-numeric:tabular-nums; }
   .bp-input.time { width:auto; }
   .bp-input.xs { width:56px; }
+  .bp-input.src { width:88px; text-align:left; font-variant-numeric:normal; }
+  .bp-input.note { flex:1; min-width:96px; text-align:left; font-variant-numeric:normal; }
   .bp-slash { color:var(--tm); }
   .add-reading-btn { margin-left:auto; display:inline-flex; align-items:center; gap:6px; background:var(--accent); color:#fff; border:none; border-radius:999px; padding:8px 15px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; }
 

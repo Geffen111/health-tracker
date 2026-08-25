@@ -85,7 +85,12 @@
       if (s?.auto_import) {
         await invoke('import_health_csv', { root: s.csv_root ?? null, full: false });
       }
-    } catch {}
+    } catch (e) {
+      // Deliberately silent on screen — Settings shows the last sync and its errors.
+      // It does reach the console, though: a launch import that fails every time
+      // (a Drive folder that moved, say) otherwise leaves no trace at all.
+      console.warn('Health Sync auto-import failed:', e);
+    }
     checkForUpdate();
   });
 

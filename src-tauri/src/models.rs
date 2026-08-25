@@ -136,7 +136,14 @@ pub struct BloodPressure {
     pub time_taken: Option<String>,
     pub systolic: i64,
     pub diastolic: i64,
+    /// Pulse the monitor reported with this reading, when it gave one.
+    #[serde(default)]
+    pub pulse: Option<i64>,
     pub notes: Option<String>,
+    /// 'watch' on a synced row; the device name on a hand-typed one; NULL when a
+    /// manual row records no device. Only 'watch' rows are the sync's to touch.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 // ── Activity ──

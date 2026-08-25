@@ -17,12 +17,21 @@ fn settings_path() -> PathBuf {
     get_data_dir().join("settings.json")
 }
 
+/// Machine-local app data, NOT the OneDrive-synced `get_data_dir`. Holds anything
+/// that is true of *this* PC only: the API key (a secret that must never be
+/// uploaded) and the CSV import's per-file fingerprints (each machine's Google
+/// Drive client materialises the same files at its own pace, so one machine's
+/// record of what it has already read says nothing about another's).
+pub fn local_data_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(get_data_dir)
+        .join("health-tracker")
+}
+
 // Machine-local, NOT cloud-synced. Holds secrets only.
 fn secrets_path() -> PathBuf {
-    let base = dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .unwrap_or_else(|| get_data_dir());
-    base.join("health-tracker").join("secrets.json")
+    local_data_dir().join("secrets.json")
 }
 
 fn read_secrets() -> serde_json::Value {
@@ -152,10 +161,6 @@ pub fn setting_str(key: &str) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-}
-
-pub fn setting_i64(key: &str) -> Option<i64> {
-    read_settings().get(key).and_then(|v| v.as_i64())
 }
 
 pub fn put_setting(key: &str, value: serde_json::Value) -> Result<(), String> {

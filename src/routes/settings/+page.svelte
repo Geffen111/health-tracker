@@ -137,7 +137,7 @@
       await saveSyncSettings();
       const r: any = await invoke('import_health_csv', { root: csvRoot, full });
       lastSync = r.last_sync;
-      syncMsg = `Synced ${r.days_updated} day${r.days_updated === 1 ? '' : 's'} from ${r.files_processed} file${r.files_processed === 1 ? '' : 's'} (${r.files_skipped} unchanged). Steps ${r.steps_days}, HR ${r.hr_days}, sleep ${r.sleep_days}, energy ${r.energy_days}.`;
+      syncMsg = `Synced ${r.days_updated} day${r.days_updated === 1 ? '' : 's'} from ${r.files_processed} file${r.files_processed === 1 ? '' : 's'} (${r.files_skipped} unchanged). Steps ${r.steps_days}, HR ${r.hr_days}, sleep ${r.sleep_days}, energy ${r.energy_days}, ${r.bp_readings} new BP reading${r.bp_readings === 1 ? '' : 's'}.`;
       // Manual sleep entries win over the watch — say so rather than counting
       // those nights as synced.
       if (r.sleep_kept_manual > 0) {

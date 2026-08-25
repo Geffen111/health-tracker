@@ -5,11 +5,17 @@
 // into daily_logs so manually-entered fields are never clobbered. A sleep session
 // crosses midnight, so it's attributed to the WAKE day (the date of its last row).
 //
-// "On each sync a file is (re)created for that day", so files are reprocessed when
-// their modification time is newer than the last successful sync (or when `full`).
+// "On each sync a file is (re)created for that day", so each file is remembered by
+// a fingerprint (modification time + size) and re-read whenever that changes — see
+// collect_files for why a single "last sync" timestamp does not work here.
 //
-// The per-metric aggregation is pure (agg_steps/agg_hr/agg_energy/agg_sleep) and
-// unit-tested at the bottom; the command just does file IO, merging and upsert.
+// Blood pressure is the odd one out: its readings are rows in their own table
+// rather than columns on a day, and the user may also type readings in by hand
+// (an arm cuff checked against the watch). The sync therefore only ever touches
+// rows it owns — see import_bp.
+//
+// The per-metric aggregation is pure (agg_steps/agg_hr/agg_energy/agg_sleep/agg_bp)
+// and unit-tested at the bottom; the command just does file IO, merging and upsert.
 
 use crate::commands::settings;
 use serde::Serialize;
@@ -25,6 +31,11 @@ const STEPS_DIR: &str = "Health Sync Steps";
 const HR_DIR: &str = "Health Sync Heart rate";
 const ENERGY_DIR: &str = "Health Sync Energy burned";
 const SLEEP_DIR: &str = "Health Sync Sleep";
+const BP_DIR: &str = "Health Sync Blood pressure";
+
+/// `blood_pressure.source` on every row this import creates. Rows with any other
+/// source (or none) were typed in by hand and are not the sync's to change.
+const WATCH_SOURCE: &str = "watch";
 
 #[derive(Serialize)]
 pub struct CsvImportResult {
@@ -37,6 +48,9 @@ pub struct CsvImportResult {
     /// Nights the CSV had sleep for, but the Sleep page's manual entry won.
     pub sleep_kept_manual: i64,
     pub energy_days: i64,
+    /// Blood-pressure readings newly added (readings already stored are refreshed
+    /// in place and not counted).
+    pub bp_readings: i64,
     pub errors: Vec<String>,
     pub last_sync: String,
 }
@@ -53,6 +67,17 @@ struct DayAgg {
     sleep_deep: Option<f64>,
     sleep_awake: Option<f64>,
     sleep_time_head_on_pillow: Option<f64>,
+}
+
+/// One blood-pressure reading, as read out of a CSV.
+#[derive(Clone, Debug, PartialEq)]
+struct BpReading {
+    date: String, // YYYY-MM-DD
+    time: String, // HH:MM
+    systolic: i64,
+    diastolic: i64,
+    pulse: Option<i64>,
+    comment: Option<String>,
 }
 
 /// Per-day HR, bucketed by minute. A workout is sampled every second, so a single
@@ -88,7 +113,16 @@ pub async fn import_health_csv(
         return Err(format!("CSV root folder not found: {}", root.display()));
     }
 
-    let last_sync_unix = if full { None } else { settings::setting_i64("last_sync_unix") };
+    // Which files have already been read is tracked per file, not by a single
+    // "last sync" timestamp. The old watermark compared the moment the sync ran
+    // against each file's modification time, but a Health Sync CSV carries the time
+    // the *phone* uploaded it — always earlier than the moment Google Drive hands
+    // the file to this PC. A file that arrived after a sync run but was stamped
+    // before it fell permanently behind the line and was never read again.
+    //
+    // `prev` is empty on a full re-sync, so every file comes back as unseen.
+    let prev_state = if full { FileState::new() } else { read_file_state() };
+    let mut next_state = FileState::new();
     let mut errors: Vec<String> = Vec::new();
     let mut files_processed = 0i64;
     let mut files_skipped = 0i64;
@@ -100,11 +134,12 @@ pub async fn import_health_csv(
     let mut sleep: HashMap<String, (f64, f64, f64, f64)> = HashMap::new(); // asleep, rem, deep, awake (secs)
 
     // ── Steps ──
-    for path in &collect_files(&root.join(STEPS_DIR), last_sync_unix, &mut files_skipped) {
-        match read_csv(path) {
+    for f in collect_files(&root.join(STEPS_DIR), &prev_state, &mut next_state, &mut files_skipped) {
+        match read_csv(&f.path) {
             Ok((h, recs)) => match agg_steps(&h, &recs) {
                 Ok(m) => {
                     files_processed += 1;
+                    next_state.insert(f.key.clone(), f.fingerprint.clone());
                     // Daily totals, not increments — overlapping files (e.g. a
                     // monthly range plus a single-day export) report the same
                     // day, so take the max rather than summing.
@@ -115,34 +150,36 @@ pub async fn import_health_csv(
                         }
                     }
                 }
-                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+                Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
             },
-            Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
         }
     }
 
     // ── Energy burned (active calories) ──
-    for path in &collect_files(&root.join(ENERGY_DIR), last_sync_unix, &mut files_skipped) {
-        match read_csv(path) {
+    for f in collect_files(&root.join(ENERGY_DIR), &prev_state, &mut next_state, &mut files_skipped) {
+        match read_csv(&f.path) {
             Ok((h, recs)) => match agg_energy(&h, &recs) {
                 Ok(m) => {
                     files_processed += 1;
+                    next_state.insert(f.key.clone(), f.fingerprint.clone());
                     for (d, c) in m {
                         *energy.entry(d).or_insert(0.0) += c;
                     }
                 }
-                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+                Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
             },
-            Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
         }
     }
 
     // ── Heart rate ──
-    for path in &collect_files(&root.join(HR_DIR), last_sync_unix, &mut files_skipped) {
-        match read_csv(path) {
+    for f in collect_files(&root.join(HR_DIR), &prev_state, &mut next_state, &mut files_skipped) {
+        match read_csv(&f.path) {
             Ok((h, recs)) => match agg_hr(&h, &recs) {
                 Ok(m) => {
                     files_processed += 1;
+                    next_state.insert(f.key.clone(), f.fingerprint.clone());
                     // The HR folder holds overlapping 30-day exports, so the same
                     // minute recurs across files; merging per-minute sums keeps the
                     // per-minute mean (and the daily average) stable regardless.
@@ -157,18 +194,19 @@ pub async fn import_health_csv(
                         e.max = e.max.max(dh.max);
                     }
                 }
-                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+                Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
             },
-            Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
         }
     }
 
     // ── Sleep (attributed to wake day) ──
-    for path in &collect_files(&root.join(SLEEP_DIR), last_sync_unix, &mut files_skipped) {
-        match read_csv(path) {
+    for f in collect_files(&root.join(SLEEP_DIR), &prev_state, &mut next_state, &mut files_skipped) {
+        match read_csv(&f.path) {
             Ok((h, recs)) => match agg_sleep(&h, &recs) {
                 Ok(m) => {
                     files_processed += 1;
+                    next_state.insert(f.key.clone(), f.fingerprint.clone());
                     // A single night recurs across overlapping exports — a 30-day range
                     // file and the per-day file for that morning carry the same session
                     // (or one is a partial fragment). Take the fullest reading per stage
@@ -181,9 +219,27 @@ pub async fn import_health_csv(
                         e.3 = e.3.max(aw);
                     }
                 }
-                Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+                Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
             },
-            Err(e) => errors.push(format!("{}: {}", file_label(path), e)),
+            Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
+        }
+    }
+
+    // ── Blood pressure ──
+    // Keyed (date, HH:MM) so a reading that appears in the per-day, weekly AND
+    // monthly exports collapses to the one reading rather than three.
+    let mut bp: HashMap<(String, String), BpReading> = HashMap::new();
+    for f in collect_files(&root.join(BP_DIR), &prev_state, &mut next_state, &mut files_skipped) {
+        match read_csv(&f.path) {
+            Ok((h, recs)) => match agg_bp(&h, &recs) {
+                Ok(m) => {
+                    files_processed += 1;
+                    next_state.insert(f.key.clone(), f.fingerprint.clone());
+                    bp.extend(m);
+                }
+                Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
+            },
+            Err(e) => errors.push(format!("{}: {}", file_label(&f.path), e)),
         }
     }
 
@@ -246,11 +302,27 @@ pub async fn import_health_csv(
         }
     }
 
+    // ── Blood pressure rows ──
+    let mut readings: Vec<BpReading> = bp.into_values().collect();
+    readings.sort_by(|a, b| (&a.date, &a.time).cmp(&(&b.date, &b.time)));
+    let bp_readings = match import_bp(&pool, &readings).await {
+        Ok(n) => n,
+        Err(e) => {
+            errors.push(format!("blood pressure: {}", e));
+            0
+        }
+    };
+
+    // ── Remember what was read ──
+    // Written last, and only for files that parsed cleanly: a file that errored is
+    // absent from the state and so comes back around on the next run.
+    write_file_state(&next_state);
+
     // ── Record sync time ──
+    // Display only. Nothing filters on it — that was the bug this replaced.
     let now = chrono::Local::now();
     let last_sync = now.format("%Y-%m-%d %H:%M").to_string();
     let _ = settings::put_setting("last_sync", serde_json::json!(last_sync));
-    let _ = settings::put_setting("last_sync_unix", serde_json::json!(now.timestamp()));
 
     Ok(CsvImportResult {
         files_processed,
@@ -261,6 +333,7 @@ pub async fn import_health_csv(
         sleep_days,
         sleep_kept_manual,
         energy_days,
+        bp_readings,
         errors,
         last_sync,
     })
@@ -427,6 +500,127 @@ fn agg_sleep(headers: &csv::StringRecord, records: &[csv::StringRecord]) -> Resu
     Ok(out)
 }
 
+/// Blood-pressure readings in one file, keyed (date, HH:MM). Samsung's columns are
+/// `Date, Time, Diastolic, Systolic, Heart rate, Comment` — note diastolic comes
+/// first, and both pressures arrive as decimals ("123.0"). A row with no usable
+/// pressure pair is dropped rather than stored as a zero.
+fn agg_bp(
+    headers: &csv::StringRecord,
+    records: &[csv::StringRecord],
+) -> Result<HashMap<(String, String), BpReading>, &'static str> {
+    let di = col(headers, "Date").ok_or("missing Date column")?;
+    let sys_i = col(headers, "Systolic").ok_or("missing Systolic column")?;
+    let dia_i = col(headers, "Diastolic").ok_or("missing Diastolic column")?;
+    // The monitor's pulse and the user's comment are both optional on the reading.
+    let pulse_i = col(headers, "Heart rate");
+    let comment_i = col(headers, "Comment");
+
+    let mut out: HashMap<(String, String), BpReading> = HashMap::new();
+    for r in records {
+        let cell = match r.get(di) {
+            Some(c) => c,
+            None => continue,
+        };
+        let (date, time) = match (date_part(cell), minute_part(cell)) {
+            (Some(d), Some(t)) => (d, t),
+            _ => continue,
+        };
+        let (systolic, diastolic) = match (r.get(sys_i).and_then(parse_i64), r.get(dia_i).and_then(parse_i64)) {
+            (Some(sys), Some(dia)) if sys > 0 && dia > 0 => (sys, dia),
+            _ => continue,
+        };
+        let pulse = pulse_i.and_then(|i| r.get(i)).and_then(parse_i64).filter(|p| *p > 0);
+        let comment = comment_i
+            .and_then(|i| r.get(i))
+            .map(|c| c.trim())
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_string());
+        out.insert(
+            (date.clone(), time.clone()),
+            BpReading { date, time, systolic, diastolic, pulse, comment },
+        );
+    }
+    Ok(out)
+}
+
+/// Add the watch readings the DB doesn't have yet; refresh the numbers on ones it
+/// already holds. Hand-typed rows are never touched — a cuff reading and a watch
+/// reading taken minutes apart are two separate readings, which is the whole point
+/// of taking both — so the sync matches only against rows it owns: `source = 'watch'`
+/// at the same date and time. An existing watch row keeps its note, since that may
+/// have been edited since it was imported.
+///
+/// Returns the number of readings newly inserted.
+async fn import_bp(pool: &SqlitePool, readings: &[BpReading]) -> Result<i64, String> {
+    let mut inserted = 0i64;
+    // date → (HH:MM of the watch rows already stored → their reading_num,
+    //         highest reading_num in use that day). reading_num is only an identity
+    //         key here; readings are displayed in time order, not by it.
+    let mut days: HashMap<String, (HashMap<String, i64>, i64)> = HashMap::new();
+
+    for r in readings {
+        if !days.contains_key(&r.date) {
+            let rows = sqlx::query_as::<_, (i64, Option<String>, Option<String>)>(
+                "SELECT reading_num, time_taken, source FROM blood_pressure WHERE log_date = ?",
+            )
+            .bind(&r.date)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+            let mut watch: HashMap<String, i64> = HashMap::new();
+            let mut max_num = 0i64;
+            for (num, time_taken, source) in rows {
+                max_num = max_num.max(num);
+                if source.as_deref() == Some(WATCH_SOURCE) {
+                    if let Some(t) = time_taken {
+                        watch.insert(t, num);
+                    }
+                }
+            }
+            days.insert(r.date.clone(), (watch, max_num));
+        }
+        let day = days.get_mut(&r.date).expect("just inserted");
+
+        if let Some(&num) = day.0.get(&r.time) {
+            sqlx::query(
+                "UPDATE blood_pressure SET systolic = ?, diastolic = ?, pulse = ?
+                 WHERE log_date = ? AND reading_num = ?",
+            )
+            .bind(r.systolic)
+            .bind(r.diastolic)
+            .bind(r.pulse)
+            .bind(&r.date)
+            .bind(num)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            day.1 += 1;
+            let num = day.1;
+            sqlx::query(
+                "INSERT INTO blood_pressure
+                    (log_date, reading_num, time_taken, systolic, diastolic, pulse, notes, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&r.date)
+            .bind(num)
+            .bind(&r.time)
+            .bind(r.systolic)
+            .bind(r.diastolic)
+            .bind(r.pulse)
+            .bind(&r.comment)
+            .bind(WATCH_SOURCE)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            day.0.insert(r.time.clone(), num);
+            inserted += 1;
+        }
+    }
+    Ok(inserted)
+}
+
 async fn upsert_day(pool: &SqlitePool, date: &str, a: &DayAgg) -> Result<(), String> {
     // A day the user filled in by hand keeps its sleep breakdown: the CASE below
     // holds the five sleep columns at their stored values when sleep_source is
@@ -484,8 +678,84 @@ fn is_samsung_health_file(path: &Path) -> bool {
     name.contains("samsung health") || name.contains("samsung-health") || name.contains("samsunghealth")
 }
 
-/// CSV files in `dir` (only Samsung Health files, optionally filtered by `last_sync_unix`).
-fn collect_files(dir: &Path, last_sync_unix: Option<i64>, skipped: &mut i64) -> Vec<PathBuf> {
+// ── Which files still need reading ──
+//
+// Per-file state, kept machine-locally (see settings::local_data_dir). It must NOT
+// live in the OneDrive-synced settings.json: it records what *this* PC has read out
+// of *this* PC's Google Drive folder, and each machine's Drive client materialises
+// the same files at its own pace. A shared record would let whichever machine ran
+// first mark files as done for a machine that has never seen them.
+
+/// "<folder>/<filename>" → "<mtime>:<size>".
+type FileState = HashMap<String, String>;
+
+fn state_path() -> PathBuf {
+    settings::local_data_dir().join("csv_state.json")
+}
+
+fn read_file_state() -> FileState {
+    fs::read_to_string(state_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_file_state(state: &FileState) {
+    let path = state_path();
+    if let Some(parent) = path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    if let Ok(json) = serde_json::to_string(state) {
+        let _ = fs::write(&path, json);
+    }
+}
+
+/// Modification time and size together. Size alone misses a rewrite of the same
+/// length; mtime alone misses nothing here but costs nothing to pair up, and keeps
+/// the check honest if Drive ever restamps a file it re-downloads unchanged.
+fn fingerprint(entry: &fs::DirEntry) -> String {
+    let md = entry.metadata().ok();
+    let mtime = md
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
+    format!("{}:{}", mtime, size)
+}
+
+/// The state key: folder name + filename. Full paths would churn the whole state
+/// the day Google Drive gets a different drive letter.
+fn state_key(path: &Path) -> String {
+    let dir = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    format!("{}/{}", dir, file_label(path))
+}
+
+/// A CSV that needs reading, with the fingerprint to record once it has been.
+struct ScanFile {
+    path: PathBuf,
+    key: String,
+    fingerprint: String,
+}
+
+/// Samsung Health CSVs in `dir` whose fingerprint differs from `prev` — i.e. new or
+/// changed since this PC last read them. Unchanged files are counted as skipped and
+/// their fingerprint carried straight into `next`; files that need reading are left
+/// out of `next` until they parse, so a failure is retried rather than swallowed.
+/// Carrying forward only what is actually on disk also drops files Drive has removed.
+fn collect_files(
+    dir: &Path,
+    prev: &FileState,
+    next: &mut FileState,
+    skipped: &mut i64,
+) -> Vec<ScanFile> {
     let mut out = Vec::new();
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
@@ -508,21 +778,14 @@ fn collect_files(dir: &Path, last_sync_unix: Option<i64>, skipped: &mut i64) -> 
             continue;
         }
 
-        if let Some(ls) = last_sync_unix {
-            let mtime = entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64);
-            if let Some(mt) = mtime {
-                if mt <= ls {
-                    *skipped += 1;
-                    continue;
-                }
-            }
+        let key = state_key(&path);
+        let fingerprint = fingerprint(&entry);
+        if prev.get(&key) == Some(&fingerprint) {
+            next.insert(key, fingerprint);
+            *skipped += 1;
+            continue;
         }
-        out.push(path);
+        out.push(ScanFile { path, key, fingerprint });
     }
     out
 }
@@ -738,6 +1001,55 @@ mod tests {
         assert_eq!(n2, (3600.0 + 1800.0 + 1200.0, 1200.0, 1800.0, 0.0));
     }
 
+    fn bp_headers() -> csv::StringRecord {
+        rec(&["Date", "Time", "Diastolic", "Systolic", "Heart rate", "Comment"])
+    }
+
+    #[test]
+    fn bp_reads_readings_keyed_by_date_and_minute() {
+        let recs = vec![
+            rec(&["2026.08.24 09:00:42", "09:00:42", "79.0", "123.0", "69", ""]),
+            rec(&["2026.08.24 18:17:28", "18:17:28", "81.0", "126.0", "80", "after walk"]),
+        ];
+        let m = agg_bp(&bp_headers(), &recs).unwrap();
+        assert_eq!(m.len(), 2);
+        let r = &m[&("2026-08-24".to_string(), "09:00".to_string())];
+        // Diastolic comes before systolic in the file; they must not be swapped.
+        assert_eq!((r.systolic, r.diastolic), (123, 79));
+        assert_eq!(r.pulse, Some(69));
+        assert_eq!(r.comment, None); // an empty Comment stays empty, not ""
+        assert_eq!(m[&("2026-08-24".to_string(), "18:17".to_string())].comment.as_deref(), Some("after walk"));
+    }
+
+    #[test]
+    fn bp_collapses_the_same_reading_across_overlapping_exports() {
+        // The per-day, weekly and monthly exports all carry this reading; keying on
+        // (date, minute) means it lands once, not three times.
+        let row = rec(&["2026.08.24 09:00:42", "09:00:42", "79.0", "123.0", "69", ""]);
+        let m = agg_bp(&bp_headers(), &[row.clone(), row.clone(), row]).unwrap();
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn bp_drops_rows_without_a_usable_pressure_pair() {
+        let recs = vec![
+            rec(&["2026.08.24 09:00:42", "09:00:42", "", "123.0", "69", ""]),
+            rec(&["2026.08.24 10:00:00", "10:00:00", "0.0", "0.0", "", ""]),
+            rec(&["garbage", "", "79.0", "123.0", "69", ""]),
+        ];
+        assert!(agg_bp(&bp_headers(), &recs).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bp_tolerates_a_file_without_pulse_or_comment_columns() {
+        let h = rec(&["Date", "Time", "Diastolic", "Systolic"]);
+        let recs = vec![rec(&["2026.08.24 09:00:42", "09:00:42", "79.0", "123.0"])];
+        let r = &agg_bp(&h, &recs).unwrap()[&("2026-08-24".to_string(), "09:00".to_string())];
+        assert_eq!((r.systolic, r.diastolic), (123, 79));
+        assert_eq!(r.pulse, None);
+        assert_eq!(r.comment, None);
+    }
+
     #[test]
     fn missing_columns_returns_error() {
         let h = rec(&["Date", "Time"]);
@@ -745,6 +1057,15 @@ mod tests {
         assert!(agg_hr(&h, &[]).is_err());
         assert!(agg_energy(&h, &[]).is_err());
         assert!(agg_sleep(&h, &[]).is_err());
+        assert!(agg_bp(&h, &[]).is_err());
+    }
+
+    #[test]
+    fn state_key_is_folder_and_filename_not_the_drive_letter() {
+        assert_eq!(
+            state_key(Path::new(r"G:\My Drive\Health Sync Steps\Steps 2026.08.24 Samsung Health.csv")),
+            "Health Sync Steps/Steps 2026.08.24 Samsung Health.csv"
+        );
     }
 
     #[test]

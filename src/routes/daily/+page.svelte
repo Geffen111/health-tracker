@@ -31,6 +31,7 @@
     nTime: string;
     nSys: string;
     nDia: string;
+    nPulse: string;
     /** Snapshot of the last saved state; an edit is anything that differs. */
     baseline: string;
   }
@@ -58,7 +59,7 @@
   }
 
   function newDay(date: string, totals: boolean): Day {
-    return { date, totals, log: freshLog(date), symptoms: [], bp: [], nTime: '', nSys: '', nDia: '', baseline: '' };
+    return { date, totals, log: freshLog(date), symptoms: [], bp: [], nTime: '', nSys: '', nDia: '', nPulse: '', baseline: '' };
   }
 
   let dayA = $state<Day>(newDay(shiftISO(initialDate, -1), true));
@@ -286,10 +287,14 @@
           time_taken: d.nTime || null,
           systolic: parseInt(d.nSys),
           diastolic: parseInt(d.nDia),
+          pulse: d.nPulse ? parseInt(d.nPulse) : null,
           notes: null,
+          // Typed in here, so never 'watch'. A device name and a note can be added
+          // on the Cardio page, which is the full editor for a reading.
+          source: null,
         },
       });
-      d.nTime = ''; d.nSys = ''; d.nDia = '';
+      d.nTime = ''; d.nSys = ''; d.nDia = ''; d.nPulse = '';
       d.bp = await invoke('get_bp_for_date', { date: d.date });
     } catch (e) {
       showToast(`Couldn't save reading: ${e}`, 'error');
@@ -540,7 +545,11 @@
         <div class="bp-row">
           <span class="bp-time">{r.time_taken ?? '--:--'}</span>
           <span class="bp-dot" style="background:{tagDot(r.systolic, r.diastolic)};"></span>
-          <span class="bp-values"><strong>{r.systolic}/{r.diastolic}</strong></span>
+          <span class="bp-values">
+            <strong>{r.systolic}/{r.diastolic}</strong>
+            {#if r.pulse}<span class="bp-pulse">{r.pulse} bpm</span>{/if}
+          </span>
+          {#if r.source}<span class="bp-src">{r.source === 'watch' ? 'Watch' : r.source}</span>{/if}
           <button class="bp-delete" onclick={() => deleteReading(d, r.reading_num)} aria-label="Delete reading">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
@@ -551,6 +560,7 @@
         <input bind:value={d.nSys} placeholder="Sys" class="bp-input xs" />
         <span class="bp-slash">/</span>
         <input bind:value={d.nDia} placeholder="Dia" class="bp-input xs" />
+        <input bind:value={d.nPulse} placeholder="Pulse" class="bp-input xs" aria-label="Pulse" />
         <button class="add-reading-btn" onclick={() => addReading(d)}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           Add
@@ -684,6 +694,10 @@
   .bp-dot { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
   .bp-values { flex:1; font-size:13.5px; color:var(--tp); font-variant-numeric:tabular-nums; }
   .bp-values strong { font-weight:600; }
+  .bp-pulse { margin-left:8px; font-size:11.5px; color:var(--tm); }
+  /* Which monitor took it. Set here only by the sync ('Watch'); the Cardio page is
+     where a device name is typed onto a manual reading. */
+  .bp-src { font-size:10px; font-weight:700; color:var(--ts); background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:1px 7px; white-space:nowrap; }
   .bp-delete { width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:var(--tm);display:flex;align-items:center;justify-content:center;cursor:pointer; }
   .bp-add { display:flex; align-items:center; gap:6px; padding:10px 12px; background:var(--inset); }
   .bp-input { background:var(--card); border:1px solid var(--border); border-radius:9px; padding:7px; font-size:12.5px; color:var(--tp); text-align:center; font-variant-numeric:tabular-nums; min-width:0; }
