@@ -146,7 +146,7 @@ Respond with JSON only, no markdown:
         retry_note = retry_note,
     );
 
-    let content = call_openrouter(api_key, &prompt, 0.1, 1024).await?;
+    let content = call_openrouter(api_key, &prompt, 0.1, 3072).await?;
     let cleaned = strip_code_fences(&content);
 
     #[derive(serde::Deserialize)]
@@ -257,5 +257,5 @@ figures and state any assumption. If the result is empty, say no matching data w
         table = table,
     );
 
-    call_openrouter(api_key, &prompt, 0.2, 1024).await
+    call_openrouter(api_key, &prompt, 0.2, 2048).await
 }

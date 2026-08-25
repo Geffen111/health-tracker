@@ -93,7 +93,7 @@ Answer concisely (a few sentences, or a short list if appropriate)."#,
         context = context,
     );
 
-    let answer = call_openrouter(&api_key, &prompt, 0.2, 1024).await?;
+    let answer = call_openrouter(&api_key, &prompt, 0.2, 2048).await?;
     Ok(RecordsAnswer { answer, sources })
 }
 
