@@ -62,6 +62,9 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   uploaded it, which is always before Google Drive delivers it to a given PC, so every
   late-arriving file fell behind the line and was skipped forever. The state has to stay
   machine-local for the same reason — one PC having read a file says nothing about another.
+- **The launch CSV import gates the page.** `+layout.svelte` renders no route until the
+  auto-import finishes: a child's `onMount` runs before the layout's, so a page mounted
+  alongside it reads pre-import data (and the Daily Log autosaves those stale totals back).
 - **`blood_pressure.source` decides who may touch a row.** `'watch'` = created by the sync, which
   refreshes its numbers but never its note. Anything else (a device name, or NULL) was typed in
   and the sync leaves it entirely alone — a cuff reading minutes after a watch reading is a

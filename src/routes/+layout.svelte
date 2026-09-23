@@ -77,6 +77,13 @@
   }
 
   // Best-effort Health Sync auto-import on launch (silent; surfaced in Settings).
+  //
+  // The page isn't rendered until this finishes. A child's onMount runs before
+  // the layout's, so a page mounted alongside the import would read the DB
+  // before the import wrote to it and show yesterday's data until the next
+  // launch — and the Daily Log would autosave those stale totals back over the
+  // freshly imported ones.
+  let syncing = $state(true);
   onMount(async () => {
     initTheme();
     collapsed = localStorage.getItem('sidebarCollapsed') === '1';
@@ -90,6 +97,8 @@
       // It does reach the console, though: a launch import that fails every time
       // (a Drive folder that moved, say) otherwise leaves no trace at all.
       console.warn('Health Sync auto-import failed:', e);
+    } finally {
+      syncing = false;
     }
     checkForUpdate();
   });
@@ -183,7 +192,11 @@
     </div>
   </aside>
   <main class="main-content" class:wide={$page.url.pathname === '/daily'}>
-    {@render children()}
+    {#if syncing}
+      <div class="launch-sync">Syncing health data…</div>
+    {:else}
+      {@render children()}
+    {/if}
   </main>
 </div>
 
@@ -478,6 +491,12 @@
      maximized window actually offers rather than the reading-width cap. */
   .main-content.wide {
     max-width: 1560px;
+  }
+  .launch-sync {
+    padding-top: 40px;
+    color: var(--tm);
+    font-size: 13px;
+    font-weight: 500;
   }
 
   /* Undecorated window: this replaces the native title bar. Hidden above the top
