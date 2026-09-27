@@ -54,7 +54,12 @@ pub async fn create_medication(
     .await
     .map_err(|e| e.to_string())?;
 
-    record_history(&pool, med.id, &med.name, "started", &format!("Started {}", med.name), None, None).await;
+    // An as-needed med isn't "started" the way a daily one is — it's added to the list.
+    if med.med_type.as_deref() == Some("occasional") {
+        record_history(&pool, med.id, &med.name, "added", "Occasional medication added", None, None).await;
+    } else {
+        record_history(&pool, med.id, &med.name, "started", &format!("Started {}", med.name), None, None).await;
+    }
     Ok(med)
 }
 
@@ -398,5 +403,31 @@ pub async fn save_db_setting(pool: State<'_, SqlitePool>, key: String, value: St
         .execute(&*pool)
         .await
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+// ── Day note (free text shown above the day's doses) ──
+
+#[tauri::command]
+pub async fn get_medication_note(pool: State<'_, SqlitePool>, date: String) -> Result<Option<String>, String> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT note FROM medication_notes WHERE log_date = ?")
+        .bind(&date)
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(row.map(|r| r.0))
+}
+
+/// Save the day's note; a blank note removes the row rather than storing an empty string.
+#[tauri::command]
+pub async fn save_medication_note(pool: State<'_, SqlitePool>, date: String, note: String) -> Result<(), String> {
+    if note.trim().is_empty() {
+        sqlx::query("DELETE FROM medication_notes WHERE log_date = ?")
+            .bind(&date).execute(&*pool).await.map_err(|e| e.to_string())?;
+    } else {
+        sqlx::query(
+            "INSERT INTO medication_notes (log_date, note) VALUES (?, ?)
+             ON CONFLICT(log_date) DO UPDATE SET note = excluded.note, updated_at = datetime('now')")
+            .bind(&date).bind(&note).execute(&*pool).await.map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

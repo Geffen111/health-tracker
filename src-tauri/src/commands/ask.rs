@@ -51,6 +51,13 @@ activity_log(id, log_date, activity_type_id, duration_hours REAL, energy_cost, n
     (energy_cost 'Low'=0.7, 'Medium'=1.0, 'High'=2.0). There is no stored risk score or crash
     prediction: PEM = post-exertional malaise, but this log holds only what was observed.
 
+foods(id, name, kind 'food'|'drink', regular INTEGER, active INTEGER)
+food_log(id, log_date, time_taken, food_id, amount TEXT, group_id)
+  - one row per item eaten/drunk; join food_log.food_id = foods.id for the name. No calories recorded.
+food_groups(id, name, default_time)   -- named sets of foods logged together, e.g. 'Usual breakfast'
+
+exposures(id, log_date, time_taken, description)   -- environmental exposures noted, e.g. 'Dust', 'Paint fumes'
+
 watch_calibration(id, cal_date, cal_time, notes)   -- blood-pressure-monitor calibration events.
 
 lab_results(id, test_name, category, result_date, value_num REAL, value_text, unit,

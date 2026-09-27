@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { formatDate, todayISO, shiftISO, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
+  import { recallView, rememberView, oneOf } from '$lib/viewState';
 
   let summary = $state<any>(null);
   let todayLog = $state<any>(null);
@@ -11,11 +12,13 @@
   let bpHistory = $state<any[]>([]);
   let rolling = $state<any[]>([]);
   let monthly = $state<any[]>([]);
-  let monthlyMetric = $state<'steps' | 'calories'>('steps');
+  // Chart settings survive leaving the page (see $lib/viewState).
+  const saved = recallView<any>('dashboard');
+  let monthlyMetric = $state<'steps' | 'calories'>(oneOf(saved.monthlyMetric, ['steps', 'calories'] as const, 'steps'));
   let loading = $state(true);
-  let rangeDays = $state(14);
-  let metricA = $state<string | null>('fatigue');
-  let metricB = $state<string | null>('steps');
+  let rangeDays = $state(oneOf(saved.rangeDays, [14, 30, 60], 14));
+  let metricA = $state<string | null>(saved.metricA !== undefined ? saved.metricA : 'fatigue');
+  let metricB = $state<string | null>(saved.metricB !== undefined ? saved.metricB : 'steps');
 
   const METRICS: Record<string, { label: string; field: string; color: string; format: (v: number) => string }> = {
     // Colours chosen for maximum separation — every pair must be tellable apart
@@ -44,9 +47,14 @@
         invoke<any[]>('get_rolling_averages'),
         invoke<any[]>('get_monthly_activity'),
       ]);
-      // Default the comparison to the three most recent years present.
+      // Keep the years compared last time (those still in the data); otherwise
+      // default to the three most recent years present.
       const ys = [...new Set(monthly.map((r: any) => r.year))].sort((a, b) => a - b);
-      selectedYears = ys.slice(-3);
+      const kept = Array.isArray(saved.selectedYears)
+        ? saved.selectedYears.filter((y: number) => ys.includes(y)).slice(0, 3)
+        : [];
+      selectedYears = kept.length ? kept : ys.slice(-3);
+      yearsReady = true;
     } catch (e) {
       console.error('Dashboard error:', e);
     } finally {
@@ -191,8 +199,8 @@
   // ends, so today always shows an artificial dip. The chart is "through yesterday".
   let chartLogs = $derived([...logs].reverse().filter((l: any) => l.log_date !== todayISO()).slice(-rangeDays));
   let chartLabels = $derived(chartLogs.map((l: any) => formatDate(l.log_date)));
-  let chartMetricA = $derived(metricA ? METRICS[metricA] : null);
-  let chartMetricB = $derived(metricB ? METRICS[metricB] : null);
+  let chartMetricA = $derived(metricA ? METRICS[metricA] ?? null : null);
+  let chartMetricB = $derived(metricB ? METRICS[metricB] ?? null : null);
 
   let compareDatasets = $derived([
     ...(chartMetricA ? [{
@@ -242,7 +250,14 @@
   // The chart compares a chosen set of years (max 3); defaults to the most recent 3.
   // The table still shows every year.
   let selectedYears = $state<number[]>([]);
-  let monthlyTableOpen = $state(false);
+  let yearsReady = false;   // don't save the empty pre-load list over the remembered one
+  let monthlyTableOpen = $state(saved.monthlyTableOpen === true);
+  $effect(() => {
+    rememberView('dashboard', {
+      rangeDays, metricA, metricB, monthlyMetric, monthlyTableOpen,
+      selectedYears: yearsReady ? selectedYears : saved.selectedYears,
+    });
+  });
   let monthlyChartYears = $derived([...selectedYears].sort((a, b) => a - b));
   function toggleYear(y: number) {
     if (selectedYears.includes(y)) {

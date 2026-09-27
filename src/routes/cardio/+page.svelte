@@ -5,6 +5,7 @@
   import { formatDateLong, formatDateShort, todayISO, shiftISO } from '$lib/formatDate';
   import { dateFromUrl, pushDate, dateHref } from '$lib/dateParam';
   import Chart from '$lib/Chart.svelte';
+  import { recallView, rememberView, oneOf } from '$lib/viewState';
 
   let today = $state(todayISO());
   let nowTime = new Date().toTimeString().slice(0, 5);
@@ -37,8 +38,11 @@
 
   // History chart: a couplet selector + range toggle. Each couplet's two series
   // sit on a left and right y-axis so differing scales read clearly.
-  let histDays = $state(30);
-  let histMetric = $state<'bp' | 'minmax' | 'avg'>('bp');
+  // Chart settings survive leaving the page (see $lib/viewState).
+  const saved = recallView<any>('cardio');
+  let histDays = $state<number>(typeof saved.histDays === 'number' ? saved.histDays : 30);
+  let histMetric = $state<'bp' | 'minmax' | 'avg'>(oneOf(saved.histMetric, ['bp', 'minmax', 'avg'] as const, 'bp'));
+  $effect(() => rememberView('cardio', { histDays, histMetric }));
   let histLogs = $state<any[]>([]);   // daily_logs (HR fields), oldest first
   let bpHistory = $state<any[]>([]);  // daily-averaged BP, oldest first
 

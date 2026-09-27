@@ -4,6 +4,7 @@
   import { onMount } from 'svelte';
   import { marked } from 'marked';
   import Chart from '$lib/Chart.svelte';
+  import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { showToast } from '$lib/stores/toast.svelte';
 
   interface VaultNote {
@@ -32,7 +33,9 @@
   interface RecordsAnswer { answer: string; sources: SourceRef[]; }
 
   type Tab = 'browse' | 'labs' | 'ask';
-  let tab = $state<Tab>('browse');
+  // The open tab and charted test survive leaving the page (see $lib/viewState).
+  const saved = recallView<any>('records');
+  let tab = $state<Tab>(oneOf(saved.tab, ['browse', 'labs', 'ask'] as const, 'browse'));
 
   // ── Browse ──
   let loading = $state(true);
@@ -85,6 +88,7 @@
   });
 
   onMount(async () => {
+    if (tab === 'labs') ensureLabs();
     try {
       index = await invoke<VaultIndex>('get_vault_index');
       if (index.exists && index.notes.length) {
@@ -172,6 +176,7 @@
   let labsLoaded = $state(false);
   let labTests = $state<LabTestSummary[]>([]);
   let selectedTest = $state<string | null>(null);
+  $effect(() => rememberView('records', { tab, selectedTest: selectedTest ?? saved.selectedTest ?? null }));
   let series = $state<LabPoint[]>([]);
   let labsLastExtract = $state<string | null>(null);
   let extracting = $state(false);
@@ -192,7 +197,10 @@
       labsLastExtract = await invoke<string | null>('get_labs_last_extract');
       labTests = await invoke<LabTestSummary[]>('get_lab_tests');
       labsLoaded = true;
-      if (labTests.length && !selectedTest) selectTest(labTests[0].test_name);
+      if (labTests.length && !selectedTest) {
+        const keep = labTests.some((t) => t.test_name === saved.selectedTest);
+        selectTest(keep ? saved.selectedTest : labTests[0].test_name);
+      }
     } catch (e) {
       console.error('Error loading labs:', e);
       showToast('Could not load lab results', 'error');

@@ -6,6 +6,7 @@
   import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { showToast } from '$lib/stores/toast.svelte';
   import Chart from '$lib/Chart.svelte';
+  import { recallView, rememberView, oneOf } from '$lib/viewState';
 
   let today = $state(todayISO());
   let selectedDate = $state(dateFromUrl($page.url));
@@ -13,7 +14,9 @@
   let loading = $state(true);
   let currentLog = $state<any>(null);
 
-  let rangeDays = $state(30);
+  // Chart settings survive leaving the page (see $lib/viewState).
+  const saved = recallView<any>('sleep');
+  let rangeDays = $state(oneOf(saved.rangeDays, [14, 30, 60], 30));
 
   onMount(async () => {
     await loadLogs();
@@ -51,7 +54,8 @@
   function prevDay() { editing = false; selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); }
   function nextDay() { editing = false; selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); }
 
-  let selectedMetric = $state('score');
+  let selectedMetric = $state<string>(typeof saved.selectedMetric === 'string' ? saved.selectedMetric : 'score');
+  $effect(() => rememberView('sleep', { rangeDays, selectedMetric }));
 
   function pickMetric(k: string) { selectedMetric = k; }
 
@@ -88,7 +92,7 @@
   let scoreVal = $derived(sleepScore(currentLog));
   let timeInBed = $derived(currentLog ? (currentLog.sleep_time_head_on_pillow ?? currentLog.sleep_actual_asleep ?? null) : null);
 
-  let curMetric = $derived(metricConfig[selectedMetric]);
+  let curMetric = $derived(metricConfig[selectedMetric] ?? metricConfig.score);
   let curLastVal = $derived(fieldOf(currentLog, curMetric.field));
   let trendValues = $derived(trendLogs.map((l: any) => fieldOf(l, curMetric.field)).filter((v: number | null): v is number => v != null));
   let curAvgVal = $derived(trendValues.length > 0 ? (trendValues.reduce((a: number, b: number) => a + b, 0) / trendValues.length) : null);

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { formatDate, todayISO, shiftISO, formatDateLong, weekdayIndex } from '$lib/formatDate';
   import { dateFromUrl, pushDate } from '$lib/dateParam';
@@ -18,9 +18,52 @@
   let today = $state(todayISO());
   let selectedDate = $state(dateFromUrl($page.url));
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadAll(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadAll(); }
-  function goToday() { selectedDate = today; pushDate(selectedDate); loadAll(); }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadAll(); loadNote(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadAll(); loadNote(); }
+  function goToday() { selectedDate = today; pushDate(selectedDate); loadAll(); loadNote(); }
+
+  // ── Day note ──
+  // Collapsed unless the day already has a note. Saved as you type (debounced), on blur,
+  // and before the day changes or the page closes. `noteDate` pins which day the text
+  // belongs to, so a save that lands after the arrows moved on can't file it elsewhere.
+  let noteText = $state('');
+  let noteOpen = $state(false);
+  let noteDate = '';   // set by loadNote before anything can be typed
+  let noteSaved = '';
+  let noteTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function loadNote() {
+    await saveNote();
+    const date = selectedDate;
+    try {
+      const n = await invoke<string | null>('get_medication_note', { date });
+      if (date !== selectedDate) return;
+      noteDate = date;
+      noteText = n ?? '';
+      noteSaved = noteText;
+      noteOpen = noteText.trim() !== '';
+    } catch (e) {
+      console.error('Error loading note:', e);
+    }
+  }
+
+  function queueNoteSave() {
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(saveNote, 800);
+  }
+
+  async function saveNote() {
+    clearTimeout(noteTimer);
+    if (noteText === noteSaved) return;
+    const text = noteText;
+    try {
+      await invoke('save_medication_note', { date: noteDate, note: text });
+      noteSaved = text;
+    } catch (e) {
+      showToast(`Couldn't save the note: ${e}`, 'error');
+    }
+  }
+  onDestroy(() => { void saveNote(); });
 
   // Inline "log a dose" form, keyed by medication id.
   let openId = $state<number | null>(null);
@@ -45,7 +88,7 @@
   let openMenuId = $state<number | null>(null);
 
   onMount(async () => {
-    await loadAll();
+    await Promise.all([loadAll(), loadNote()]);
     loading = false;
   });
 
@@ -385,6 +428,7 @@
 
   let eventMeta: Record<string, { label: string; style: string }> = {
     started: { label: 'Started', style: 'color:var(--accent-fg);background:var(--accent-soft);' },
+    added: { label: 'Added', style: 'color:var(--sky);background:var(--sky-soft);' },
     ceased: { label: 'Ceased', style: 'color:var(--red-fg);background:var(--red-soft);' },
     reactivated: { label: 'Restarted', style: 'color:var(--peri);background:var(--peri-soft);' },
     dose_changed: { label: 'Dose changed', style: 'color:var(--amber-fg);background:var(--amber-soft);' },
@@ -678,6 +722,30 @@
     </div>
 
     <div class="right-col">
+      <div class="note-card">
+        <button class="note-toggle" class:open={noteOpen} onclick={() => noteOpen = !noteOpen} aria-expanded={noteOpen}>
+          <svg class="tree-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+          <span class="card-heading">Note</span>
+          {#if !noteOpen && noteText.trim()}
+            <span class="note-preview">{noteText}</span>
+          {:else if !noteOpen}
+            <span class="note-hint">Add a note for {formatDate(selectedDate)}</span>
+          {/if}
+        </button>
+        {#if noteOpen}
+          <!-- svelte-ignore a11y_autofocus -->
+          <textarea
+            class="note-input"
+            rows="3"
+            placeholder="Anything worth noting about today's medication…"
+            bind:value={noteText}
+            oninput={queueNoteSave}
+            onblur={saveNote}
+            autofocus={noteText === ''}
+          ></textarea>
+        {/if}
+      </div>
+
       <div class="doses-card">
         <div class="doses-header">
           <span class="card-heading">Doses</span>
@@ -865,6 +933,13 @@
   .schedule-actions { display:flex; justify-content:flex-end; margin-top:4px; }
 
   .right-col { display:flex; flex-direction:column; gap:16px; }
+  .note-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
+  .note-toggle { display:flex; align-items:center; gap:9px; width:100%; padding:14px 18px; background:transparent; border:none; cursor:pointer; text-align:left; font-family:inherit; }
+  .note-toggle:hover { background:var(--inset); }
+  .note-toggle.open > .tree-chevron { transform:rotate(90deg); }
+  .note-preview { flex:1; min-width:0; font-size:12.5px; color:var(--ts); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .note-hint { flex:1; min-width:0; font-size:12px; color:var(--tm); text-align:right; }
+  .note-input { display:block; width:calc(100% - 36px); margin:0 18px 16px; min-height:74px; resize:vertical; background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:10px 12px; font-size:13px; line-height:1.5; color:var(--tp); }
   .doses-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
   .doses-header { display:flex; justify-content:space-between; align-items:center; padding:16px 18px 12px; }
   .doses-date { font-size:11.5px; color:var(--tm); }

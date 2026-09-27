@@ -47,6 +47,7 @@
     { href: '/activity', label: 'Activity', svg: '<path d="M3 12h3.5l2-6 3.5 12 2.5-6H21"/>' },
     { href: '/cardio', label: 'Cardio', svg: '<path d="M12 20C7 16 4 13 4 9.5 4 7 6 5.5 8 5.5c1.5 0 2.7.8 4 2.5 1.3-1.7 2.5-2.5 4-2.5 2 0 4 1.5 4 4C20 13 17 16 12 20Z"/>' },
     { href: '/medication', label: 'Medication', svg: '<rect x="4" y="9" width="16" height="6" rx="3"/><path d="M12 9v6"/>' },
+    { href: '/food', label: 'Food & Drink', svg: '<path d="M7 3v8M4.5 3v5a2.5 2.5 0 0 0 5 0V3M7 11v10"/><path d="M17.5 21V3c-2.2 1.2-3.5 3.8-3.5 7v3h3.5"/>' },
     { href: '/work', label: 'Work', svg: '<rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M8 7V5.5A1.5 1.5 0 0 1 9.5 4h5A1.5 1.5 0 0 1 16 5.5V7"/>' },
     { href: '/pacing', label: 'Pacing', svg: '<path d="M4 19V9M9.3 19V5M14.7 19v-7M20 19v-4"/>' },
     { href: '/ask', label: 'Ask', svg: '<path d="M21 11.5a8.5 8.5 0 0 1-12.5 7.5L3 21l1.8-5A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9.2 9.3a2.8 2.8 0 0 1 5.2 1.2c0 1.8-2.7 2.3-2.7 2.3"/><circle cx="12" cy="16.2" r="0.6" fill="currentColor" stroke="none"/>' },
@@ -104,7 +105,19 @@
   });
 
   let { children }: { children: import('svelte').Snippet } = $props();
+
+  // Tauri's own file-drop handling is off (`dragDropEnabled: false`) so pages can take
+  // dropped photos as ordinary HTML drops. The flip side: a file dropped anywhere that
+  // isn't a drop zone would make the webview navigate to it, replacing the whole app.
+  // Drop zones call preventDefault themselves; everything else refuses the drop here.
+  function refuseStrayDrop(e: DragEvent) {
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+  }
 </script>
+
+<svelte:window ondragover={refuseStrayDrop} ondrop={refuseStrayDrop} />
 
 <svelte:head>
   <link rel="preconnect" href="https://fonts.googleapis.com" />

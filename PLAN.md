@@ -69,6 +69,7 @@ Pacing view → activity & fatigue history → Dashboard
 | 11 | Entry restructure — day carried in `?date=`; Daily Log rebuilt as two dated columns (previous day + selected day) absorbing resting HR and BP; Cardio becomes analysis-only | ✅ Done 2026-07-28 |
 | 12 | Retire the PEM risk model; `/pem-model` → `/pacing` (descriptive activity & fatigue history) | ✅ Done 2026-08-19 — see "Retired: the PEM risk model" below |
 | 13 | Activity & category management — categories/types editable in-app, `load_group` made explicit | ✅ Done 2026-08-19 |
+| 14 | Food & Drink page (`/food`, items + groups, descriptive fatigue-alongside-food table); Exposures of note on Activity (with photo attachments stored as BLOBs); Medication day note; occasional meds logged as "added"; chart/view settings remembered per page | ✅ Done 2026-09-28 — migrations `20240625`–`20240627` |
 
 **AI integration (Phase 10):** OpenRouter (`deepseek/deepseek-v4-flash`), mirroring Family
 Finance. `commands/ai.rs` (shared client), `commands/ask.rs` (hybrid text-to-SQL — schema sent,

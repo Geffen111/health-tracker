@@ -5,6 +5,10 @@
   import { formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
   import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { computeDayLoad } from '$lib/load';
+  import { isImageFile, prepareImage } from '$lib/images';
+  import { showToast } from '$lib/stores/toast.svelte';
+  import { confirmAction } from '$lib/stores/confirm.svelte';
+  import AttachmentViewer from '$lib/components/AttachmentViewer.svelte';
 
   let today = $state(todayISO());
   let selectedDate = $state(dateFromUrl($page.url));
@@ -53,7 +57,7 @@
       activityTypes = types;
       typeUsage = usage;
       if (prefs?.activity_defaults?.length) activityDefaults = prefs.activity_defaults;
-      await loadEntries();
+      await Promise.all([loadEntries(), loadExposures()]);
     } catch (e) {
       console.error('Error loading activity data:', e);
     } finally {
@@ -211,8 +215,129 @@
     }))
   );
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadEntries(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadEntries(); }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadEntries(); loadExposures(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadEntries(); loadExposures(); }
+
+  // ── Exposures of note ──
+  // Free text, with earlier descriptions offered back (datalist) so "Dust" is spelt the same
+  // way each time. Photos can be picked or dropped onto the entry field (they attach to the
+  // new entry) or onto an existing entry (they attach to that one).
+  let exposures = $state<any[]>([]);
+  let expSuggestions = $state<string[]>([]);
+  let expText = $state('');
+  let expTime = $state('');
+  let pendingFiles = $state<File[]>([]);
+  let expBusy = $state(false);
+  let dragTarget = $state<number | 'new' | null>(null);
+  let viewingAttachment = $state<number | null>(null);
+
+  async function loadExposures() {
+    const date = selectedDate;
+    const [list, suggestions] = await Promise.all([
+      invoke<any[]>('get_exposures_for_date', { date }),
+      invoke<string[]>('list_exposure_descriptions'),
+    ]);
+    if (date !== selectedDate) return;
+    exposures = list;
+    expSuggestions = suggestions;
+  }
+
+  function imagesFrom(list: FileList | null | undefined): File[] {
+    const files = [...(list ?? [])];
+    const images = files.filter(isImageFile);
+    if (images.length < files.length) showToast('Only image files can be attached', 'error');
+    return images;
+  }
+
+  async function attach(exposureId: number, files: File[]) {
+    for (const f of files) {
+      const img = await prepareImage(f);
+      await invoke('add_exposure_attachment', {
+        exposureId,
+        fileName: img.fileName,
+        mimeType: img.mimeType,
+        dataBase64: img.dataBase64,
+      });
+    }
+  }
+
+  async function addExposure() {
+    const text = expText.trim();
+    if (!text) {
+      if (pendingFiles.length) showToast('Describe the exposure before saving the photo', 'error');
+      return;
+    }
+    expBusy = true;
+    try {
+      const id = await invoke<number>('add_exposure', { logDate: selectedDate, timeTaken: expTime || null, description: text });
+      await attach(id, pendingFiles);
+      expText = '';
+      expTime = '';
+      pendingFiles = [];
+    } catch (e) {
+      showToast(`Couldn't save: ${e}`, 'error');
+    } finally {
+      expBusy = false;
+      await loadExposures();
+    }
+  }
+
+  async function attachToExisting(exposureId: number, files: File[]) {
+    if (!files.length) return;
+    expBusy = true;
+    try {
+      await attach(exposureId, files);
+      showToast(files.length === 1 ? 'Photo attached' : `${files.length} photos attached`);
+    } catch (e) {
+      showToast(`Couldn't attach: ${e}`, 'error');
+    } finally {
+      expBusy = false;
+      await loadExposures();
+    }
+  }
+
+  async function removeExposure(ex: any) {
+    const n = ex.attachments.length;
+    const ok = await confirmAction({
+      title: 'Delete this exposure?',
+      message: n
+        ? `"${ex.description}" and its ${n === 1 ? 'photo' : `${n} photos`} will be removed.`
+        : `"${ex.description}" will be removed.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    await invoke('delete_exposure', { id: ex.id });
+    await loadExposures();
+  }
+
+  async function removeAttachment(a: any) {
+    const ok = await confirmAction({ title: 'Remove this photo?', message: a.file_name, confirmLabel: 'Remove' });
+    if (!ok) return;
+    await invoke('delete_exposure_attachment', { id: a.id });
+    await loadExposures();
+  }
+
+  function onDragOver(e: DragEvent, target: number | 'new') {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    dragTarget = target;
+  }
+  function onDragLeave(e: DragEvent) {
+    // Moving onto a child of the same drop zone isn't leaving it.
+    if (!(e.currentTarget as Node).contains(e.relatedTarget as Node | null)) dragTarget = null;
+  }
+  function onDrop(e: DragEvent, target: number | 'new') {
+    e.preventDefault();
+    dragTarget = null;
+    const files = imagesFrom(e.dataTransfer?.files);
+    if (target === 'new') pendingFiles = [...pendingFiles, ...files];
+    else attachToExisting(target, files);
+  }
+
+  function fmtSize(bytes: number): string {
+    return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
 
   let loadBuckets = $derived.by(() => {
     const { phys, cog, sens, total } = computeDayLoad(entries, activityTypes, categories);
@@ -340,8 +465,91 @@
         the same figures drive the <a href="/pacing">Pacing</a> charts.
       </div>
     </div>
+
+    <div class="card exp-card">
+      <div>
+        <div class="card-heading">Exposures of note</div>
+        <div class="card-subtitle">Dust, mould, fumes, cut grass &mdash; anything worth tracking</div>
+      </div>
+
+      {#if exposures.length}
+        <div class="exp-list">
+          {#each exposures as ex (ex.id)}
+            <div
+              class="exp-row" class:drag-over={dragTarget === ex.id}
+              role="group" aria-label={ex.description}
+              ondragover={(e) => onDragOver(e, ex.id)} ondragleave={onDragLeave} ondrop={(e) => onDrop(e, ex.id)}
+            >
+              <div class="exp-main">
+                {#if ex.time_taken}<span class="exp-time">{ex.time_taken}</span>{/if}
+                <span class="exp-desc">{ex.description}</span>
+              </div>
+              {#each ex.attachments as a (a.id)}
+                <span class="att-chip">
+                  <button class="att-open" onclick={() => (viewingAttachment = a.id)} title="{a.file_name} ({fmtSize(a.size_bytes)})" aria-label="View {a.file_name}">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+                  </button>
+                  <button class="att-x" onclick={() => removeAttachment(a)} aria-label="Remove {a.file_name}" title="Remove photo">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                  </button>
+                </span>
+              {/each}
+              <label class="exp-icon" title="Attach a photo">
+                <input type="file" accept="image/*,.heic,.heif" multiple hidden
+                  onchange={(e) => { attachToExisting(ex.id, imagesFrom(e.currentTarget.files)); e.currentTarget.value = ''; }} />
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+              </label>
+              <button class="exp-icon" onclick={() => removeExposure(ex)} aria-label="Delete exposure" title="Delete">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <div
+        class="exp-add" class:drag-over={dragTarget === 'new'}
+        role="group" aria-label="New exposure"
+        ondragover={(e) => onDragOver(e, 'new')} ondragleave={onDragLeave} ondrop={(e) => onDrop(e, 'new')}
+      >
+        <div class="exp-fields">
+          <input
+            class="exp-input" list="exposure-suggestions" placeholder="e.g. Dust, paint fumes…"
+            bind:value={expText} onkeydown={(e) => { if (e.key === 'Enter') addExposure(); }}
+            aria-label="Exposure"
+          />
+          <datalist id="exposure-suggestions">
+            {#each expSuggestions as s}<option value={s}></option>{/each}
+          </datalist>
+          <input class="exp-time-input" type="time" bind:value={expTime} aria-label="Time (optional)" title="Time (optional)" />
+          <label class="exp-icon attach" title="Attach a photo (or drop one here)">
+            <input type="file" accept="image/*,.heic,.heif" multiple hidden
+              onchange={(e) => { pendingFiles = [...pendingFiles, ...imagesFrom(e.currentTarget.files)]; e.currentTarget.value = ''; }} />
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+          </label>
+          <button class="add-btn" onclick={addExposure} disabled={!expText.trim() || expBusy}>Add</button>
+        </div>
+        {#if pendingFiles.length}
+          <div class="pending">
+            {#each pendingFiles as f, i}
+              <span class="pending-chip">
+                {f.name}
+                <button onclick={() => (pendingFiles = pendingFiles.filter((_, j) => j !== i))} aria-label="Remove {f.name}">
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              </span>
+            {/each}
+          </div>
+        {/if}
+        <div class="drop-hint">{dragTarget === 'new' ? 'Drop to attach' : 'Drop a photo here to attach it'}</div>
+      </div>
+    </div>
   </div>
 </div>
+
+{#if viewingAttachment !== null}
+  <AttachmentViewer attachmentId={viewingAttachment} onclose={() => (viewingAttachment = null)} />
+{/if}
 
 <div class="manage-card">
   <button class="manage-toggle" onclick={() => showManage = !showManage}>
@@ -528,4 +736,33 @@
   .add-mini { background:var(--accent); color:#fff; border:none; border-radius:10px; padding:8px 12px; font-size:12.5px; font-weight:700; cursor:pointer; font-family:inherit; }
   .add-mini:disabled { opacity:.45; cursor:not-allowed; }
   .load-note { font-size:11.5px; color:var(--ts); line-height:1.5; }
+
+  /* Exposures of note */
+  .exp-card { gap:14px; }
+  .exp-list { display:flex; flex-direction:column; }
+  .exp-row { display:flex; align-items:center; gap:6px; padding:9px 8px; margin:0 -8px; border-top:1px solid var(--border); border-radius:10px; }
+  .exp-row:first-child { border-top:none; }
+  .exp-row.drag-over { background:var(--accent-soft); outline:2px dashed var(--accent); outline-offset:-2px; }
+  .exp-main { flex:1; min-width:0; display:flex; align-items:baseline; gap:8px; }
+  .exp-time { font-size:11.5px; font-weight:700; color:var(--ts); font-variant-numeric:tabular-nums; }
+  .exp-desc { font-size:13.5px; font-weight:600; color:var(--tp); overflow-wrap:anywhere; }
+  .exp-icon { width:28px; height:28px; flex-shrink:0; display:flex; align-items:center; justify-content:center; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--ts); cursor:pointer; }
+  .exp-icon:hover { background:var(--inset); color:var(--tp); }
+  .att-chip { position:relative; flex-shrink:0; }
+  .att-open { width:28px; height:28px; display:flex; align-items:center; justify-content:center; border-radius:8px; border:1px solid var(--accent-soft); background:var(--accent-soft); color:var(--accent-fg); cursor:pointer; }
+  .att-open:hover { border-color:var(--accent); }
+  .att-x { position:absolute; top:-5px; right:-5px; width:15px; height:15px; border-radius:50%; border:1px solid var(--border); background:var(--card); color:var(--tm); display:none; align-items:center; justify-content:center; padding:0; cursor:pointer; }
+  .att-chip:hover .att-x { display:flex; }
+  .att-x:hover { color:var(--red-fg); }
+  .exp-add { display:flex; flex-direction:column; gap:8px; padding:12px; border:1.5px dashed var(--border); border-radius:14px; transition:background .12s, border-color .12s; }
+  .exp-add.drag-over { background:var(--accent-soft); border-color:var(--accent); }
+  .exp-fields { display:flex; align-items:center; gap:8px; }
+  .exp-input { flex:1; min-width:0; background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:9px 12px; font-size:13.5px; color:var(--tp); }
+  .exp-time-input { width:92px; background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:8px; font-size:12.5px; color:var(--tp); }
+  .exp-icon.attach { width:34px; height:34px; border-radius:10px; }
+  .exp-add .add-btn { padding:9px 14px; }
+  .pending { display:flex; flex-wrap:wrap; gap:6px; }
+  .pending-chip { display:inline-flex; align-items:center; gap:6px; max-width:100%; font-size:11.5px; font-weight:600; color:var(--accent-fg); background:var(--accent-soft); border-radius:999px; padding:4px 6px 4px 10px; }
+  .pending-chip button { width:16px; height:16px; border-radius:50%; border:none; background:transparent; color:inherit; display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; }
+  .drop-hint { font-size:11px; color:var(--tm); text-align:center; }
 </style>

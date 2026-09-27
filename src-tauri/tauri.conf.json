@@ -16,7 +16,8 @@
         "width": 1280,
         "height": 860,
         "maximized": true,
-        "decorations": false
+        "decorations": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

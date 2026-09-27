@@ -30,8 +30,9 @@ pnpm tauri dev
   runtime (`CARGO_MANIFEST_DIR` only exists on the build machine).
 
 ## Backend layout (`src-tauri/src/commands/`)
-`daily_log`, `medications` (+ dose logging), `blood_pressure`, `activity`, `pacing`
-(descriptive activity/exertion history), `dashboard`, `import_xlsx` (one-time spreadsheet
+`daily_log`, `medications` (+ dose logging, day note), `blood_pressure`, `activity`, `pacing`
+(descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups),
+`exposures` (exposures of note + photo attachments), `import_xlsx` (one-time spreadsheet
 import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 
 ## Conventions / gotchas
@@ -70,6 +71,16 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   and the sync leaves it entirely alone — a cuff reading minutes after a watch reading is a
   second reading, not a correction. Readings are displayed in `time_taken` order; `reading_num`
   is only an identity key.
+- **View settings persist via `$lib/viewState.ts`** (localStorage, key `view:<page>`): a page
+  reads `recallView()` at init and writes `rememberView()` from an `$effect`. Chart ranges,
+  metric picks, tabs — never data. Validate recalled values (`oneOf`) since options change.
+- **File drops are HTML drops.** `dragDropEnabled: false` in `tauri.conf.json` so pages get
+  dropped photos as ordinary `drop` events; `+layout.svelte` refuses drops anywhere that isn't
+  a drop zone (otherwise the webview navigates to the file). Drop zones must `preventDefault`.
+- **Exposure photos live in the DB** (`exposure_attachments.data` BLOB, base64 over IPC).
+  `$lib/images.ts` shrinks anything large to a <=2000px JPEG first — the DB syncs via OneDrive.
+- **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,
+  beside other tracked days. Same rule as Pacing — no scores, no forecasts.
 
 ## Workflow
 Git repo, `origin` = github.com/Geffen111/health-tracker. Solo project — commit and

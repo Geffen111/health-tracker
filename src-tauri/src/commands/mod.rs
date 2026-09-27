@@ -18,3 +18,5 @@ pub mod update;
 pub mod vault;
 pub mod labs;
 pub mod records_ask;
+pub mod food;
+pub mod exposures;

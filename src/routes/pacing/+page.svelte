@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { formatDate, formatDateShort, todayISO, shiftISO, weekdayIndex, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
+  import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { exportChartPng } from '$lib/chartExport';
   import { showToast } from '$lib/stores/toast.svelte';
 
@@ -24,9 +25,11 @@
   let loading = $state(true);
 
   // ── Controls ──
-  let rangeMonths = $state(6);           // 3 / 6 / 0 = all
-  let bucket = $state<'week' | 'month'>('week');
-  let groupBy = $state<'category' | 'activity'>('category');
+  // Remembered across leaving the page (see $lib/viewState).
+  const saved = recallView<any>('pacing');
+  let rangeMonths = $state(oneOf(saved.rangeMonths, [3, 6, 0], 6));           // 3 / 6 / 0 = all
+  let bucket = $state<'week' | 'month'>(oneOf(saved.bucket, ['week', 'month'] as const, 'week'));
+  let groupBy = $state<'category' | 'activity'>(oneOf(saved.groupBy, ['category', 'activity'] as const, 'category'));
 
   onMount(async () => {
     try {
@@ -106,7 +109,8 @@
 
   // Picked activities isolate a few series (e.g. just Yard Work and Walking). Empty =
   // the default top 9 by load, with the tail folded into "Other".
-  let pickedActivities = $state<string[]>([]);
+  let pickedActivities = $state<string[]>(Array.isArray(saved.pickedActivities) ? saved.pickedActivities : []);
+  $effect(() => rememberView('pacing', { rangeMonths, bucket, groupBy, pickedActivities }));
   function togglePick(name: string) {
     pickedActivities = pickedActivities.includes(name)
       ? pickedActivities.filter((n) => n !== name)
