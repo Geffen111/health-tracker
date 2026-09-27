@@ -20,7 +20,12 @@
     load: number;
   }
 
+  interface FoodItem { id: number; name: string; kind: 'food' | 'drink'; }
+  interface FoodDay { food_id: number; log_date: string; }
+
   let rows = $state<ActivityRow[]>([]);
+  let foodItems = $state<FoodItem[]>([]);
+  let foodDays = $state<FoodDay[]>([]);
   let logs = $state<any[]>([]);
   let loading = $state(true);
 
@@ -33,9 +38,11 @@
 
   onMount(async () => {
     try {
-      [rows, logs] = await Promise.all([
+      [rows, logs, foodItems, foodDays] = await Promise.all([
         invoke<ActivityRow[]>('get_activity_history', { from: null }),
         invoke<any[]>('list_daily_logs', { limit: 500, offset: 0 }),
+        invoke<FoodItem[]>('list_foods'),
+        invoke<FoodDay[]>('get_food_days'),
       ]);
     } catch (e) {
       console.error('Pacing load error:', e);
@@ -110,7 +117,9 @@
   // Picked activities isolate a few series (e.g. just Yard Work and Walking). Empty =
   // the default top 9 by load, with the tail folded into "Other".
   let pickedActivities = $state<string[]>(Array.isArray(saved.pickedActivities) ? saved.pickedActivities : []);
-  $effect(() => rememberView('pacing', { rangeMonths, bucket, groupBy, pickedActivities }));
+  let foodKind = $state<'all' | 'food' | 'drink'>(oneOf(saved.foodKind, ['all', 'food', 'drink'] as const, 'all'));
+  let pickedFoods = $state<string[]>(Array.isArray(saved.pickedFoods) ? saved.pickedFoods : []);
+  $effect(() => rememberView('pacing', { rangeMonths, bucket, groupBy, pickedActivities, foodKind, pickedFoods }));
   function togglePick(name: string) {
     pickedActivities = pickedActivities.includes(name)
       ? pickedActivities.filter((n) => n !== name)
@@ -156,13 +165,14 @@
   });
 
   // Average fatigue per bucket, overlaid so a heavy week can be read against how it felt.
-  let bucketFatigue = $derived.by(() =>
-    bucketKeys.map((k) => {
+  function fatigueForBuckets(keys: string[]): (number | null)[] {
+    return keys.map((k) => {
       const vals: number[] = [];
       for (const [date, f] of fatigueByDate) if (date >= fromDate && bucketKey(date) === k) vals.push(f);
       return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-    })
-  );
+    });
+  }
+  let bucketFatigue = $derived(fatigueForBuckets(bucketKeys));
 
   let activityDatasets = $derived([
     ...seriesNames.map((name, i) => ({
@@ -200,6 +210,83 @@
     },
     plugins: {
       legend: { display: true, position: 'bottom', labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 10 } },
+    },
+  });
+
+  // ── Food & drink over time ──
+  // How many days each item was had per week/month, with the same fatigue overlay as the
+  // activity chart. Descriptive, like everything on this page.
+  let foodById = $derived(new Map(foodItems.map((f) => [f.id, f])));
+  let rangeFoodDays = $derived(foodDays.filter((d) => {
+    const f = foodById.get(d.food_id);
+    return d.log_date >= fromDate && f != null && (foodKind === 'all' || f.kind === foodKind);
+  }));
+  // Items in range, most-often-had first.
+  let foodRanking = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const d of rangeFoodDays) {
+      const n = foodById.get(d.food_id)!.name;
+      counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n);
+  });
+  function toggleFood(name: string) {
+    pickedFoods = pickedFoods.includes(name) ? pickedFoods.filter((n) => n !== name) : [...pickedFoods, name];
+  }
+  let activePickedFoods = $derived(pickedFoods.filter((n) => foodRanking.includes(n)));
+  let foodSeriesNames = $derived.by(() => {
+    if (activePickedFoods.length) return foodRanking.filter((n) => activePickedFoods.includes(n));
+    if (foodRanking.length <= 10) return foodRanking;
+    return [...foodRanking.slice(0, 9), 'Other'];
+  });
+  let foodBucketKeys = $derived([...new Set(rangeFoodDays.map((d) => bucketKey(d.log_date)))].sort());
+  let foodCounts = $derived.by(() => {
+    const keep = new Set(foodSeriesNames);
+    const fold = activePickedFoods.length === 0;
+    const m = new Map<string, Map<string, number>>();
+    for (const d of rangeFoodDays) {
+      let name = foodById.get(d.food_id)!.name;
+      if (!keep.has(name)) {
+        if (!fold) continue;
+        name = 'Other';
+      }
+      const inner = m.get(name) ?? new Map<string, number>();
+      const k = bucketKey(d.log_date);
+      inner.set(k, (inner.get(k) ?? 0) + 1);
+      m.set(name, inner);
+    }
+    return m;
+  });
+  let foodDatasets = $derived([
+    ...foodSeriesNames.map((name, i) => ({
+      label: name,
+      data: foodBucketKeys.map((k) => foodCounts.get(name)?.get(k) ?? 0),
+      backgroundColor: PALETTE[i % PALETTE.length],
+      borderColor: PALETTE[i % PALETTE.length],
+      borderWidth: 0,
+      yAxisID: 'y',
+      order: 1,
+    })),
+    {
+      type: 'line',
+      label: 'Avg fatigue',
+      data: fatigueForBuckets(foodBucketKeys),
+      borderColor: 'var(--red)',
+      backgroundColor: 'var(--red)',
+      borderWidth: 2.5,
+      pointRadius: 2.5,
+      tension: 0.3,
+      spanGaps: true,
+      yAxisID: 'y1',
+      order: 2,
+    },
+  ]);
+  let foodOptions = $derived({
+    ...activityOptions,
+    scales: {
+      ...activityOptions.scales,
+      y: { ...activityOptions.scales.y, ticks: { ...activityOptions.scales.y.ticks, precision: 0 },
+           title: { display: true, text: 'Days had', color: 'var(--tm)', font: { size: 11 } } },
     },
   });
 
@@ -446,6 +533,54 @@
           datasets={activityDatasets}
           options={activityOptions}
           chartArea="330px"
+        />
+      </div>
+    {/if}
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <div>
+        <div class="card-heading">Food &amp; drink over time</div>
+        <div class="card-subtitle">Days each item was had per {bucket}, stacked, with average fatigue overlaid. Logged on the <a href="/food">Food &amp; Drink</a> page.</div>
+      </div>
+      <div class="controls">
+        <div class="seg-control">
+          <button class="seg-btn" class:active={bucket === 'week'} onclick={() => bucket = 'week'}>Weekly</button>
+          <button class="seg-btn" class:active={bucket === 'month'} onclick={() => bucket = 'month'}>Monthly</button>
+        </div>
+        <div class="seg-control">
+          <button class="seg-btn" class:active={foodKind === 'all'} onclick={() => foodKind = 'all'}>All</button>
+          <button class="seg-btn" class:active={foodKind === 'food'} onclick={() => foodKind = 'food'}>Food</button>
+          <button class="seg-btn" class:active={foodKind === 'drink'} onclick={() => foodKind = 'drink'}>Drinks</button>
+        </div>
+      </div>
+    </div>
+    {#if foodRanking.length > 1}
+      <div class="picker">
+        <span class="picker-label">
+          {activePickedFoods.length ? `Showing ${activePickedFoods.length} selected` : 'Top 9 by days had'}
+        </span>
+        <div class="chips">
+          {#each foodRanking as name}
+            <button class="chip" class:on={pickedFoods.includes(name)} onclick={() => toggleFood(name)}>{name}</button>
+          {/each}
+          {#if activePickedFoods.length}
+            <button class="chip clear" onclick={() => pickedFoods = []}>Clear</button>
+          {/if}
+        </div>
+      </div>
+    {/if}
+    {#if foodBucketKeys.length === 0}
+      <p class="empty-text">No food or drink logged in this range.</p>
+    {:else}
+      <div style="height:300px;">
+        <Chart
+          type="bar"
+          labels={foodBucketKeys.map(bucketLabel)}
+          datasets={foodDatasets}
+          options={foodOptions}
+          chartArea="300px"
         />
       </div>
     {/if}

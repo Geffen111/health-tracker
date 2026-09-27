@@ -7,6 +7,7 @@
   import { showToast } from '$lib/stores/toast.svelte';
   import { confirmAction } from '$lib/stores/confirm.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
+  import { isImageFile, prepareImage } from '$lib/images';
 
   // Food & drink log. Not calorie counting: an item is a name and a kind, and the point
   // is to see what was eaten beside how the fatigue went. Like the Medication page:
@@ -146,6 +147,89 @@
       showToast(`${name} logged`);
     } catch (e) {
       showToast(String(e), 'error');
+    }
+  }
+
+  // ── Suggest items from a photo ──
+  // The photo goes to the vision model chosen in Settings (OpenRouter) and is not stored.
+  // Nothing is logged until the picked suggestions are added.
+  interface Suggestion { name: string; kind: 'food' | 'drink'; pick: boolean; }
+  let photoUrl = $state<string | null>(null);
+  let photoBusy = $state(false);
+  let photoDrag = $state(false);
+  let photoError = $state('');
+  let suggestions = $state<Suggestion[]>([]);
+  let suggestTime = $state('');
+
+  function matchFood(name: string): Food | null {
+    const n = name.trim().toLowerCase();
+    return foods.find((f) => f.name.toLowerCase() === n) ?? null;
+  }
+
+  function clearPhoto() {
+    if (photoUrl) URL.revokeObjectURL(photoUrl);
+    photoUrl = null;
+    suggestions = [];
+    photoError = '';
+  }
+
+  async function analysePhoto(file: File | undefined) {
+    if (!file) return;
+    if (!isImageFile(file)) { showToast("That isn't an image file", 'error'); return; }
+    clearPhoto();
+    photoUrl = URL.createObjectURL(file);
+    photoBusy = true;
+    try {
+      // A modest size is plenty to recognise food and keeps the upload quick and cheap.
+      const img = await prepareImage(file, { maxEdge: 1280, shrinkOverBytes: 0 });
+      const found = await invoke<{ name: string; kind: 'food' | 'drink' }[]>('recognise_food_photo', {
+        dataBase64: img.dataBase64,
+        mimeType: img.mimeType,
+      });
+      suggestions = found.map((s) => {
+        const existing = matchFood(s.name);
+        return { name: existing?.name ?? s.name, kind: existing?.kind ?? s.kind, pick: true };
+      });
+      suggestTime = defaultTime();
+      if (!suggestions.length) photoError = 'No food or drink recognised in that photo.';
+    } catch (e) {
+      photoError = String(e);
+    } finally {
+      photoBusy = false;
+    }
+  }
+
+  function onPhotoDrop(e: DragEvent) {
+    e.preventDefault();
+    photoDrag = false;
+    analysePhoto(e.dataTransfer?.files?.[0]);
+  }
+  function onPhotoDragOver(e: DragEvent) {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    photoDrag = true;
+  }
+
+  async function addSuggestions() {
+    const picked = suggestions.filter((s) => s.pick && s.name.trim());
+    if (!picked.length) return;
+    try {
+      const ids: number[] = [];
+      for (const s of picked) {
+        const existing = matchFood(s.name);
+        ids.push(existing ? existing.id : await invoke<number>('create_food', { name: s.name, kind: s.kind, regular: false }));
+      }
+      await invoke('add_food_log', {
+        logDate: selectedDate,
+        entries: ids.map((id) => ({ food_id: id, time_taken: suggestTime || null, amount: null, group_id: null })),
+      });
+      clearPhoto();
+      await refreshAfterLog();
+      showToast(`${picked.length} item${picked.length === 1 ? '' : 's'} logged`);
+    } catch (e) {
+      showToast(String(e), 'error');
+      await refreshAfterLog();
     }
   }
 
@@ -519,6 +603,57 @@
             </div>
           </div>
         {/if}
+        <div class="photo-zone">
+          {#if photoUrl}
+            <div class="photo-result">
+              <img class="photo-thumb" src={photoUrl} alt="Meal" />
+              <div class="photo-body">
+                {#if photoBusy}
+                  <div class="photo-status"><span class="spinner"></span>Looking at the photo…</div>
+                {:else if photoError}
+                  <div class="photo-error">{photoError}</div>
+                {:else}
+                  <div class="photo-status">Tick what you had, then add.</div>
+                {/if}
+              </div>
+              <button class="entry-del" onclick={clearPhoto} aria-label="Discard photo" title="Discard">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            {#if suggestions.length}
+              <div class="sugg-list">
+                {#each suggestions as s, i (i)}
+                  {@const known = matchFood(s.name)}
+                  <div class="sugg-row" class:off={!s.pick}>
+                    <input type="checkbox" bind:checked={s.pick} aria-label="Add {s.name}" />
+                    <input class="sugg-name" bind:value={s.name} aria-label="Name" />
+                    {#if known}
+                      <span class="sugg-tag">{known.kind}</span>
+                    {:else}
+                      <button class="sugg-kind" onclick={() => s.kind = s.kind === 'food' ? 'drink' : 'food'} title="New item — click to switch food/drink">new {s.kind}</button>
+                    {/if}
+                  </div>
+                {/each}
+                <div class="sugg-actions">
+                  <span class="lbl">at</span>
+                  <input class="sm-input" type="time" bind:value={suggestTime} aria-label="Time" />
+                  <button class="save-sm" onclick={addSuggestions} disabled={!suggestions.some((s) => s.pick && s.name.trim())}>
+                    Add {suggestions.filter((s) => s.pick).length}
+                  </button>
+                </div>
+              </div>
+            {/if}
+          {:else}
+            <label
+              class="photo-drop" class:drag-over={photoDrag}
+              ondragover={onPhotoDragOver} ondragleave={() => photoDrag = false} ondrop={onPhotoDrop}
+            >
+              <input type="file" accept="image/*" hidden onchange={(e) => { analysePhoto(e.currentTarget.files?.[0]); e.currentTarget.value = ''; }} />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="12" cy="12" r="3.2"/><path d="M8 5l1.5-2h5L16 5"/></svg>
+              {photoDrag ? 'Drop to recognise' : 'Drop a meal photo to suggest items'}
+            </label>
+          {/if}
+        </div>
         {#if entries.length === 0}
           <p class="muted center">Nothing logged</p>
         {:else}
@@ -677,6 +812,25 @@
   .entry-amt { font-size:12px; color:var(--tm); }
   .entry-group { font-size:10.5px; font-weight:700; color:var(--amber-fg); background:var(--amber-soft); border-radius:999px; padding:2px 8px; }
   .entry-del { width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:var(--tm);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0; }
+  .photo-zone { padding:0 18px 14px; }
+  .photo-drop { display:flex; align-items:center; justify-content:center; gap:8px; padding:12px; border:1.5px dashed var(--border); border-radius:12px; font-size:12px; font-weight:600; color:var(--tm); cursor:pointer; transition:background .12s, border-color .12s, color .12s; }
+  .photo-drop:hover { color:var(--ts); background:var(--inset); }
+  .photo-drop.drag-over { background:var(--accent-soft); border-color:var(--accent); color:var(--accent-fg); }
+  .photo-result { display:flex; align-items:center; gap:10px; }
+  .photo-thumb { width:52px; height:52px; object-fit:cover; border-radius:10px; border:1px solid var(--border); flex-shrink:0; }
+  .photo-body { flex:1; min-width:0; }
+  .photo-status { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ts); font-weight:600; }
+  .photo-error { font-size:12px; color:var(--red-fg); line-height:1.4; overflow-wrap:anywhere; }
+  .spinner { width:13px; height:13px; border-radius:50%; border:2px solid var(--border); border-top-color:var(--accent); animation:spin .8s linear infinite; flex-shrink:0; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .sugg-list { display:flex; flex-direction:column; gap:5px; margin-top:10px; padding:10px; background:var(--inset); border-radius:12px; }
+  .sugg-row { display:flex; align-items:center; gap:8px; }
+  .sugg-row.off { opacity:.55; }
+  .sugg-row input[type=checkbox] { accent-color:var(--accent); }
+  .sugg-name { flex:1; min-width:0; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:5px 8px; font-size:12.5px; color:var(--tp); }
+  .sugg-tag { font-size:10.5px; font-weight:700; color:var(--tm); width:62px; text-align:center; }
+  .sugg-kind { width:62px; font-size:10.5px; font-weight:700; color:var(--accent-fg); background:var(--accent-soft); border:none; border-radius:999px; padding:3px 0; cursor:pointer; }
+  .sugg-actions { display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-top:4px; }
   .day-footer { padding:12px 18px; border-top:1px solid var(--border); font-size:12px; color:var(--tm); }
 
   .compare-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); margin-top:16px; display:flex; flex-direction:column; gap:10px; }

@@ -285,3 +285,109 @@ pub async fn get_food_days(pool: State<'_, SqlitePool>) -> Result<Vec<FoodDay>, 
         .await
         .map_err(|e| e.to_string())
 }
+
+// ── Photo recognition ──
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FoodSuggestion {
+    pub name: String,
+    pub kind: String,
+}
+
+#[derive(Deserialize)]
+struct RecognisedItems {
+    #[serde(default)]
+    items: Vec<FoodSuggestion>,
+}
+
+const MAX_SUGGESTIONS: usize = 12;
+
+fn recognition_prompt(known: &[String]) -> String {
+    let known_list = if known.is_empty() {
+        "(none yet)".to_string()
+    } else {
+        known.join(", ")
+    };
+    format!(
+        r#"List the distinct foods and drinks you can see in this photo of a meal.
+
+Rules:
+- One entry per item a person would log separately ("Toast", "Scrambled eggs", "Flat white"), not the whole dish as one entry unless it really is one item (e.g. "Lasagne").
+- If an item matches one of the names the person already uses, return that exact name. Their names: {known_list}
+- kind is "drink" for anything drunk, otherwise "food".
+- No quantities, brands or calories. Skip cutlery, plates and anything you are unsure is food.
+- Return ONLY JSON, no commentary: {{"items":[{{"name":"...","kind":"food"}}]}}
+- If there is no food or drink in the photo, return {{"items":[]}}."#
+    )
+}
+
+/// Parse the model's reply, tolerating a code fence or stray text around the JSON.
+fn parse_suggestions(reply: &str) -> Result<Vec<FoodSuggestion>, String> {
+    let body = crate::commands::ai::strip_code_fences(reply);
+    let json = match (body.find('{'), body.rfind('}')) {
+        (Some(a), Some(b)) if b > a => &body[a..=b],
+        _ => return Err("The model didn't return a list of items.".into()),
+    };
+    let parsed: RecognisedItems =
+        serde_json::from_str(json).map_err(|_| "The model's reply couldn't be read as a list of items.".to_string())?;
+    let mut out: Vec<FoodSuggestion> = Vec::new();
+    for s in parsed.items {
+        let name = s.name.trim().to_string();
+        if name.is_empty() || out.iter().any(|o| o.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        let kind = if s.kind.eq_ignore_ascii_case("drink") { "drink" } else { "food" };
+        out.push(FoodSuggestion { name, kind: kind.into() });
+        if out.len() == MAX_SUGGESTIONS {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Send a meal photo to the vision model and return what it recognised. Nothing is
+/// logged here — the Food page shows the suggestions and the person picks which to add.
+/// The photo is sent only when they drop one in; it isn't stored.
+#[tauri::command]
+pub async fn recognise_food_photo(
+    pool: State<'_, SqlitePool>,
+    data_base64: String,
+    mime_type: String,
+) -> Result<Vec<FoodSuggestion>, String> {
+    let api_key = crate::commands::settings::get_api_key()
+        .await?
+        .ok_or_else(|| "Add an OpenRouter API key in Settings to use photo recognition.".to_string())?;
+    let known: Vec<(String,)> = sqlx::query_as("SELECT name FROM foods WHERE active = 1 ORDER BY name COLLATE NOCASE")
+        .fetch_all(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let known: Vec<String> = known.into_iter().map(|r| r.0).collect();
+    let data_url = format!("data:{};base64,{}", mime_type, data_base64);
+    let reply = crate::commands::ai::call_openrouter_vision(&api_key, &recognition_prompt(&known), &data_url, 2048).await?;
+    parse_suggestions(&reply)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_fenced_json_and_normalises() {
+        let reply = "```json\n{\"items\":[{\"name\":\" Toast \",\"kind\":\"food\"},{\"name\":\"Coffee\",\"kind\":\"Drink\"},{\"name\":\"toast\",\"kind\":\"food\"},{\"name\":\"Jam\",\"kind\":\"condiment\"}]}\n```";
+        let s = parse_suggestions(reply).unwrap();
+        let got: Vec<(&str, &str)> = s.iter().map(|x| (x.name.as_str(), x.kind.as_str())).collect();
+        assert_eq!(got, vec![("Toast", "food"), ("Coffee", "drink"), ("Jam", "food")]);
+    }
+
+    #[test]
+    fn tolerates_text_around_the_json() {
+        let s = parse_suggestions("Here you go: {\"items\":[{\"name\":\"Tea\",\"kind\":\"drink\"}]} Enjoy").unwrap();
+        assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn empty_and_garbage_replies() {
+        assert!(parse_suggestions("{\"items\":[]}").unwrap().is_empty());
+        assert!(parse_suggestions("I can't see any food").is_err());
+    }
+}

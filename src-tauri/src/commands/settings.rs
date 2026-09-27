@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 const API_KEY_SETTING: &str = "openrouter_api_key";
 const MODEL_SETTING: &str = "openrouter_model";
+const VISION_MODEL_SETTING: &str = "openrouter_vision_model";
 
 fn settings_path() -> PathBuf {
     get_data_dir().join("settings.json")
@@ -151,6 +152,23 @@ pub async fn save_ai_model(model: String) -> Result<(), String> {
         m.to_string()
     };
     write_setting(MODEL_SETTING, serde_json::json!(value))
+}
+
+/// The image-capable model used to read food photos.
+pub fn vision_model() -> String {
+    setting_str(VISION_MODEL_SETTING).unwrap_or_else(|| crate::commands::ai::VISION_MODEL.to_string())
+}
+
+#[tauri::command]
+pub async fn get_vision_model() -> Result<String, String> {
+    Ok(vision_model())
+}
+
+#[tauri::command]
+pub async fn save_vision_model(model: String) -> Result<(), String> {
+    let m = model.trim();
+    let value = if m.is_empty() { crate::commands::ai::VISION_MODEL } else { m };
+    write_setting(VISION_MODEL_SETTING, serde_json::json!(value))
 }
 
 // ── Generic helpers (used by csv_import) ──

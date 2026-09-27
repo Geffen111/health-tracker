@@ -16,6 +16,15 @@
   ];
   let aiModel = $state('deepseek/deepseek-v4-flash');
   let savingModel = $state(false);
+  // Image-capable model for reading food photos (the text model above can't see images).
+  const VISION_SUGGESTIONS = [
+    'google/gemini-3.8-flash',
+    'google/gemini-3.5-flash-lite',
+    'openai/gpt-5.6-luna',
+    'anthropic/claude-sonnet-5',
+  ];
+  let visionModel = $state('google/gemini-3.8-flash');
+  let savingVision = $state(false);
 
   // App preferences (work defaults + activity defaults).
   const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -59,6 +68,8 @@
     try {
       const m = await invoke<string>('get_ai_model');
       if (m) aiModel = m;
+      const vm = await invoke<string>('get_vision_model');
+      if (vm) visionModel = vm;
     } catch {}
     try {
       const s: any = await invoke('get_sync_settings');
@@ -183,6 +194,19 @@
       showToast('Could not save model', 'error');
     } finally {
       savingModel = false;
+    }
+  }
+
+  async function saveVisionModel() {
+    savingVision = true;
+    try {
+      await invoke('save_vision_model', { model: visionModel.trim() });
+      showToast('Photo model updated');
+    } catch (e) {
+      console.error('Error saving vision model:', e);
+      showToast('Could not save model', 'error');
+    } finally {
+      savingVision = false;
     }
   }
 
@@ -393,6 +417,19 @@
         </button>
       </div>
       <span class="field-hint">Any OpenRouter model id works. Default <code>deepseek/deepseek-v4-flash</code> is cheap &amp; fast.</span>
+    </div>
+    <div class="text-field">
+      <label for="vision-model">Photo model</label>
+      <div class="key-row">
+        <input id="vision-model" list="vision-options" bind:value={visionModel} placeholder="google/gemini-3.8-flash" class="mono-input" />
+        <datalist id="vision-options">
+          {#each VISION_SUGGESTIONS as m}<option value={m}></option>{/each}
+        </datalist>
+        <button class="key-save-btn" onclick={saveVisionModel} disabled={savingVision || !visionModel.trim()}>
+          {savingVision ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      <span class="field-hint">Reads meal photos dropped on the Food &amp; Drink page — must accept images. The photo is sent to OpenRouter and not kept.</span>
     </div>
   </div>
 

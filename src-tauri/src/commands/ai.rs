@@ -6,6 +6,10 @@
 /// carry over. Overridable per-install via the model picker in Settings.
 pub const MODEL: &str = "deepseek/deepseek-v4-flash";
 
+/// Default model for reading photos (food recognition). The text model above can't see
+/// images, so this is a separate, image-capable choice — overridable in Settings.
+pub const VISION_MODEL: &str = "google/gemini-3.8-flash";
+
 /// How much of `max_tokens` the model may spend on its private reasoning trace.
 ///
 /// OpenRouter draws reasoning tokens from the same `max_tokens` allowance as the
@@ -26,21 +30,45 @@ pub async fn call_openrouter(
     temperature: f64,
     max_tokens: u32,
 ) -> Result<String, String> {
-    let model = crate::commands::settings::model();
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
-        "model": model,
+        "model": crate::commands::settings::model(),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
         "reasoning": {"max_tokens": reasoning_budget(max_tokens)},
     });
+    post(api_key, &body).await
+}
 
-    let response = client
+/// A prompt plus one image (a `data:` URL), sent to the vision model from Settings.
+pub async fn call_openrouter_vision(
+    api_key: &str,
+    prompt: &str,
+    image_data_url: &str,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": crate::commands::settings::vision_model(),
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
+            ],
+        }],
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
+        "reasoning": {"max_tokens": reasoning_budget(max_tokens)},
+    });
+    post(api_key, &body).await
+}
+
+async fn post(api_key: &str, body: &serde_json::Value) -> Result<String, String> {
+    let response = reqwest::Client::new()
         .post("https://openrouter.ai/api/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|e| format!("API request failed: {}", e))?;

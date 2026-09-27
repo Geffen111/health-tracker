@@ -79,6 +79,9 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   a drop zone (otherwise the webview navigates to the file). Drop zones must `preventDefault`.
 - **Exposure photos live in the DB** (`exposure_attachments.data` BLOB, base64 over IPC).
   `$lib/images.ts` shrinks anything large to a <=2000px JPEG first — the DB syncs via OneDrive.
+- **Photo recognition uses a separate vision model** (`settings::vision_model()`, default
+  `ai::VISION_MODEL`); the text model can't see images. The meal photo is sent to OpenRouter
+  and never stored; suggestions are only logged once picked.
 - **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,
   beside other tracked days. Same rule as Pacing — no scores, no forecasts.
 

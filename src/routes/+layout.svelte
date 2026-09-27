@@ -261,7 +261,11 @@
     --shadow: 0 4px 16px rgba(40,65,60,.05); --shadow-lg: 0 6px 22px rgba(40,65,60,.08);
   }
 
+  /* Native controls (time pickers, checkboxes, scrollbars, datalist dropdowns) follow
+     the app theme rather than always drawing their light-mode chrome. */
+  :root { color-scheme: light; }
   :global(.dark) {
+    color-scheme: dark;
     --page: #141D1B; --card: #1D2826; --inset: #22302D; --border: #2C3835;
     --tp: #E7F0ED; --ts: #9DB0AB; --tm: #75857F;
     --accent: #62A99C; --accent-soft: rgba(98,169,156,.15); --accent-fg: #8FC9BD;

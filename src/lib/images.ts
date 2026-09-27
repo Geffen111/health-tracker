@@ -28,7 +28,14 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-async function shrink(file: File): Promise<Blob | null> {
+export interface PrepareOptions {
+  /** Longest side after resizing, px. */
+  maxEdge?: number;
+  /** Files at or under this size that already fit maxEdge are kept as they are. */
+  shrinkOverBytes?: number;
+}
+
+async function shrink(file: File, maxEdge: number, shrinkOverBytes: number): Promise<Blob | null> {
   if (file.type === 'image/gif' || file.type === 'image/svg+xml') return null; // animation / vector
   let bmp: ImageBitmap;
   try {
@@ -36,8 +43,8 @@ async function shrink(file: File): Promise<Blob | null> {
   } catch {
     return null; // not decodable here — keep the original
   }
-  const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
-  if (scale === 1 && file.size <= SHRINK_OVER_BYTES) {
+  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
+  if (scale === 1 && file.size <= shrinkOverBytes) {
     bmp.close();
     return null;
   }
@@ -51,8 +58,8 @@ async function shrink(file: File): Promise<Blob | null> {
   return out && out.size < file.size ? out : null;
 }
 
-export async function prepareImage(file: File): Promise<PreparedImage> {
-  const small = await shrink(file);
+export async function prepareImage(file: File, opts: PrepareOptions = {}): Promise<PreparedImage> {
+  const small = await shrink(file, opts.maxEdge ?? MAX_EDGE, opts.shrinkOverBytes ?? SHRINK_OVER_BYTES);
   if (small) {
     return {
       fileName: file.name.replace(/\.[^.]+$/, '') + '.jpg',
