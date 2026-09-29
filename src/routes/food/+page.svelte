@@ -8,6 +8,7 @@
   import { confirmAction } from '$lib/stores/confirm.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { isImageFile, prepareImage } from '$lib/images';
+  import { menuPosFor, menuStyle, type MenuPos } from '$lib/menuPosition';
 
   // Food & drink log. Not calorie counting: an item is a name and a kind, and the point
   // is to see what was eaten beside how the fatigue went. Like the Medication page:
@@ -326,6 +327,16 @@
   function closeForms() { logId = null; groupLogId = null; editId = null; groupFormId = null; openMenuId = null; }
   let openMenuId = $state<number | null>(null);
 
+  // 3-dot menus are drawn fixed over the page (see $lib/menuPosition) so the card's
+  // clipping can't cut them off; any scroll closes the open one rather than leaving it
+  // floating away from its row.
+  let menuPos = $state<MenuPos>({ top: 0, right: 0, up: false });
+  function toggleMenu(id: number, e: MouseEvent) {
+    if (openMenuId === id) { openMenuId = null; return; }
+    menuPos = menuPosFor(e.currentTarget as HTMLElement);
+    openMenuId = id;
+  }
+
   // ── Fatigue alongside each item ──
   // Descriptive only (see CLAUDE.md: describe, don't forecast). For each item: the mean
   // fatigue rating on days it was had and on the day after, beside the same means over the
@@ -379,6 +390,8 @@
   function fmt(v: number | null): string { return v == null ? '—' : v.toFixed(1); }
   function fmtDiff(v: number | null): string { return v == null ? '—' : (v > 0 ? '+' : v < 0 ? '−' : '±') + Math.abs(v).toFixed(1); }
 </script>
+
+<svelte:window onscrollcapture={() => { if (openMenuId !== null) openMenuId = null; }} onresize={() => { if (openMenuId !== null) openMenuId = null; }} />
 
 <div class="page-header">
   <div>
@@ -492,11 +505,11 @@
           </button>
         {/if}
         <div class="row-menu">
-          <button class="icon-btn" onclick={() => openMenuId = openMenuId === f.id ? null : f.id} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === f.id}>
+          <button class="icon-btn" onclick={(e) => toggleMenu(f.id, e)} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === f.id}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
           </button>
           {#if openMenuId === f.id}
-            <div class="menu-pop" role="menu">
+            <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
               <button class="menu-item" role="menuitem" onclick={() => startEdit(f)}>Edit</button>
               <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; setActive(f, !f.active); }}>{f.active ? 'Hide' : 'Restore'}</button>
               {#if f.days_logged === 0}
@@ -533,11 +546,11 @@
           </div>
           <button class="slot-btn" onclick={() => openGroupLog(g)}>Log</button>
           <div class="row-menu">
-            <button class="icon-btn" onclick={() => openMenuId = openMenuId === -g.id ? null : -g.id} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === -g.id}>
+            <button class="icon-btn" onclick={(e) => toggleMenu(-g.id, e)} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === -g.id}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
             </button>
             {#if openMenuId === -g.id}
-              <div class="menu-pop" role="menu">
+              <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
                 <button class="menu-item" role="menuitem" onclick={() => startGroupForm(g)}>Edit</button>
                 <button class="menu-item danger" role="menuitem" onclick={() => { openMenuId = null; removeGroup(g); }}>Delete</button>
               </div>
@@ -754,7 +767,9 @@
   .pick.on { background:var(--accent-soft); color:var(--accent-fg); border-color:var(--accent-soft); }
   .pick input { accent-color:var(--accent); }
 
-  .layout { display:grid; grid-template-columns:1.6fr 1fr; gap:16px; align-items:start; }
+  .layout { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:16px; align-items:start; }
+  /* Side by side needs room; in a half-width window the list would be squeezed to nothing. */
+  @media (max-width: 1000px) { .layout { grid-template-columns:minmax(0,1fr); } }
   .list-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
   .section-divider { font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; font-weight:800; color:var(--tm); border-top:1px solid var(--border); padding:10px 18px 6px; }
   .section-divider:first-child { border-top:none; }
@@ -775,7 +790,7 @@
   .icon-btn:hover { background:var(--inset); }
   .row-menu { position:relative; flex-shrink:0; }
   .menu-backdrop { position:fixed; inset:0; z-index:40; background:transparent; border:none; cursor:default; padding:0; }
-  .menu-pop { position:absolute; top:34px; right:0; z-index:50; min-width:130px; background:var(--card); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.14); padding:5px; display:flex; flex-direction:column; gap:1px; }
+  .menu-pop { position:fixed; z-index:50; min-width:130px; background:var(--card); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.14); padding:5px; display:flex; flex-direction:column; gap:1px; }
   .menu-item { width:100%; background:transparent; border:none; border-radius:8px; padding:9px 11px; font-size:13px; font-weight:600; color:var(--tp); cursor:pointer; text-align:left; }
   .menu-item:hover { background:var(--inset); }
   .menu-item.danger { color:var(--red-fg); }

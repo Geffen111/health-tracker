@@ -6,6 +6,7 @@
   import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { showToast } from '$lib/stores/toast.svelte';
   import { confirmAction } from '$lib/stores/confirm.svelte';
+  import { menuPosFor, menuStyle, type MenuPos } from '$lib/menuPosition';
 
   let medications = $state<any[]>([]);
   let schedule = $state<any[]>([]);            // all schedule items, flat
@@ -86,6 +87,16 @@
   // Per-row actions (edit / pause / delete) live in a 3-dot menu so each med fits
   // on a single condensed row. Only one menu is open at a time.
   let openMenuId = $state<number | null>(null);
+
+  // 3-dot menus are drawn fixed over the page (see $lib/menuPosition) so the card's
+  // clipping can't cut them off; any scroll closes the open one rather than leaving it
+  // floating away from its row.
+  let menuPos = $state<MenuPos>({ top: 0, right: 0, up: false });
+  function toggleMenu(id: number, e: MouseEvent) {
+    if (openMenuId === id) { openMenuId = null; return; }
+    menuPos = menuPosFor(e.currentTarget as HTMLElement);
+    openMenuId = id;
+  }
 
   onMount(async () => {
     await Promise.all([loadAll(), loadNote()]);
@@ -435,6 +446,8 @@
   };
 </script>
 
+<svelte:window onscrollcapture={() => { if (openMenuId !== null) openMenuId = null; }} onresize={() => { if (openMenuId !== null) openMenuId = null; }} />
+
 <div class="page-header">
   <div>
     <div class="page-title">Medication</div>
@@ -647,11 +660,11 @@
                 </div>
               {/if}
               <div class="med-menu">
-                <button class="icon-btn menu-trigger" onclick={() => openMenuId = openMenuId === med.id ? null : med.id} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === med.id}>
+                <button class="icon-btn menu-trigger" onclick={(e) => toggleMenu(med.id, e)} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === med.id}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
                 </button>
                 {#if openMenuId === med.id}
-                  <div class="menu-pop" role="menu">
+                  <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
                     <button class="menu-item" role="menuitem" onclick={() => { startEdit(med); openMenuId = null; }}>
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
                       Edit
@@ -902,7 +915,7 @@
   .med-menu { position:relative; flex-shrink:0; }
   .menu-trigger { width:30px; }
   .menu-backdrop { position:fixed; inset:0; z-index:40; background:transparent; border:none; cursor:default; padding:0; }
-  .menu-pop { position:absolute; top:34px; right:0; z-index:50; min-width:148px; background:var(--card); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.14); padding:5px; display:flex; flex-direction:column; gap:1px; }
+  .menu-pop { position:fixed; z-index:50; min-width:148px; background:var(--card); border:1px solid var(--border); border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.14); padding:5px; display:flex; flex-direction:column; gap:1px; }
   .menu-item { display:flex; align-items:center; gap:10px; width:100%; background:transparent; border:none; border-radius:8px; padding:9px 11px; font-size:13px; font-weight:600; color:var(--tp); cursor:pointer; font-family:inherit; text-align:left; }
   .menu-item:hover { background:var(--inset); }
   .menu-item.danger { color:var(--red-fg); }
