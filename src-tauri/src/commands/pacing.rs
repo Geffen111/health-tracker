@@ -18,7 +18,7 @@ use tauri::State;
 
 /// Load = duration x category energy weight x energy-cost factor. The cost falls back to
 /// the activity type's default when an entry has none (older rows predate the auto-fill).
-const LOAD_EXPR: &str = "al.duration_hours * COALESCE(ac.energy_weight, 1.0) * \
+pub(crate) const LOAD_EXPR: &str = "al.duration_hours * COALESCE(ac.energy_weight, 1.0) * \
      CASE COALESCE(al.energy_cost, at.default_energy_cost) \
        WHEN 'Low' THEN 0.7 WHEN 'High' THEN 2.0 ELSE 1.0 END";
 

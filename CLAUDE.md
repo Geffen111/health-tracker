@@ -32,7 +32,7 @@ pnpm tauri dev
 ## Backend layout (`src-tauri/src/commands/`)
 `daily_log`, `medications` (+ dose logging, day note), `blood_pressure`, `activity`, `pacing`
 (descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups),
-`exposures` (exposures of note + photo attachments), `import_xlsx` (one-time spreadsheet
+`exposures` (exposures of note + photo attachments), `weekly` (Monday-to-Sunday AI summaries), `import_xlsx` (one-time spreadsheet
 import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 
 ## Conventions / gotchas
@@ -84,6 +84,16 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   and never stored; suggestions are only logged once picked.
 - **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,
   beside other tracked days. Same rule as Pacing — no scores, no forecasts.
+
+- **Weekly summary: Rust owns the numbers, the model only writes prose.** `weekly.rs` builds
+  `WeekMetrics` (scorecard vs the previous 8 weekly means, flagged at >= 1 SD; meds; food;
+  exposures; new labs; changed vault notes; lag correlations with n shown) and the model
+  narrates it. Stored in `weekly_summaries`, so old weeks never re-call the model. It is made
+  by `ensureWeeklySummary()` from the layout *after* the launch import, un-awaited, for the
+  last full week only (a missed Monday is caught up on the next launch). A "missed" dose is
+  *inferred* (current schedule slots minus doses logged, on days with any dose logged) — there
+  is no skipped-dose record. Lab results are listed once: `reported_lab_keys` in the previous
+  summary's metrics suppresses repeats. Same descriptive-only rule: no forecasts.
 
 ## Workflow
 Git repo, `origin` = github.com/Geffen111/health-tracker. Solo project — commit and

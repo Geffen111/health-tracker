@@ -4,6 +4,7 @@
   import { formatDate, todayISO, shiftISO, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
+  import { weekly } from '$lib/stores/weekly.svelte';
 
   let summary = $state<any>(null);
   let todayLog = $state<any>(null);
@@ -320,6 +321,22 @@
   </div>
 </div>
 
+{#if weekly.banner && !weekly.banner.seen}
+  <a href="/weekly" class="weekly-banner">
+    <span class="wb-icon">📋</span>
+    <span class="wb-text">
+      <strong>Your weekly summary is ready</strong>
+      <span>Week of {formatDate(weekly.banner.week_start)} – {formatDate(weekly.banner.week_end)}</span>
+    </span>
+    <span class="wb-go">Read it →</span>
+  </a>
+{:else if weekly.generating}
+  <div class="weekly-banner is-working">
+    <span class="wb-icon">📋</span>
+    <span class="wb-text"><strong>Writing last week's summary…</strong><span>It will appear here when it's ready.</span></span>
+  </div>
+{/if}
+
 {#if loading}
   <p class="loading-text">Loading...</p>
 {:else if summary}
@@ -600,6 +617,25 @@
     color: var(--ts);
     margin-top: 3px;
   }
+  .weekly-banner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+    padding: 14px 20px;
+    border-radius: 16px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    color: var(--accent-fg);
+    text-decoration: none;
+  }
+  .weekly-banner.is-working { background: var(--inset); border-color: var(--border); color: var(--ts); }
+  .wb-icon { font-size: 22px; }
+  .wb-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; flex: 1; }
+  .wb-text strong { font-size: 14.5px; color: var(--tp); }
+  .wb-go { font-size: 13px; font-weight: 700; white-space: nowrap; }
+  a.weekly-banner:hover { filter: brightness(0.97); }
+
   .header-actions {
     display: flex;
     align-items: center;

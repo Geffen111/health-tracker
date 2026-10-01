@@ -71,6 +71,7 @@ Pacing view → activity & fatigue history → Dashboard
 | 13 | Activity & category management — categories/types editable in-app, `load_group` made explicit | ✅ Done 2026-08-19 |
 | 14 | Food & Drink page (`/food`, items + groups, descriptive fatigue-alongside-food table); Exposures of note on Activity (with photo attachments stored as BLOBs); Medication day note; occasional meds logged as "added"; chart/view settings remembered per page | ✅ Done 2026-09-28 — migrations `20240625`–`20240627` |
 | 15 | Food & drink chart on Pacing; meal-photo recognition on the Food page (OpenRouter vision model, suggestions only — nothing logged until picked); native controls follow the dark theme (`color-scheme`) | ✅ Done 2026-09-28 |
+| 16 | Weekly summary (`/weekly`) — Rust computes the week's figures against an 8-week baseline, the model writes them up; generated on the first launch after a week ends, Dashboard banner + sidebar dot, older weeks collapsed | ✅ Done 2026-10-01 — migration `20240628`, `commands/weekly.rs` |
 
 **AI integration (Phase 10):** OpenRouter (`deepseek/deepseek-v4-flash`), mirroring Family
 Finance. `commands/ai.rs` (shared client), `commands/ask.rs` (hybrid text-to-SQL — schema sent,

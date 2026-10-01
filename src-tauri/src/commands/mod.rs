@@ -20,3 +20,4 @@ pub mod labs;
 pub mod records_ask;
 pub mod food;
 pub mod exposures;
+pub mod weekly;
