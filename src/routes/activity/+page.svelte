@@ -57,7 +57,7 @@
       activityTypes = types;
       typeUsage = usage;
       if (prefs?.activity_defaults?.length) activityDefaults = prefs.activity_defaults;
-      await Promise.all([loadEntries(), loadExposures()]);
+      await Promise.all([loadEntries(), loadExposures(), loadNotes()]);
     } catch (e) {
       console.error('Error loading activity data:', e);
     } finally {
@@ -215,8 +215,62 @@
     }))
   );
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadEntries(); loadExposures(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadEntries(); loadExposures(); }
+  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadEntries(); loadExposures(); loadNotes(); }
+  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadEntries(); loadExposures(); loadNotes(); }
+
+  // ── Health notes (appointments, tests…) — shown as markers on the dashboard Timeline ──
+  const NOTE_TYPES = [
+    { key: 'appointment', label: 'Appointment' },
+    { key: 'test', label: 'Test' },
+    { key: 'other', label: 'Other' },
+  ];
+  const noteTypeLabel = (k: string) => NOTE_TYPES.find((t) => t.key === k)?.label ?? 'Other';
+  let notes = $state<any[]>([]);
+  let noteType = $state('appointment');
+  let noteTitle = $state('');
+  let noteBody = $state('');
+  let editingNoteId = $state<number | null>(null);
+  let noteBusy = $state(false);
+
+  async function loadNotes() {
+    const date = selectedDate;
+    const list = await invoke<any[]>('get_health_notes_for_date', { date });
+    if (date === selectedDate) notes = list;
+  }
+
+  function resetNoteForm() {
+    editingNoteId = null; noteType = 'appointment'; noteTitle = ''; noteBody = '';
+  }
+
+  function editNote(n: any) {
+    editingNoteId = n.id; noteType = n.note_type; noteTitle = n.title; noteBody = n.body ?? '';
+  }
+
+  async function saveNote() {
+    if (!noteTitle.trim() || noteBusy) return;
+    noteBusy = true;
+    try {
+      if (editingNoteId != null) {
+        await invoke('update_health_note', { id: editingNoteId, noteType, title: noteTitle, body: noteBody || null });
+      } else {
+        await invoke('add_health_note', { logDate: selectedDate, noteType, title: noteTitle, body: noteBody || null });
+      }
+      resetNoteForm();
+      await loadNotes();
+    } catch (e) {
+      showToast(String(e), 'error');
+    } finally {
+      noteBusy = false;
+    }
+  }
+
+  async function removeNote(n: any) {
+    const ok = await confirmAction({ title: 'Delete this note?', message: `"${n.title}" will be removed.`, confirmLabel: 'Delete' });
+    if (!ok) return;
+    await invoke('delete_health_note', { id: n.id });
+    if (editingNoteId === n.id) resetNoteForm();
+    await loadNotes();
+  }
 
   // ── Exposures of note ──
   // Free text, with earlier descriptions offered back (datalist) so "Dust" is spelt the same
@@ -544,6 +598,49 @@
         <div class="drop-hint">{dragTarget === 'new' ? 'Drop to attach' : 'Drop a photo here to attach it'}</div>
       </div>
     </div>
+
+    <div class="card exp-card">
+      <div>
+        <div class="card-heading">Health notes</div>
+        <div class="card-subtitle">Appointments, tests and anything else to mark on the dashboard Timeline</div>
+      </div>
+
+      {#if notes.length}
+        <div class="exp-list">
+          {#each notes as n (n.id)}
+            <div class="exp-row note-row" class:editing={editingNoteId === n.id}>
+              <div class="note-main">
+                <div class="exp-main">
+                  <span class="note-type {n.note_type}">{noteTypeLabel(n.note_type)}</span>
+                  <span class="exp-desc">{n.title}</span>
+                </div>
+                {#if n.body}<div class="note-body">{n.body}</div>{/if}
+              </div>
+              <button class="exp-icon" onclick={() => editNote(n)} aria-label="Edit note" title="Edit">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4"/></svg>
+              </button>
+              <button class="exp-icon" onclick={() => removeNote(n)} aria-label="Delete note" title="Delete">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="exp-add" role="group" aria-label={editingNoteId != null ? 'Edit note' : 'New note'}>
+        <div class="exp-fields">
+          <select class="note-type-select" bind:value={noteType} aria-label="Note type">
+            {#each NOTE_TYPES as t}<option value={t.key}>{t.label}</option>{/each}
+          </select>
+          <input class="exp-input" placeholder="e.g. GP appt — Dr Ho" bind:value={noteTitle} aria-label="Title" />
+        </div>
+        <textarea class="note-textarea" rows="2" placeholder="Note (optional)" bind:value={noteBody} aria-label="Note"></textarea>
+        <div class="note-actions">
+          {#if editingNoteId != null}<button class="note-cancel" onclick={resetNoteForm}>Cancel</button>{/if}
+          <button class="add-btn" onclick={saveNote} disabled={!noteTitle.trim() || noteBusy}>{editingNoteId != null ? 'Save' : 'Add'}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -765,4 +862,16 @@
   .pending-chip { display:inline-flex; align-items:center; gap:6px; max-width:100%; font-size:11.5px; font-weight:600; color:var(--accent-fg); background:var(--accent-soft); border-radius:999px; padding:4px 6px 4px 10px; }
   .pending-chip button { width:16px; height:16px; border-radius:50%; border:none; background:transparent; color:inherit; display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; }
   .drop-hint { font-size:11px; color:var(--tm); text-align:center; }
+  /* Health notes */
+  .note-row { align-items:flex-start; }
+  .note-row.editing { background:var(--accent-soft); }
+  .note-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .note-body { font-size:12.5px; color:var(--ts); line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .note-type { font-size:10.5px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; padding:2px 7px; border-radius:6px; flex-shrink:0; color:var(--ts); background:var(--inset); }
+  .note-type.appointment { color:var(--sky); background:var(--sky-soft, var(--inset)); }
+  .note-type.test { color:var(--purple); background:var(--purple-soft, var(--inset)); }
+  .note-type-select { background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:9px 10px; font-size:13px; color:var(--tp); cursor:pointer; font-family:inherit; }
+  .note-textarea { width:100%; box-sizing:border-box; resize:vertical; background:var(--inset); border:1px solid var(--border); border-radius:11px; padding:9px 12px; font-size:13px; color:var(--tp); font-family:inherit; line-height:1.45; }
+  .note-actions { display:flex; justify-content:flex-end; gap:8px; }
+  .note-cancel { background:transparent; border:1px solid var(--border); border-radius:999px; padding:9px 14px; font-size:13px; font-weight:700; color:var(--ts); cursor:pointer; font-family:inherit; }
 </style>

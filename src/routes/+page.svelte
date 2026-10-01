@@ -1,10 +1,12 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { formatDate, todayISO, shiftISO, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { weekly } from '$lib/stores/weekly.svelte';
+  import { resolveCSSVar } from '$lib/chartTheme';
+  import { theme } from '$lib/stores/theme.svelte';
 
   let summary = $state<any>(null);
   let todayLog = $state<any>(null);
@@ -17,32 +19,55 @@
   const saved = recallView<any>('dashboard');
   let monthlyMetric = $state<'steps' | 'calories'>(oneOf(saved.monthlyMetric, ['steps', 'calories'] as const, 'steps'));
   let loading = $state(true);
-  let rangeDays = $state(oneOf(saved.rangeDays, [14, 30, 60], 14));
-  let metricA = $state<string | null>(saved.metricA !== undefined ? saved.metricA : 'fatigue');
-  let metricB = $state<string | null>(saved.metricB !== undefined ? saved.metricB : 'steps');
+  // Timeline: 0 = whole history.
+  const RANGES = [{ days: 30, label: '30D' }, { days: 90, label: '3M' }, { days: 180, label: '6M' }, { days: 365, label: '1Y' }, { days: 0, label: 'All' }];
+  let rangeDays = $state(oneOf(saved.timelineDays, RANGES.map((r) => r.days), 90));
+  let showAvg = $state(saved.showAvg === true);
 
   const METRICS: Record<string, { label: string; field: string; color: string; format: (v: number) => string }> = {
     // Colours chosen for maximum separation — every pair must be tellable apart
     // on the line chart (previously Fatigue/Sleep were both teal-green).
     fatigue: { label: 'Fatigue', field: 'fatigue_rating', color: 'var(--accent)', format: (v) => v.toFixed(1) },
     sleep: { label: 'Sleep score', field: 'sleep_avg', color: 'var(--sky)', format: (v) => v.toFixed(1) },
-    steps: { label: 'Steps', field: 'steps', color: 'var(--amber)', format: (v) => Math.round(v).toLocaleString() },
+    calories: { label: 'Active calories', field: 'activity_calories', color: 'var(--amber)', format: (v) => Math.round(v).toLocaleString() },
     restingHr: { label: 'Resting HR', field: 'ave_resting_hr', color: 'var(--purple)', format: (v) => v.toFixed(0) },
     headache: { label: 'Headache', field: 'headache_rating', color: 'var(--red)', format: (v) => v.toFixed(1) },
     load: { label: 'Activity load', field: 'total_load', color: 'var(--coral)', format: (v) => v.toFixed(1) },
   };
+  const METRIC_KEYS = [...Object.keys(METRICS), null];
+  let metricA = $state<string | null>(saved.metricA !== undefined ? oneOf(saved.metricA, METRIC_KEYS, 'fatigue') : 'fatigue');
+  let metricB = $state<string | null>(saved.metricB !== undefined ? oneOf(saved.metricB, METRIC_KEYS, 'sleep') : 'sleep');
+
+  // Event markers under the Timeline. Medication changes come from medication_history,
+  // exposures and notes from the Activity page.
+  const MARKERS = [
+    { key: 'medication', label: 'Medication', color: 'var(--purple)', style: 'rectRot', lane: 3 },
+    { key: 'exposure', label: 'Exposures', color: 'var(--amber)', style: 'triangle', lane: 2 },
+    { key: 'appointment', label: 'Appointments', color: 'var(--sky)', style: 'circle', lane: 1 },
+    { key: 'test', label: 'Tests', color: 'var(--teal)', style: 'rect', lane: 1 },
+    { key: 'other', label: 'Other notes', color: 'var(--ts)', style: 'circle', lane: 1 },
+  ] as const;
+  type MarkerKey = typeof MARKERS[number]['key'];
+  let shownMarkers = $state<Record<string, boolean>>(
+    Object.fromEntries(MARKERS.map((m) => [m.key, saved.shownMarkers?.[m.key] !== false]))
+  );
+  let events = $state<any[]>([]);
 
   onMount(async () => {
     try {
       const [s, log, loads] = await Promise.all([
         invoke<any>('get_dashboard_summary'),
         invoke<any>('get_daily_log', { date: todayISO() }),
-        invoke<any[]>('get_daily_loads', { from: shiftISO(todayISO(), -90) }),
+        invoke<any[]>('get_daily_loads', {}),
       ]);
       summary = s;
       todayLog = log;
       dailyLoads = loads;
-      logs = await invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 });
+      // The whole log — the Timeline can show all of it.
+      [logs, events] = await Promise.all([
+        invoke<any[]>('list_daily_logs', { limit: 100000, offset: 0 }),
+        invoke<any[]>('get_timeline_events'),
+      ]);
       bpHistory = await invoke<any[]>('get_bp_history', { days: 7 });
       [rolling, monthly] = await Promise.all([
         invoke<any[]>('get_rolling_averages'),
@@ -196,40 +221,205 @@
     metricB = key;
   }
 
-  // Exclude today: steps, HR and active calories aren't complete until the day
-  // ends, so today always shows an artificial dip. The chart is "through yesterday".
-  let chartLogs = $derived([...logs].reverse().filter((l: any) => l.log_date !== todayISO()).slice(-rangeDays));
-  let chartLabels = $derived(chartLogs.map((l: any) => formatDate(l.log_date)));
+  // ── Timeline ──
+  // One point per calendar day through yesterday (calories, HR and load aren't complete
+  // until the day ends), so gaps in the log show as gaps and markers land on real dates.
+  let logByDate = $derived(new Map(logs.map((l: any) => [l.log_date, l])));
+  let timelineDates = $derived.by(() => {
+    const end = shiftISO(todayISO(), -1);
+    const first = logs.length ? logs[logs.length - 1].log_date : end;   // logs are newest-first
+    let start = rangeDays === 0 ? first : shiftISO(end, -(rangeDays - 1));
+    if (start > end) start = end;
+    const out: string[] = [];
+    for (let d = start; d <= end; d = shiftISO(d, 1)) out.push(d);
+    return out;
+  });
+  let chartLabels = $derived(timelineDates.map((d) => formatDate(d)));
   let chartMetricA = $derived(metricA ? METRICS[metricA] ?? null : null);
   let chartMetricB = $derived(metricB ? METRICS[metricB] ?? null : null);
 
-  let compareDatasets = $derived([
-    ...(chartMetricA ? [{
-      label: chartMetricA.label,
-      data: chartLogs.map((l: any) => fieldVal(l, chartMetricA!.field)),
-      borderColor: chartMetricA.color,
-      backgroundColor: chartMetricA.color,
-      yAxisID: 'y',
-    }] : []),
-    ...(chartMetricB ? [{
-      label: chartMetricB.label,
-      data: chartLogs.map((l: any) => fieldVal(l, chartMetricB!.field)),
-      borderColor: chartMetricB.color,
-      backgroundColor: chartMetricB.color,
-      yAxisID: 'y1',
-    }] : []),
-  ]);
+  function valueOn(date: string, field: string): number | null {
+    const log = logByDate.get(date);
+    if (field === 'total_load') return loadByDate.get(date)?.total_load ?? (log ? 0 : null);
+    return log ? fieldVal(log, field) : null;
+  }
+  // Mean of the 7 calendar days ending on `date` (reaching back before the visible range,
+  // so the line starts with a full window). Needs 3 readings to show.
+  function rolling7(date: string, field: string): number | null {
+    const xs: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const v = valueOn(shiftISO(date, -i), field);
+      if (v != null) xs.push(v);
+    }
+    return xs.length >= 3 ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  }
+  // Chart.js can't fade a CSS variable, so resolve it and add the alpha ourselves.
+  function faded(color: string, alpha: number): string {
+    theme.dark;   // re-derive when the theme flips
+    const c = resolveCSSVar(color);
+    if (/^#[0-9a-f]{6}$/i.test(c)) return c + Math.round(alpha * 255).toString(16).padStart(2, '0');
+    const m = c.match(/^rgba?\(([^)]+)\)$/);
+    if (m) { const [r, g, b] = m[1].split(/[ ,\/]+/); return `rgba(${r}, ${g}, ${b}, ${alpha})`; }
+    return c;
+  }
+
+  // With the 7-day average on, the daily readings fade behind it (as on Pacing).
+  function signalDatasets(metric: typeof METRICS[string] | null, axis: string) {
+    if (!metric) return [];
+    const daily = timelineDates.map((d) => valueOn(d, metric.field));
+    const dense = timelineDates.length > 120;
+    if (!showAvg) {
+      return [{ label: metric.label, data: daily, borderColor: metric.color, backgroundColor: metric.color,
+        borderWidth: dense ? 1.25 : 1.75, pointRadius: dense ? 0 : 2, yAxisID: axis, format: metric.format }];
+    }
+    return [
+      { label: metric.label, data: daily, borderColor: faded(metric.color, 0.35), backgroundColor: faded(metric.color, 0.35),
+        borderWidth: 1, pointRadius: dense ? 0 : 1.5, yAxisID: axis, format: metric.format },
+      { label: `${metric.label} · 7-day avg`, data: timelineDates.map((d) => rolling7(d, metric.field)),
+        borderColor: metric.color, backgroundColor: metric.color, borderWidth: 2.5, pointRadius: 0, tension: 0.35,
+        yAxisID: axis, format: metric.format },
+    ];
+  }
+  let compareDatasets = $derived([...signalDatasets(chartMetricA, 'y'), ...signalDatasets(chartMetricB, 'y1')]);
+
+  // Events grouped by marker key and date, limited to the ones switched on.
+  function markerKey(e: any): MarkerKey {
+    return e.kind === 'note' ? (['appointment', 'test'].includes(e.subtype) ? e.subtype : 'other') : e.kind;
+  }
+  const MED_EVENT: Record<string, string> = {
+    started: 'Started', ceased: 'Stopped', reactivated: 'Restarted', dose_changed: 'Dose changed', added: 'Added', note: 'Note',
+  };
+  const NOTE_LABEL: Record<string, string> = { appointment: 'Appointment', test: 'Test', other: 'Note' };
+  function eventLine(e: any): string {
+    if (e.kind === 'medication') return `${e.title} — ${MED_EVENT[e.subtype] ?? e.subtype}${e.detail ? `: ${e.detail}` : ''}`;
+    if (e.kind === 'exposure') return `Exposure: ${e.title}${e.detail ? ` (${e.detail})` : ''}`;
+    return `${NOTE_LABEL[markerKey(e)]}: ${e.title}`;
+  }
+  // Tooltips don't wrap, so break long note text into short lines (and cap it).
+  function wrap(text: string, width = 64, maxLines = 4): string[] {
+    const out: string[] = [];
+    for (const para of text.split(/\n+/)) {
+      let line = '';
+      for (const w of para.split(/\s+/)) {
+        if (line && (line + ' ' + w).length > width) { out.push(line); line = w; } else line = line ? line + ' ' + w : w;
+      }
+      if (line) out.push(line);
+    }
+    return out.length > maxLines ? [...out.slice(0, maxLines - 1), out[maxLines - 1].slice(0, width - 1) + '…'] : out;
+  }
+  let eventsByDay = $derived.by(() => {
+    const byKey = new Map<string, any[]>();   // `${markerKey}|${date}`
+    const byDate = new Map<string, any[]>();
+    for (const e of events) {
+      const k = markerKey(e);
+      if (!shownMarkers[k]) continue;
+      byKey.set(`${k}|${e.date}`, [...(byKey.get(`${k}|${e.date}`) ?? []), e]);
+      byDate.set(e.date, [...(byDate.get(e.date) ?? []), e]);
+    }
+    return { byKey, byDate };
+  });
+
+  // Faint vertical lines through the plot on medication-change days, drawn by an inline
+  // plugin that reads the day indexes from the chart's own options.
+  let medLineIdx = $derived(
+    shownMarkers.medication ? timelineDates.flatMap((d, i) => eventsByDay.byKey.has(`medication|${d}`) ? [i] : []) : []
+  );
+  // The event strip is a second chart; it pads itself to line its plot up with the main one.
+  let plotPad = $state({ left: 40, right: 10 });
+  const timelinePlugins = [{
+    id: 'timelineExtras',
+    afterLayout(chart: any) {
+      const a = chart.chartArea;
+      const left = Math.round(a.left), right = Math.round(chart.width - a.right);
+      // Untracked: this runs inside the main chart's effect, which mustn't depend on it.
+      untrack(() => { if (left !== plotPad.left || right !== plotPad.right) plotPad = { left, right }; });
+    },
+    beforeDatasetsDraw(chart: any) {
+      const cfg = chart.config.options.eventLines;
+      if (!cfg?.indices?.length) return;
+      const { ctx, chartArea: a, scales: { x } } = chart;
+      ctx.save();
+      ctx.strokeStyle = cfg.color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      for (const i of cfg.indices) {
+        const px = Math.round(x.getPixelForValue(i)) + 0.5;
+        ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+      }
+      ctx.restore();
+    },
+  }];
 
   let compareOptions = $derived({
-    elements: { point: { radius: 2, hoverRadius: 5 } },
+    elements: { point: { hoverRadius: 4 } },
     spanGaps: true,
+    animation: false,
     interaction: { mode: 'index', intersect: false },
+    eventLines: { indices: medLineIdx, color: faded('var(--purple)', 0.45) },
     scales: {
       y: { type: 'linear', position: 'left', beginAtZero: true, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
       ...(chartMetricB ? { y1: { type: 'linear', position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, ticks: { color: 'var(--ts)', font: { size: 11 } } } } : {}),
-      x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
+      x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 8, maxRotation: 0 } },
     },
-    plugins: { legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } } },
+    plugins: {
+      legend: { display: true, labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 } },
+      tooltip: {
+        filter: (item: any) => item.raw != null,
+        callbacks: {
+          label: (ctx: any) => `${ctx.dataset.label}: ${ctx.dataset.format(ctx.raw)}`,
+          // The day's events, so hovering anywhere on the chart shows what happened then.
+          footer: (items: any[]) => {
+            const evs = items.length ? eventsByDay.byDate.get(timelineDates[items[0].dataIndex]) : null;
+            return evs ? evs.map((e: any) => '• ' + eventLine(e)) : [];
+          },
+        },
+      },
+    },
+  });
+
+  let stripDatasets = $derived(
+    MARKERS.filter((m) => shownMarkers[m.key]).map((m) => ({
+      label: m.label,
+      markerKey: m.key,
+      data: timelineDates.map((d) => (eventsByDay.byKey.has(`${m.key}|${d}`) ? m.lane : null)),
+      showLine: false,
+      pointStyle: m.style,
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      pointHitRadius: 6,
+      borderColor: m.color,
+      backgroundColor: m.color,
+    }))
+  );
+  let stripOptions = $derived({
+    animation: false,
+    layout: { padding: { left: plotPad.left, right: plotPad.right, top: 6, bottom: 6 } },
+    interaction: { mode: 'nearest', intersect: true },
+    scales: {
+      x: { display: false },
+      y: { display: false, min: 0.4, max: 3.6 },
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          title: (items: any[]) => (items.length ? formatDate(timelineDates[items[0].dataIndex]) : ''),
+          label: (ctx: any) => {
+            const evs = eventsByDay.byKey.get(`${ctx.dataset.markerKey}|${timelineDates[ctx.dataIndex]}`) ?? [];
+            return evs.flatMap((e: any) => [
+              eventLine(e),
+              ...(e.kind === 'note' && e.detail ? wrap(e.detail).map((l) => '   ' + l) : []),
+            ]);
+          },
+        },
+      },
+    },
+  });
+  let markerCounts = $derived.by(() => {
+    const first = timelineDates[0], last = timelineDates[timelineDates.length - 1];
+    const counts: Record<string, number> = {};
+    for (const e of events) if (e.date >= first && e.date <= last) counts[markerKey(e)] = (counts[markerKey(e)] ?? 0) + 1;
+    return counts;
   });
 
   let sleepLogs = $derived([...logs].reverse().slice(-14));
@@ -255,7 +445,7 @@
   let monthlyTableOpen = $state(saved.monthlyTableOpen === true);
   $effect(() => {
     rememberView('dashboard', {
-      rangeDays, metricA, metricB, monthlyMetric, monthlyTableOpen,
+      timelineDays: rangeDays, showAvg, shownMarkers, metricA, metricB, monthlyMetric, monthlyTableOpen,
       selectedYears: yearsReady ? selectedYears : saved.selectedYears,
     });
   });
@@ -405,16 +595,16 @@
     </div>
   </div>
 
-    <div class="compare-card">
+  <div class="compare-card">
     <div class="compare-header">
       <div>
-        <div class="card-title">Compare signals</div>
-        <div class="card-subtitle">See how any two measures move together</div>
+        <div class="card-title">Timeline</div>
+        <div class="card-subtitle">Your signals over time, with medication changes, exposures and health notes marked underneath</div>
       </div>
       <div class="range-toggle">
-        <button class="range-btn" class:active={rangeDays === 14} onclick={() => rangeDays = 14}>14D</button>
-        <button class="range-btn" class:active={rangeDays === 30} onclick={() => rangeDays = 30}>30D</button>
-        <button class="range-btn" class:active={rangeDays === 60} onclick={() => rangeDays = 60}>60D</button>
+        {#each RANGES as r}
+          <button class="range-btn" class:active={rangeDays === r.days} onclick={() => rangeDays = r.days}>{r.label}</button>
+        {/each}
       </div>
     </div>
     <div class="metric-picker-row">
@@ -425,19 +615,39 @@
           {#if metricA === key}<span class="pill-axis">L</span>{:else if metricB === key}<span class="pill-axis">R</span>{/if}
         </button>
       {/each}
+      <label class="avg-toggle">
+        <input type="checkbox" bind:checked={showAvg} />
+        7-day average
+      </label>
     </div>
-    <div style="height:200px;">
+    <div>
       {#if compareDatasets.length === 0}
-        <div class="compare-empty">Pick a signal above to plot.</div>
+        <div class="compare-empty" style="height:240px;">Pick a signal above to plot.</div>
       {:else}
         <Chart
           type="line"
           labels={chartLabels}
           datasets={compareDatasets}
           options={compareOptions}
-          chartArea="200px"
+          plugins={timelinePlugins}
+          chartArea="240px"
         />
+        {#if stripDatasets.length}
+          <div class="event-strip">
+            <Chart type="line" labels={chartLabels} datasets={stripDatasets} options={stripOptions} chartArea="58px" />
+          </div>
+        {/if}
       {/if}
+    </div>
+    <div class="marker-row">
+      <span class="marker-row-label">Markers</span>
+      {#each MARKERS as m}
+        <button class="marker-chip" class:off={!shownMarkers[m.key]} onclick={() => (shownMarkers = { ...shownMarkers, [m.key]: !shownMarkers[m.key] })}>
+          <span class="marker-glyph {m.style}" style="background:{m.color};"></span>
+          {m.label}
+          <span class="marker-count">{markerCounts[m.key] ?? 0}</span>
+        </button>
+      {/each}
     </div>
   </div>
 
@@ -905,6 +1115,57 @@
     background: var(--card);
     border: 1px solid currentColor;
   }
+  .metric-picker-row { flex-wrap: wrap; }
+  .avg-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--ts);
+    cursor: pointer;
+  }
+  .avg-toggle input { accent-color: var(--accent); margin: 0; }
+  .event-strip {
+    border-top: 1px dashed var(--border);
+    margin-top: 2px;
+  }
+  .marker-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+  }
+  .marker-row-label {
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--tm);
+    margin-right: 2px;
+  }
+  .marker-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--tp);
+    background: var(--inset);
+    border: 1px solid var(--border);
+    padding: 5px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .marker-chip.off { opacity: .45; background: transparent; }
+  .marker-chip.off .marker-glyph { background: var(--tm) !important; }
+  .marker-count { font-size: 11px; color: var(--tm); font-variant-numeric: tabular-nums; }
+  .marker-glyph { width: 9px; height: 9px; flex-shrink: 0; }
+  .marker-glyph.circle { border-radius: 50%; }
+  .marker-glyph.rectRot { transform: rotate(45deg) scale(.85); }
+  .marker-glyph.triangle { clip-path: polygon(50% 0, 100% 100%, 0 100%); width: 10px; height: 9px; }
   .compare-empty {
     height: 100%;
     display: flex;

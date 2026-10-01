@@ -32,7 +32,8 @@ pnpm tauri dev
 ## Backend layout (`src-tauri/src/commands/`)
 `daily_log`, `medications` (+ dose logging, day note), `blood_pressure`, `activity`, `pacing`
 (descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups),
-`exposures` (exposures of note + photo attachments), `weekly` (Monday-to-Sunday AI summaries), `import_xlsx` (one-time spreadsheet
+`exposures` (exposures of note + photo attachments), `weekly` (Monday-to-Sunday AI summaries), `health_notes` (dated appointment/test
+notes + `get_timeline_events`, the merged event list for the dashboard Timeline), `import_xlsx` (one-time spreadsheet
 import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 
 ## Conventions / gotchas
@@ -82,6 +83,9 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **Photo recognition uses a separate vision model** (`settings::vision_model()`, default
   `ai::VISION_MODEL`); the text model can't see images. The meal photo is sent to OpenRouter
   and never stored; suggestions are only logged once picked.
+- **The dashboard Timeline's event strip is a second chart** padded to the main chart's plot area
+  (an inline plugin reports `chartArea`), so markers line up with dates. Events are descriptive
+  markers only — same rule as Pacing.
 - **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,
   beside other tracked days. Same rule as Pacing — no scores, no forecasts.
 

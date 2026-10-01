@@ -8,12 +8,15 @@
   // datasets is `any[]` because callers pass a range of Chart.js dataset shapes —
   // plain line/bar series, floating bars ([low, high] data), and scatter-style point
   // datasets — not just the simple {label, data} form.
-  let { type = 'line', datasets, labels, options = {}, chartArea = '' } = $props<{
+  // `plugins` are inline Chart.js plugins (drawing hooks); they're fixed when the chart
+  // is created, so they should read anything that changes from `chart.config.options`.
+  let { type = 'line', datasets, labels, options = {}, chartArea = '', plugins = [] } = $props<{
     type?: string;
     datasets: any[];
     labels: string[];
     options?: Record<string, any>;
     chartArea?: string;
+    plugins?: any[];
   }>();
 
   let canvas: HTMLCanvasElement;
@@ -50,7 +53,7 @@
       chartInstance.options = resolvedOptions;
       chartInstance.update('none');
     } else {
-      chartInstance = new Chart(canvas, { type, data: { labels, datasets: resolvedDatasets }, options: resolvedOptions });
+      chartInstance = new Chart(canvas, { type, data: { labels, datasets: resolvedDatasets }, options: resolvedOptions, plugins });
     }
   });
 

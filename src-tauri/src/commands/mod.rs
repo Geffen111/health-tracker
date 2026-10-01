@@ -21,3 +21,4 @@ pub mod records_ask;
 pub mod food;
 pub mod exposures;
 pub mod weekly;
+pub mod health_notes;
