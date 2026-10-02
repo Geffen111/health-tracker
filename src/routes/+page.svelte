@@ -41,11 +41,11 @@
   // Event markers under the Timeline. Medication changes come from medication_history,
   // exposures and notes from the Activity page.
   const MARKERS = [
-    { key: 'medication', label: 'Medication', color: 'var(--purple)', style: 'rectRot', lane: 3 },
-    { key: 'exposure', label: 'Exposures', color: 'var(--amber)', style: 'triangle', lane: 2 },
-    { key: 'appointment', label: 'Appointments', color: 'var(--sky)', style: 'circle', lane: 1 },
-    { key: 'test', label: 'Tests', color: 'var(--teal)', style: 'rect', lane: 1 },
-    { key: 'other', label: 'Other notes', color: 'var(--ts)', style: 'circle', lane: 1 },
+    { key: 'medication', label: 'Medication', color: 'var(--purple)', style: 'rectRot' },
+    { key: 'exposure', label: 'Exposures', color: 'var(--amber)', style: 'triangle' },
+    { key: 'appointment', label: 'Appointments', color: 'var(--sky)', style: 'circle' },
+    { key: 'test', label: 'Tests', color: 'var(--teal)', style: 'rect' },
+    { key: 'other', label: 'Other notes', color: 'var(--ts)', style: 'circle' },
   ] as const;
   type MarkerKey = typeof MARKERS[number]['key'];
   let shownMarkers = $state<Record<string, boolean>>(
@@ -377,15 +377,19 @@
     },
   });
 
+  // One row per marker type that's switched on, top to bottom in MARKERS order, so no
+  // type can hide under another.
+  let stripMarkers = $derived(MARKERS.filter((m) => shownMarkers[m.key]));
+  const STRIP_ROW = 16;
   let stripDatasets = $derived(
-    MARKERS.filter((m) => shownMarkers[m.key]).map((m) => ({
+    stripMarkers.map((m, i) => ({
       label: m.label,
       markerKey: m.key,
-      data: timelineDates.map((d) => (eventsByDay.byKey.has(`${m.key}|${d}`) ? m.lane : null)),
+      data: timelineDates.map((d) => (eventsByDay.byKey.has(`${m.key}|${d}`) ? stripMarkers.length - i : null)),
       showLine: false,
       pointStyle: m.style,
       pointRadius: 5,
-      pointHoverRadius: 7,
+      pointHoverRadius: 6,
       pointHitRadius: 6,
       borderColor: m.color,
       backgroundColor: m.color,
@@ -397,7 +401,7 @@
     interaction: { mode: 'nearest', intersect: true },
     scales: {
       x: { display: false },
-      y: { display: false, min: 0.4, max: 3.6 },
+      y: { display: false, min: 0.4, max: stripMarkers.length + 0.6 },
     },
     plugins: {
       legend: { display: false },
@@ -634,7 +638,7 @@
         />
         {#if stripDatasets.length}
           <div class="event-strip">
-            <Chart type="line" labels={chartLabels} datasets={stripDatasets} options={stripOptions} chartArea="58px" />
+            <Chart type="line" labels={chartLabels} datasets={stripDatasets} options={stripOptions} chartArea="{stripMarkers.length * STRIP_ROW + 12}px" />
           </div>
         {/if}
       {/if}

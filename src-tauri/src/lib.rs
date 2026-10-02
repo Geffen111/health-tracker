@@ -55,6 +55,7 @@ pub fn run() {
             commands::exposures::list_exposure_descriptions,
             commands::exposures::add_exposure,
             commands::exposures::delete_exposure,
+            commands::exposures::set_exposure_hidden,
             commands::exposures::add_exposure_attachment,
             commands::exposures::get_exposure_attachment,
             commands::exposures::open_exposure_attachment,

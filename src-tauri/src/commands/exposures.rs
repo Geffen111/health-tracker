@@ -28,6 +28,7 @@ pub struct Exposure {
     pub log_date: String,
     pub time_taken: Option<String>,
     pub description: String,
+    pub hide_from_timeline: bool,
     pub attachments: Vec<AttachmentMeta>,
 }
 
@@ -43,8 +44,8 @@ pub async fn get_exposures_for_date(
     pool: State<'_, SqlitePool>,
     date: String,
 ) -> Result<Vec<Exposure>, String> {
-    let rows: Vec<(i64, String, Option<String>, String)> = sqlx::query_as(
-        "SELECT id, log_date, time_taken, description FROM exposures WHERE log_date = ? \
+    let rows: Vec<(i64, String, Option<String>, String, bool)> = sqlx::query_as(
+        "SELECT id, log_date, time_taken, description, hide_from_timeline FROM exposures WHERE log_date = ? \
          ORDER BY time_taken IS NULL, time_taken, id",
     )
     .bind(&date)
@@ -65,8 +66,8 @@ pub async fn get_exposures_for_date(
 
     let mut out: Vec<Exposure> = rows
         .into_iter()
-        .map(|(id, log_date, time_taken, description)| Exposure {
-            id, log_date, time_taken, description, attachments: Vec::new(),
+        .map(|(id, log_date, time_taken, description, hide_from_timeline)| Exposure {
+            id, log_date, time_taken, description, hide_from_timeline, attachments: Vec::new(),
         })
         .collect();
     for a in atts {
@@ -96,18 +97,25 @@ pub async fn add_exposure(
     log_date: String,
     time_taken: Option<String>,
     description: String,
+    hide_from_timeline: Option<bool>,
 ) -> Result<i64, String> {
     let description = description.trim();
     if description.is_empty() {
         return Err("Describe the exposure first.".into());
     }
     let time_taken = time_taken.filter(|t| !t.trim().is_empty());
-    sqlx::query("INSERT INTO exposures (log_date, time_taken, description) VALUES (?, ?, ?)")
-        .bind(&log_date).bind(&time_taken).bind(description)
+    sqlx::query("INSERT INTO exposures (log_date, time_taken, description, hide_from_timeline) VALUES (?, ?, ?, ?)")
+        .bind(&log_date).bind(&time_taken).bind(description).bind(hide_from_timeline.unwrap_or(false))
         .execute(&*pool)
         .await
         .map(|r| r.last_insert_rowid())
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_exposure_hidden(pool: State<'_, SqlitePool>, id: i64, hidden: bool) -> Result<(), String> {
+    sqlx::query("UPDATE exposures SET hide_from_timeline = ? WHERE id = ?")
+        .bind(hidden).bind(id).execute(&*pool).await.map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

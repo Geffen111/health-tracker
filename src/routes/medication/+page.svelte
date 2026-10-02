@@ -78,7 +78,7 @@
 
   // Inline history edit.
   let histEditId = $state<number | null>(null);
-  let histEdit = $state({ event_date: '', detail: '' });
+  let histEdit = $state({ event_date: '', detail: '', hide: false });
 
   // Schedule slot editing.
   let manageScheduleId = $state<number | null>(null);
@@ -288,13 +288,14 @@
   // ── History editing (dates / notes on started/ceased entries) ──
   function startHistEdit(h: any) {
     histEditId = h.id;
-    histEdit = { event_date: h.event_date, detail: h.detail ?? '' };
+    histEdit = { event_date: h.event_date, detail: h.detail ?? '', hide: !!h.hide_from_timeline };
   }
   async function saveHistEdit(id: number) {
     await invoke('update_medication_history', {
       id,
       eventDate: histEdit.event_date || null,
       detail: histEdit.detail || null,
+      hideFromTimeline: histEdit.hide,
     });
     histEditId = null;
     history = await invoke('get_medication_history', { medicationId: null });
@@ -841,9 +842,10 @@
             {/if}
           </div>
           <div class="hist-info">
-            <div class="hist-med">{h.medication_name}</div>
+            <div class="hist-med">{h.medication_name}{#if h.hide_from_timeline}<span class="hidden-tag">Hidden from timeline</span>{/if}</div>
             {#if histEditId === h.id}
               <input bind:value={histEdit.detail} placeholder="Add a note…" class="hist-note-input" />
+              <label class="hide-check"><input type="checkbox" bind:checked={histEdit.hide} /> Hide from timeline</label>
               <div class="hist-actions">
                 <button class="dose-save" onclick={() => saveHistEdit(h.id)}>Save</button>
                 <button class="dose-cancel" onclick={() => histEditId = null}>Cancel</button>
@@ -980,6 +982,9 @@
   .tree-dose-name { flex:1; min-width:0; font-size:12.5px; color:var(--tp); }
 
   .history-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); margin-top:16px; display:flex; flex-direction:column; gap:4px; }
+  .hidden-tag { font-size:10.5px; font-weight:700; color:var(--tm); background:var(--inset); border-radius:6px; padding:2px 7px; margin-left:8px; vertical-align:1px; }
+  .hide-check { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--ts); cursor:pointer; }
+  .hide-check input { accent-color:var(--accent); margin:0; }
   .hist-row { display:flex; gap:14px; padding:12px 0; border-top:1px solid var(--border); align-items:flex-start; }
   .hist-badge-col { width:104px; flex-shrink:0; display:flex; flex-direction:column; gap:5px; }
   .hist-badge { font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:999px; text-align:center; }

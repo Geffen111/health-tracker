@@ -86,6 +86,8 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **The dashboard Timeline's event strip is a second chart** padded to the main chart's plot area
   (an inline plugin reports `chartArea`), so markers line up with dates. Events are descriptive
   markers only — same rule as Pacing.
+  Each source (`exposures`, `health_notes`, `medication_history`) has a `hide_from_timeline`
+  flag that `get_timeline_events` filters on — a new marker source needs one too.
 - **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,
   beside other tracked days. Same rule as Pacing — no scores, no forecasts.
 

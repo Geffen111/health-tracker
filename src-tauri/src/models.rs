@@ -112,6 +112,8 @@ pub struct MedicationHistoryEntry {
     pub detail: Option<String>,
     pub old_value: Option<String>,
     pub new_value: Option<String>,
+    #[serde(default)]
+    pub hide_from_timeline: bool,
 }
 
 // ── Watch calibration ──

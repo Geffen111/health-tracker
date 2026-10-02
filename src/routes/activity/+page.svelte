@@ -229,6 +229,7 @@
   let noteType = $state('appointment');
   let noteTitle = $state('');
   let noteBody = $state('');
+  let noteHide = $state(false);
   let editingNoteId = $state<number | null>(null);
   let noteBusy = $state(false);
 
@@ -239,11 +240,11 @@
   }
 
   function resetNoteForm() {
-    editingNoteId = null; noteType = 'appointment'; noteTitle = ''; noteBody = '';
+    editingNoteId = null; noteType = 'appointment'; noteTitle = ''; noteBody = ''; noteHide = false;
   }
 
   function editNote(n: any) {
-    editingNoteId = n.id; noteType = n.note_type; noteTitle = n.title; noteBody = n.body ?? '';
+    editingNoteId = n.id; noteType = n.note_type; noteTitle = n.title; noteBody = n.body ?? ''; noteHide = n.hide_from_timeline;
   }
 
   async function saveNote() {
@@ -251,9 +252,9 @@
     noteBusy = true;
     try {
       if (editingNoteId != null) {
-        await invoke('update_health_note', { id: editingNoteId, noteType, title: noteTitle, body: noteBody || null });
+        await invoke('update_health_note', { id: editingNoteId, noteType, title: noteTitle, body: noteBody || null, hideFromTimeline: noteHide });
       } else {
-        await invoke('add_health_note', { logDate: selectedDate, noteType, title: noteTitle, body: noteBody || null });
+        await invoke('add_health_note', { logDate: selectedDate, noteType, title: noteTitle, body: noteBody || null, hideFromTimeline: noteHide });
       }
       resetNoteForm();
       await loadNotes();
@@ -277,6 +278,7 @@
   // way each time. Photos can be picked or dropped onto the entry field (they attach to the
   // new entry) or onto an existing entry (they attach to that one).
   let exposures = $state<any[]>([]);
+  let expHide = $state(false);
   let expSuggestions = $state<string[]>([]);
   let expText = $state('');
   let expTime = $state('');
@@ -323,9 +325,9 @@
     }
     expBusy = true;
     try {
-      const id = await invoke<number>('add_exposure', { logDate: selectedDate, timeTaken: expTime || null, description: text });
+      const id = await invoke<number>('add_exposure', { logDate: selectedDate, timeTaken: expTime || null, description: text, hideFromTimeline: expHide });
       await attach(id, pendingFiles);
-      expText = '';
+      expText = ''; expHide = false;
       expTime = '';
       pendingFiles = [];
     } catch (e) {
@@ -348,6 +350,11 @@
       expBusy = false;
       await loadExposures();
     }
+  }
+
+  async function toggleExposureHidden(ex: any) {
+    await invoke('set_exposure_hidden', { id: ex.id, hidden: !ex.hide_from_timeline });
+    await loadExposures();
   }
 
   async function removeExposure(ex: any) {
@@ -537,6 +544,7 @@
               <div class="exp-main">
                 {#if ex.time_taken}<span class="exp-time">{ex.time_taken}</span>{/if}
                 <span class="exp-desc">{ex.description}</span>
+                {#if ex.hide_from_timeline}<span class="hidden-tag">Hidden from timeline</span>{/if}
               </div>
               {#each ex.attachments as a (a.id)}
                 <span class="att-chip">
@@ -553,6 +561,11 @@
                   onchange={(e) => { attachToExisting(ex.id, imagesFrom(e.currentTarget.files)); e.currentTarget.value = ''; }} />
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
               </label>
+              <button class="exp-icon" class:active={ex.hide_from_timeline} onclick={() => toggleExposureHidden(ex)}
+                aria-label={ex.hide_from_timeline ? 'Show on timeline' : 'Hide from timeline'}
+                title={ex.hide_from_timeline ? 'Hidden from timeline — click to show' : 'Hide from timeline'}>
+                {#if ex.hide_from_timeline}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3 3.8M6.6 6.6A17 17 0 0 0 2.5 12S6 19 12 19a9.7 9.7 0 0 0 4.4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>{:else}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="3"/></svg>{/if}
+              </button>
               <button class="exp-icon" onclick={() => removeExposure(ex)} aria-label="Delete exposure" title="Delete">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
               </button>
@@ -595,7 +608,10 @@
             {/each}
           </div>
         {/if}
-        <div class="drop-hint">{dragTarget === 'new' ? 'Drop to attach' : 'Drop a photo here to attach it'}</div>
+        <div class="exp-foot">
+          <label class="hide-check"><input type="checkbox" bind:checked={expHide} /> Hide from timeline</label>
+          <div class="drop-hint">{dragTarget === 'new' ? 'Drop to attach' : 'Drop a photo here to attach it'}</div>
+        </div>
       </div>
     </div>
 
@@ -613,6 +629,7 @@
                 <div class="exp-main">
                   <span class="note-type {n.note_type}">{noteTypeLabel(n.note_type)}</span>
                   <span class="exp-desc">{n.title}</span>
+                  {#if n.hide_from_timeline}<span class="hidden-tag">Hidden from timeline</span>{/if}
                 </div>
                 {#if n.body}<div class="note-body">{n.body}</div>{/if}
               </div>
@@ -636,6 +653,7 @@
         </div>
         <textarea class="note-textarea" rows="2" placeholder="Note (optional)" bind:value={noteBody} aria-label="Note"></textarea>
         <div class="note-actions">
+          <label class="hide-check"><input type="checkbox" bind:checked={noteHide} /> Hide from timeline</label>
           {#if editingNoteId != null}<button class="note-cancel" onclick={resetNoteForm}>Cancel</button>{/if}
           <button class="add-btn" onclick={saveNote} disabled={!noteTitle.trim() || noteBusy}>{editingNoteId != null ? 'Save' : 'Add'}</button>
         </div>
@@ -862,6 +880,12 @@
   .pending-chip { display:inline-flex; align-items:center; gap:6px; max-width:100%; font-size:11.5px; font-weight:600; color:var(--accent-fg); background:var(--accent-soft); border-radius:999px; padding:4px 6px 4px 10px; }
   .pending-chip button { width:16px; height:16px; border-radius:50%; border:none; background:transparent; color:inherit; display:flex; align-items:center; justify-content:center; cursor:pointer; padding:0; }
   .drop-hint { font-size:11px; color:var(--tm); text-align:center; }
+  .exp-icon.active { color:var(--accent-fg); background:var(--accent-soft); border-color:var(--accent-soft); }
+  .exp-foot { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .hide-check { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--ts); cursor:pointer; margin-right:auto; }
+  .hide-check input { accent-color:var(--accent); margin:0; }
+  .hidden-tag { font-size:10.5px; font-weight:700; color:var(--tm); background:var(--inset); border-radius:6px; padding:2px 7px; flex-shrink:0; white-space:nowrap; }
+
   /* Health notes */
   .note-row { align-items:flex-start; }
   .note-row.editing { background:var(--accent-soft); }

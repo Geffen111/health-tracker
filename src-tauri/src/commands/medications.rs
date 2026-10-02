@@ -220,6 +220,7 @@ pub async fn update_medication_history(
     event_type: Option<String>,
     event_date: Option<String>,
     detail: Option<String>,
+    hide_from_timeline: Option<bool>,
 ) -> Result<(), String> {
     if let Some(v) = event_type {
         sqlx::query("UPDATE medication_history SET event_type = ? WHERE id = ?")
@@ -232,6 +233,10 @@ pub async fn update_medication_history(
     if let Some(v) = detail {
         sqlx::query("UPDATE medication_history SET detail = ? WHERE id = ?")
             .bind(&v).bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    }
+    if let Some(v) = hide_from_timeline {
+        sqlx::query("UPDATE medication_history SET hide_from_timeline = ? WHERE id = ?")
+            .bind(v).bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }

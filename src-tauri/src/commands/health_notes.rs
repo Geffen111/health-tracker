@@ -15,6 +15,7 @@ pub struct HealthNote {
     pub note_type: String,
     pub title: String,
     pub body: Option<String>,
+    pub hide_from_timeline: bool,
 }
 
 /// One marker on the Timeline. `kind` is medication / exposure / note; `subtype` is the
@@ -44,7 +45,7 @@ pub async fn get_health_notes_for_date(
     date: String,
 ) -> Result<Vec<HealthNote>, String> {
     sqlx::query_as::<_, HealthNote>(
-        "SELECT id, log_date, note_type, title, body FROM health_notes WHERE log_date = ? ORDER BY id",
+        "SELECT id, log_date, note_type, title, body, hide_from_timeline FROM health_notes          WHERE log_date = ? ORDER BY id",
     )
     .bind(&date)
     .fetch_all(&*pool)
@@ -59,10 +60,11 @@ pub async fn add_health_note(
     note_type: String,
     title: String,
     body: Option<String>,
+    hide_from_timeline: Option<bool>,
 ) -> Result<i64, String> {
     let (note_type, title, body) = clean(&note_type, &title, body)?;
-    sqlx::query("INSERT INTO health_notes (log_date, note_type, title, body) VALUES (?, ?, ?, ?)")
-        .bind(&log_date).bind(&note_type).bind(&title).bind(&body)
+    sqlx::query("INSERT INTO health_notes (log_date, note_type, title, body, hide_from_timeline) VALUES (?, ?, ?, ?, ?)")
+        .bind(&log_date).bind(&note_type).bind(&title).bind(&body).bind(hide_from_timeline.unwrap_or(false))
         .execute(&*pool)
         .await
         .map(|r| r.last_insert_rowid())
@@ -76,10 +78,11 @@ pub async fn update_health_note(
     note_type: String,
     title: String,
     body: Option<String>,
+    hide_from_timeline: Option<bool>,
 ) -> Result<(), String> {
     let (note_type, title, body) = clean(&note_type, &title, body)?;
-    sqlx::query("UPDATE health_notes SET note_type = ?, title = ?, body = ? WHERE id = ?")
-        .bind(&note_type).bind(&title).bind(&body).bind(id)
+    sqlx::query("UPDATE health_notes SET note_type = ?, title = ?, body = ?, hide_from_timeline = ? WHERE id = ?")
+        .bind(&note_type).bind(&title).bind(&body).bind(hide_from_timeline.unwrap_or(false)).bind(id)
         .execute(&*pool)
         .await
         .map(|_| ())
@@ -93,7 +96,7 @@ pub async fn delete_health_note(pool: State<'_, SqlitePool>, id: i64) -> Result<
 }
 
 /// Every dated event for the Timeline, oldest first: medication starts/stops/dose
-/// changes, exposures, and health notes.
+/// changes, exposures, and health notes — less anything marked "hide from timeline".
 #[tauri::command]
 pub async fn get_timeline_events(pool: State<'_, SqlitePool>) -> Result<Vec<TimelineEvent>, String> {
     sqlx::query_as::<_, TimelineEvent>(
@@ -102,11 +105,11 @@ pub async fn get_timeline_events(pool: State<'_, SqlitePool>) -> Result<Vec<Time
                 COALESCE(detail, CASE WHEN event_type = 'dose_changed' \
                      THEN old_value || ' → ' || new_value END) AS detail, \
                 0 AS ord, id \
-           FROM medication_history \
+           FROM medication_history WHERE hide_from_timeline = 0 \
          UNION ALL \
-         SELECT log_date, 'exposure', NULL, description, time_taken, 1, id FROM exposures \
+         SELECT log_date, 'exposure', NULL, description, time_taken, 1, id FROM exposures WHERE hide_from_timeline = 0 \
          UNION ALL \
-         SELECT log_date, 'note', note_type, title, body, 2, id FROM health_notes \
+         SELECT log_date, 'note', note_type, title, body, 2, id FROM health_notes WHERE hide_from_timeline = 0 \
          ORDER BY 1, 6, 7",
     )
     .fetch_all(&*pool)
