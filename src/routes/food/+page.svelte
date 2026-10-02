@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { formatDate, formatDateLong, todayISO, shiftISO } from '$lib/formatDate';
+  import DayPicker from '$lib/components/DayPicker.svelte';
   import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { showToast } from '$lib/stores/toast.svelte';
   import { confirmAction } from '$lib/stores/confirm.svelte';
@@ -65,8 +66,9 @@
     await Promise.all([loadDay(), loadDefinitions(), loadHistory()]);
   }
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); closeForms(); loadDay(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); closeForms(); loadDay(); }
+  function goDay(d: string) { selectedDate = d; pushDate(selectedDate); closeForms(); loadDay(); }
+  function prevDay() { goDay(shiftISO(selectedDate, -1)); }
+  function nextDay() { goDay(shiftISO(selectedDate, 1)); }
   function goToday() { selectedDate = today; pushDate(selectedDate); closeForms(); loadDay(); }
 
   function nowHHMM(): string {
@@ -403,7 +405,7 @@
       <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
       </button>
-      <span class="day-label">{formatDateLong(selectedDate)}</span>
+      <span class="day-label"><DayPicker date={selectedDate} label={formatDateLong(selectedDate)} onpick={goDay} /></span>
       <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>

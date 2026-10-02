@@ -1,6 +1,8 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, untrack } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { dateHref } from '$lib/dateParam';
   import { formatDate, todayISO, shiftISO, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
@@ -286,26 +288,31 @@
   function markerKey(e: any): MarkerKey {
     return e.kind === 'note' ? (['appointment', 'test'].includes(e.subtype) ? e.subtype : 'other') : e.kind;
   }
+  // Headings only — the notes behind each event stay on their own pages.
   const MED_EVENT: Record<string, string> = {
-    started: 'Started', ceased: 'Stopped', reactivated: 'Restarted', dose_changed: 'Dose changed', added: 'Added', note: 'Note',
+    started: 'Started', ceased: 'Ceased', reactivated: 'Restarted', added: 'Added',
   };
   const NOTE_LABEL: Record<string, string> = { appointment: 'Appointment', test: 'Test', other: 'Note' };
+  function dose(v: string, unit: string | null): string {
+    if (!unit) return v;
+    return /^(mg|mcg|g|ml)$/i.test(unit) ? `${v}${unit}` : `${v} ${unit}`;
+  }
   function eventLine(e: any): string {
-    if (e.kind === 'medication') return `${e.title} — ${MED_EVENT[e.subtype] ?? e.subtype}${e.detail ? `: ${e.detail}` : ''}`;
+    if (e.kind === 'medication') {
+      if (e.subtype === 'dose_changed') {
+        return `${e.title} dose changed${e.old_value && e.new_value ? ` — ${dose(e.old_value, e.unit)} → ${dose(e.new_value, e.unit)}` : ''}`;
+      }
+      return MED_EVENT[e.subtype] ? `${MED_EVENT[e.subtype]} ${e.title}` : `${e.title} — ${e.subtype}`;
+    }
     if (e.kind === 'exposure') return `Exposure: ${e.title}${e.detail ? ` (${e.detail})` : ''}`;
     return `${NOTE_LABEL[markerKey(e)]}: ${e.title}`;
   }
-  // Tooltips don't wrap, so break long note text into short lines (and cap it).
-  function wrap(text: string, width = 64, maxLines = 4): string[] {
-    const out: string[] = [];
-    for (const para of text.split(/\n+/)) {
-      let line = '';
-      for (const w of para.split(/\s+/)) {
-        if (line && (line + ' ' + w).length > width) { out.push(line); line = w; } else line = line ? line + ' ' + w : w;
-      }
-      if (line) out.push(line);
-    }
-    return out.length > maxLines ? [...out.slice(0, maxLines - 1), out[maxLines - 1].slice(0, width - 1) + '…'] : out;
+  // Where a marker's entry is edited: medication changes on Medication, the rest on Activity.
+  function openDay(path: string, date: string) {
+    void goto(dateHref(path, date));
+  }
+  function pointerOn(e: any, active: any[]) {
+    if (e.native?.target) e.native.target.style.cursor = active.length ? 'pointer' : 'default';
   }
   let eventsByDay = $derived.by(() => {
     const byKey = new Map<string, any[]>();   // `${markerKey}|${date}`
@@ -355,6 +362,9 @@
     spanGaps: true,
     animation: false,
     interaction: { mode: 'index', intersect: false },
+    // Clicking a day opens its Daily Log.
+    onClick: (_e: any, active: any[]) => { if (active.length) openDay('/daily', timelineDates[active[0].index]); },
+    onHover: pointerOn,
     eventLines: { indices: medLineIdx, color: faded('var(--purple)', 0.45) },
     scales: {
       y: { type: 'linear', position: 'left', beginAtZero: true, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
@@ -399,6 +409,12 @@
     animation: false,
     layout: { padding: { left: plotPad.left, right: plotPad.right, top: 6, bottom: 6 } },
     interaction: { mode: 'nearest', intersect: true },
+    onClick: (_e: any, active: any[]) => {
+      if (!active.length) return;
+      const key = stripDatasets[active[0].datasetIndex]?.markerKey;
+      openDay(key === 'medication' ? '/medication' : '/activity', timelineDates[active[0].index]);
+    },
+    onHover: pointerOn,
     scales: {
       x: { display: false },
       y: { display: false, min: 0.4, max: stripMarkers.length + 0.6 },
@@ -406,14 +422,16 @@
     plugins: {
       legend: { display: false },
       tooltip: {
+        footerFont: { size: 10, weight: 'normal', style: 'italic' },
         callbacks: {
           title: (items: any[]) => (items.length ? formatDate(timelineDates[items[0].dataIndex]) : ''),
           label: (ctx: any) => {
             const evs = eventsByDay.byKey.get(`${ctx.dataset.markerKey}|${timelineDates[ctx.dataIndex]}`) ?? [];
-            return evs.flatMap((e: any) => [
-              eventLine(e),
-              ...(e.kind === 'note' && e.detail ? wrap(e.detail).map((l) => '   ' + l) : []),
-            ]);
+            return evs.map(eventLine);
+          },
+          footer: (items: any[]) => {
+            if (!items.length) return '';
+            return stripDatasets[items[0].datasetIndex]?.markerKey === 'medication' ? 'Click to open Medication' : 'Click to open Activity';
           },
         },
       },
@@ -603,7 +621,7 @@
     <div class="compare-header">
       <div>
         <div class="card-title">Timeline</div>
-        <div class="card-subtitle">Your signals over time, with medication changes, exposures and health notes marked underneath</div>
+        <div class="card-subtitle">Your signals over time, with medication changes, exposures and health notes marked underneath · click a marker or day to open it</div>
       </div>
       <div class="range-toggle">
         {#each RANGES as r}

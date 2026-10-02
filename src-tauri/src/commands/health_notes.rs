@@ -18,8 +18,9 @@ pub struct HealthNote {
     pub hide_from_timeline: bool,
 }
 
-/// One marker on the Timeline. `kind` is medication / exposure / note; `subtype` is the
-/// medication event type or the note type.
+/// One marker on the Timeline, kept to a heading: `kind` is medication / exposure / note;
+/// `subtype` is the medication event type or the note type. `detail` is an exposure's time;
+/// `old_value` / `new_value` / `unit` describe a dose change.
 #[derive(Debug, Serialize, FromRow)]
 pub struct TimelineEvent {
     pub date: String,
@@ -27,6 +28,9 @@ pub struct TimelineEvent {
     pub subtype: Option<String>,
     pub title: String,
     pub detail: Option<String>,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub unit: Option<String>,
 }
 
 fn clean(note_type: &str, title: &str, body: Option<String>) -> Result<(String, String, Option<String>), String> {
@@ -100,17 +104,7 @@ pub async fn delete_health_note(pool: State<'_, SqlitePool>, id: i64) -> Result<
 #[tauri::command]
 pub async fn get_timeline_events(pool: State<'_, SqlitePool>) -> Result<Vec<TimelineEvent>, String> {
     sqlx::query_as::<_, TimelineEvent>(
-        "SELECT event_date AS date, 'medication' AS kind, event_type AS subtype, \
-                medication_name AS title, \
-                COALESCE(detail, CASE WHEN event_type = 'dose_changed' \
-                     THEN old_value || ' → ' || new_value END) AS detail, \
-                0 AS ord, id \
-           FROM medication_history WHERE hide_from_timeline = 0 \
-         UNION ALL \
-         SELECT log_date, 'exposure', NULL, description, time_taken, 1, id FROM exposures WHERE hide_from_timeline = 0 \
-         UNION ALL \
-         SELECT log_date, 'note', note_type, title, body, 2, id FROM health_notes WHERE hide_from_timeline = 0 \
-         ORDER BY 1, 6, 7",
+        "SELECT h.event_date AS date, 'medication' AS kind, h.event_type AS subtype,                 h.medication_name AS title, NULL AS detail,                 h.old_value, h.new_value, m.dose_unit AS unit, 0 AS ord, h.id            FROM medication_history h LEFT JOIN medications m ON m.id = h.medication_id           WHERE h.hide_from_timeline = 0          UNION ALL          SELECT log_date, 'exposure', NULL, description, time_taken, NULL, NULL, NULL, 1, id            FROM exposures WHERE hide_from_timeline = 0          UNION ALL          SELECT log_date, 'note', note_type, title, NULL, NULL, NULL, NULL, 2, id            FROM health_notes WHERE hide_from_timeline = 0          ORDER BY 1, 9, 10",
     )
     .fetch_all(&*pool)
     .await

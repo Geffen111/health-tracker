@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { formatDateLong, formatDateShort, todayISO, shiftISO } from '$lib/formatDate';
+  import DayPicker from '$lib/components/DayPicker.svelte';
   import { dateFromUrl, pushDate, dateHref } from '$lib/dateParam';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
@@ -182,8 +183,9 @@
     } catch (e) { console.error('Error deleting calibration:', e); }
   }
 
-  function prevDay() { selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); loadBP(); loadDailyLog(); }
-  function nextDay() { selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); loadBP(); loadDailyLog(); }
+  function goDay(d: string) { selectedDate = d; pushDate(selectedDate); loadBP(); loadDailyLog(); }
+  function prevDay() { goDay(shiftISO(selectedDate, -1)); }
+  function nextDay() { goDay(shiftISO(selectedDate, 1)); }
 
   // A reading synced from the watch. The sync owns these rows and refreshes their
   // numbers; anything else was typed in here and the sync never touches it.
@@ -286,7 +288,7 @@
       <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
       </button>
-      <span class="day-label">{formatDateLong(selectedDate)}</span>
+      <span class="day-label"><DayPicker date={selectedDate} label={formatDateLong(selectedDate)} onpick={goDay} /></span>
       <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>

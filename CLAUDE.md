@@ -45,6 +45,8 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **Date-scoped pages carry their day in `?date=YYYY-MM-DD`** (`$lib/dateParam.ts`): initialise
   `selectedDate` with `dateFromUrl($page.url)` and call `pushDate()` from the day arrows, so a
   link from one page to another lands on the same day. Link across with `dateHref()`.
+  The date between the arrows is a `<DayPicker onpick={goDay}>` (opens a calendar); each page
+  has one `goDay(date)` that the arrows and the picker both go through.
 - **Activity load has one definition, in two places.** `LOAD_EXPR`/`BUCKET_EXPR` in
   `commands/pacing.rs` and `computeDayLoad` in `src/lib/load.ts` must stay in step:
   hours x `activity_categories.energy_weight` x energy-cost factor (Low 0.7 / Medium 1.0 /

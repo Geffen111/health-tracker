@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { formatDateLong, formatDateShort, todayISO, shiftISO } from '$lib/formatDate';
+  import DayPicker from '$lib/components/DayPicker.svelte';
   import { dateFromUrl, pushDate } from '$lib/dateParam';
   import { showToast } from '$lib/stores/toast.svelte';
   import Chart from '$lib/Chart.svelte';
@@ -51,8 +52,9 @@
 
   // Changing day closes the editor rather than re-pointing a half-typed form at
   // a different night.
-  function prevDay() { editing = false; selectedDate = shiftISO(selectedDate, -1); pushDate(selectedDate); }
-  function nextDay() { editing = false; selectedDate = shiftISO(selectedDate, 1); pushDate(selectedDate); }
+  function goDay(d: string) { editing = false; selectedDate = d; pushDate(selectedDate); }
+  function prevDay() { goDay(shiftISO(selectedDate, -1)); }
+  function nextDay() { goDay(shiftISO(selectedDate, 1)); }
 
   let selectedMetric = $state<string>(typeof saved.selectedMetric === 'string' ? saved.selectedMetric : 'score');
   $effect(() => rememberView('sleep', { rangeDays, selectedMetric }));
@@ -217,7 +219,7 @@
       <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
       </button>
-      <span class="day-label">{formatDateLong(selectedDate)}</span>
+      <span class="day-label"><DayPicker date={selectedDate} label={formatDateLong(selectedDate)} onpick={goDay} /></span>
       <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>

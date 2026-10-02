@@ -3,6 +3,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { formatDateFull, todayISO, shiftISO } from '$lib/formatDate';
+  import DayPicker from '$lib/components/DayPicker.svelte';
   import { dateFromUrl, pushDate, dateHref } from '$lib/dateParam';
   import { showToast } from '$lib/stores/toast.svelte';
 
@@ -240,6 +241,7 @@
     await loadPair(date);
   }
 
+  function goDay(d: string) { void goToDate(d); }
   function prevDay() { void goToDate(shiftISO(selectedDate, -1)); }
   function nextDay() { void goToDate(shiftISO(selectedDate, 1)); }
   function goToday() { void goToDate(today); }
@@ -336,7 +338,7 @@
       <button class="day-arrow" onclick={prevDay} aria-label="Previous day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
       </button>
-      <span class="day-label">{formatDateFull(selectedDate)}</span>
+      <span class="day-label"><DayPicker date={selectedDate} label={formatDateFull(selectedDate)} onpick={goDay} /></span>
       <button class="day-arrow" onclick={nextDay} disabled={selectedDate === today} aria-label="Next day">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>
