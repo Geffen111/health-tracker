@@ -51,7 +51,10 @@ activity_log(id, log_date, activity_type_id, duration_hours REAL, energy_cost, n
     (energy_cost 'Low'=0.7, 'Medium'=1.0, 'High'=2.0). There is no stored risk score or crash
     prediction: PEM = post-exertional malaise, but this log holds only what was observed.
 
-foods(id, name, kind 'food'|'drink', regular INTEGER, active INTEGER)
+foods(id, name, kind 'food'|'drink', regular INTEGER, active INTEGER, category_id -> food_categories.id, tag_source 'ai'|'user'|NULL)
+food_categories(id, name)   -- one per item, e.g. 'Dairy', 'Fruit'
+food_flags(id, name)        -- e.g. 'Gluten', 'High-histamine', 'Caffeine'
+food_item_flags(food_id, flag_id)   -- which flags each item carries (AI- or user-assigned, approximate)
 food_log(id, log_date, time_taken, food_id, amount TEXT, group_id)
   - one row per item eaten/drunk; join food_log.food_id = foods.id for the name. No calories recorded.
 food_groups(id, name, default_time)   -- named sets of foods logged together, e.g. 'Usual breakfast'

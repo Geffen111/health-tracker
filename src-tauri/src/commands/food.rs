@@ -22,6 +22,11 @@ pub struct Food {
     pub times_logged: i64,
     /// Most recent day it was logged — the "recently used" sort.
     pub last_logged: Option<String>,
+    pub category_id: Option<i64>,
+    /// NULL = not yet tagged, 'ai' or 'user' — see commands/food_tags.rs.
+    pub tag_source: Option<String>,
+    #[sqlx(skip)]
+    pub flag_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +48,9 @@ pub struct FoodLogEntry {
     pub amount: Option<String>,
     pub group_id: Option<i64>,
     pub group_name: Option<String>,
+    /// When it was saved. Items logged in one action share it, which is how the Food page
+    /// spots a meal even when no time was entered.
+    pub created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,15 +100,21 @@ fn blank_to_none(v: Option<String>) -> Option<String> {
 
 #[tauri::command]
 pub async fn list_foods(pool: State<'_, SqlitePool>) -> Result<Vec<Food>, String> {
-    sqlx::query_as::<_, Food>(
-        "SELECT f.id, f.name, f.kind, f.regular, f.active, \
+    let mut foods = sqlx::query_as::<_, Food>(
+        "SELECT f.id, f.name, f.kind, f.regular, f.active, f.category_id, f.tag_source, \
                 CAST(COUNT(DISTINCT fl.log_date) AS INTEGER) AS days_logged,                 CAST(COUNT(fl.id) AS INTEGER) AS times_logged,                 MAX(fl.log_date) AS last_logged \
          FROM foods f LEFT JOIN food_log fl ON fl.food_id = f.id \
          GROUP BY f.id ORDER BY f.name COLLATE NOCASE",
     )
     .fetch_all(&*pool)
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    let flags: Vec<(i64, i64)> = sqlx::query_as("SELECT food_id, flag_id FROM food_item_flags")
+        .fetch_all(&*pool).await.map_err(|e| e.to_string())?;
+    for f in &mut foods {
+        f.flag_ids = flags.iter().filter(|(fid, _)| *fid == f.id).map(|(_, g)| *g).collect();
+    }
+    Ok(foods)
 }
 
 #[tauri::command]
@@ -154,6 +168,8 @@ pub async fn delete_food(pool: State<'_, SqlitePool>, id: i64) -> Result<(), Str
         ));
     }
     sqlx::query("DELETE FROM food_group_items WHERE food_id = ?")
+        .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM food_item_flags WHERE food_id = ?")
         .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM foods WHERE id = ?")
         .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
@@ -236,7 +252,7 @@ pub async fn get_food_log_for_date(
 ) -> Result<Vec<FoodLogEntry>, String> {
     sqlx::query_as::<_, FoodLogEntry>(
         "SELECT fl.id, fl.log_date, fl.time_taken, fl.food_id, f.name AS food_name, f.kind, \
-                fl.amount, fl.group_id, g.name AS group_name \
+                fl.amount, fl.group_id, g.name AS group_name, fl.created_at \
          FROM food_log fl \
          JOIN foods f ON f.id = fl.food_id \
          LEFT JOIN food_groups g ON g.id = fl.group_id \
@@ -244,6 +260,30 @@ pub async fn get_food_log_for_date(
          ORDER BY fl.time_taken IS NULL, fl.time_taken, fl.id",
     )
     .bind(&date)
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Every entry between two dates (inclusive), oldest first — for "Same as yesterday",
+/// recent meals and suggested groups on the Food page.
+#[tauri::command]
+pub async fn get_food_log_range(
+    pool: State<'_, SqlitePool>,
+    from: String,
+    to: String,
+) -> Result<Vec<FoodLogEntry>, String> {
+    sqlx::query_as::<_, FoodLogEntry>(
+        "SELECT fl.id, fl.log_date, fl.time_taken, fl.food_id, f.name AS food_name, f.kind, \
+                fl.amount, fl.group_id, g.name AS group_name, fl.created_at \
+         FROM food_log fl \
+         JOIN foods f ON f.id = fl.food_id \
+         LEFT JOIN food_groups g ON g.id = fl.group_id \
+         WHERE fl.log_date BETWEEN ? AND ? \
+         ORDER BY fl.log_date, fl.time_taken IS NULL, fl.time_taken, fl.id",
+    )
+    .bind(&from)
+    .bind(&to)
     .fetch_all(&*pool)
     .await
     .map_err(|e| e.to_string())

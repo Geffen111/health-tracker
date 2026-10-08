@@ -15,7 +15,7 @@
 // the titles of changed vault notes go to OpenRouter. Raw vault note text does not.
 
 use crate::commands::ai::{call_openrouter, strip_code_fences};
-use crate::commands::{blood_pressure, pacing, settings, vault};
+use crate::commands::{blood_pressure, food_tags, pacing, settings, vault};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -111,6 +111,12 @@ pub struct FoodWeek {
     /// Foods whose very first log entry falls in this week.
     pub new_items: Vec<String>,
     pub worst_day_items: Vec<String>,
+    /// Flag name and the number of this week's days with at least one item carrying it.
+    #[serde(default)]
+    pub flag_days: Vec<(String, i64)>,
+    /// Category name and the number of entries in it this week.
+    #[serde(default)]
+    pub category_counts: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -609,6 +615,24 @@ async fn build_food(
         None => vec![],
     };
 
+    let flag_days: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT g.name, COUNT(DISTINCT fl.log_date) AS n FROM food_log fl
+         JOIN food_item_flags i ON i.food_id = fl.food_id JOIN food_flags g ON g.id = i.flag_id
+         WHERE fl.log_date >= ? AND fl.log_date <= ?
+         GROUP BY g.id ORDER BY n DESC, g.sort",
+    )
+    .bind(&f).bind(&t)
+    .fetch_all(pool).await.map_err(|e| format!("DB error food flags: {}", e))?;
+
+    let category_counts: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT c.name, COUNT(*) AS n FROM food_log fl
+         JOIN foods fo ON fo.id = fl.food_id JOIN food_categories c ON c.id = fo.category_id
+         WHERE fl.log_date >= ? AND fl.log_date <= ?
+         GROUP BY c.id ORDER BY n DESC, c.sort",
+    )
+    .bind(&f).bind(&t)
+    .fetch_all(pool).await.map_err(|e| format!("DB error food categories: {}", e))?;
+
     let food_days: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT log_date) FROM food_log WHERE log_date >= ? AND log_date <= ?",
     )
@@ -620,6 +644,8 @@ async fn build_food(
             top_items,
             new_items: new_items.into_iter().map(|r| r.0).collect(),
             worst_day_items: worst_day_items.into_iter().map(|r| r.0).collect(),
+            flag_days,
+            category_counts,
         },
         food_days.0,
     ))
@@ -855,7 +881,7 @@ How to read the data:
 - meds.changes are starts, stops and dose changes this week.
 - correlations: Pearson r of fatigue against a measure over the last {cd} days (lag 0 = same day, lag 1 = the measure from the day before). Only pairs with |r| >= 0.3 are listed, out of correlations_tested. Describe them tentatively with n, as associations, never as causes.
 - new_lab_results: results newly noticed in the records vault (from the last lab extraction); vault_changes: notes added or edited this week (titles only). If vault_changes contains a pathology note but new_lab_results is empty, say the results may not have been extracted yet (Records page → Labs).
-- exposures and food are things they logged; mention them descriptively only.
+- exposures and food are things they logged; mention them descriptively only. food.flag_days is, per flag (gluten, high-histamine...), how many of the week's days had at least one item carrying it; flags are assigned per item by AI or by the person and are approximate.
 - Blood pressure (sys/dia) comes from a watch calibrated against a cuff, and each calibration shifts every later watch reading by the cuff's error that day. The figures given are already adjusted to remove those shifts, so treat them as comparable across weeks.
 
 Important: in this person's log, exertion (steps, activity hours, activity load) has shown no measurable correlation with the NEXT day's fatigue, and low activity tends to FOLLOW a bad day rather than precede one. Do not claim that an activity level caused or predicts a crash. Do not forecast next week. Do not diagnose or recommend treatment changes; for medication or results, suggest raising things with their clinician rather than acting.
@@ -956,6 +982,11 @@ fn row_to_summary(r: (String, String, String, String, String, i64)) -> Result<We
 async fn generate(pool: &SqlitePool, ws: NaiveDate) -> Result<WeeklySummary, String> {
     let _busy = Busy::acquire().ok_or_else(|| "A weekly summary is already being generated.".to_string())?;
     let api_key = require_key().await?;
+    // Tag any new food items first so the week's flag counts include them. A failure here
+    // only means fewer flags counted; it shouldn't stop the summary.
+    if let Err(e) = food_tags::tag_untagged(pool).await {
+        eprintln!("Food tagging before weekly summary failed: {}", e);
+    }
     let metrics = build_metrics(pool, ws).await?;
     if metrics.completeness.days_in_week == 0 {
         return Err("Nothing was logged in that week.".to_string());

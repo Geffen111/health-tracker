@@ -31,7 +31,7 @@ pnpm tauri dev
 
 ## Backend layout (`src-tauri/src/commands/`)
 `daily_log`, `medications` (+ dose logging, day note), `blood_pressure`, `activity`, `pacing`
-(descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups),
+(descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups), `food_tags` (categories/flags, AI tagging, merge/split clean-ups),
 `exposures` (exposures of note + photo attachments), `weekly` (Monday-to-Sunday AI summaries), `health_notes` (dated appointment/test
 notes + `get_timeline_events`, the merged event list for the dashboard Timeline), `import_xlsx` (one-time spreadsheet
 import via calamine). Register new commands in `src-tauri/src/lib.rs`.
@@ -96,6 +96,11 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   markers only — same rule as Pacing.
   Each source (`exposures`, `health_notes`, `medication_history`) has a `hide_from_timeline`
   flag that `get_timeline_events` filters on — a new marker source needs one too.
+- **Food tags: the AI tags, the person owns.** `foods.tag_source` is NULL (untagged), 'ai' or
+  'user'. `tag_untagged` only ever touches NULL rows (after an item is created, on Tidy up, and
+  before each weekly summary), so a hand edit is never overwritten. Clean-ups (merge/rename/split)
+  rewrite `food_log`, so the model only suggests them and each is applied on accept.
+  No FK enforcement in this DB: deleting a food/flag/category clears its link rows by hand.
 - **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,
   beside other tracked days. Same rule as Pacing — no scores, no forecasts.
 

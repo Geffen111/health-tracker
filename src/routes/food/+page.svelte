@@ -10,12 +10,15 @@
   import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { isImageFile, prepareImage } from '$lib/images';
   import { menuPosFor, menuStyle, type MenuPos } from '$lib/menuPosition';
+  import { findMeals, mealName, type Food, type FoodTag, type FoodLogEntry, type Meal } from '$lib/food';
+  import FoodTagManager from '$lib/components/FoodTagManager.svelte';
+  import FoodTidy from '$lib/components/FoodTidy.svelte';
 
   // Food & drink log. Not calorie counting: an item is a name and a kind, and the point
   // is to see what was eaten beside how the fatigue went. Like the Medication page:
   // regular items get quick-add buttons, groups log several items at once.
-
-  interface Food { id: number; name: string; kind: 'food' | 'drink'; regular: boolean; active: boolean; days_logged: number; times_logged: number; last_logged: string | null; }
+  // Each item can carry a category and flags (see commands/food_tags.rs): the AI tags new
+  // items, and anything edited by hand is left alone from then on.
   interface Group { id: number; name: string; default_time: string | null; food_ids: number[]; }
 
   let today = $state(todayISO());
@@ -23,6 +26,10 @@
   let foods = $state<Food[]>([]);
   let groups = $state<Group[]>([]);
   let entries = $state<any[]>([]);
+  let categories = $state<FoodTag[]>([]);
+  let flags = $state<FoodTag[]>([]);
+  // The 60 days up to the selected one: "Same as yesterday", recent meals, suggested groups.
+  let recent = $state<FoodLogEntry[]>([]);
   let foodDays = $state<{ food_id: number; log_date: string }[]>([]);
   let fatigueLogs = $state<{ log_date: string; fatigue_rating: number | null }[]>([]);
   let loading = $state(true);
@@ -32,7 +39,9 @@
   let sortBy = $state<'days' | 'next'>(oneOf(saved.sortBy, ['days', 'next'] as const, 'days'));
   // Order of the item list (the comparison table has its own `sortBy`).
   let listSort = $state<'name' | 'count' | 'recent'>(oneOf(saved.listSort, ['name', 'count', 'recent'] as const, 'name'));
-  $effect(() => rememberView('food', { showOther, sortBy, listSort }));
+  // What the fatigue comparison groups by.
+  let cmpBy = $state<'item' | 'flag' | 'category'>(oneOf(saved.cmpBy, ['item', 'flag', 'category'] as const, 'item'));
+  $effect(() => rememberView('food', { showOther, sortBy, listSort, cmpBy }));
 
   onMount(async () => {
     try {
@@ -45,15 +54,26 @@
   });
 
   async function loadDefinitions() {
-    [foods, groups] = await Promise.all([
+    [foods, groups, categories, flags] = await Promise.all([
       invoke<Food[]>('list_foods'),
       invoke<Group[]>('list_food_groups'),
+      invoke<FoodTag[]>('list_food_categories'),
+      invoke<FoodTag[]>('list_food_flags'),
     ]);
   }
   async function loadDay() {
     const date = selectedDate;
-    const list = await invoke<any[]>('get_food_log_for_date', { date });
-    if (date === selectedDate) entries = list;
+    const [list, range] = await Promise.all([
+      invoke<any[]>('get_food_log_for_date', { date }),
+      invoke<FoodLogEntry[]>('get_food_log_range', { from: shiftISO(date, -60), to: date }),
+    ]);
+    if (date === selectedDate) { entries = list; recent = range; }
+  }
+  // Tag newly created items in the background; the list refreshes when the tags land.
+  function tagNew() {
+    invoke<number>('tag_untagged_foods')
+      .then((n) => { if (n) loadDefinitions(); })
+      .catch((e) => console.warn('Food tagging failed:', e));
   }
   async function loadHistory() {
     const [days, logs] = await Promise.all([
@@ -173,6 +193,7 @@
   async function quickLog() {
     const name = quick.name.trim();
     if (!name) return;
+    const isNew = quickMatch == null;
     try {
       let id = quickMatch?.id;
       if (id == null) id = await invoke<number>('create_food', { name, kind: quick.kind, regular: false });
@@ -182,6 +203,7 @@
       });
       quick = { name: '', kind: quick.kind, time: '', amount: '' };
       await refreshAfterLog();
+      if (isNew) tagNew();
       showToast(`${name} logged`);
     } catch (e) {
       showToast(String(e), 'error');
@@ -264,6 +286,7 @@
       });
       clearPhoto();
       await refreshAfterLog();
+      tagNew();
       showToast(`${picked.length} item${picked.length === 1 ? '' : 's'} logged`);
     } catch (e) {
       showToast(String(e), 'error');
@@ -287,27 +310,139 @@
       newItem = { name: '', kind: newItem.kind, regular: true };
       showAddItem = false;
       await loadDefinitions();
+      tagNew();
     } catch (e) {
       showToast(String(e), 'error');
     }
   }
 
   let editId = $state<number | null>(null);
-  let edit = $state({ name: '', kind: 'food' as 'food' | 'drink', regular: true });
+  let edit = $state({ name: '', kind: 'food' as 'food' | 'drink', regular: true, category: '' as string, flags: {} as Record<number, boolean> });
   function startEdit(f: Food) {
     closeForms();
     editId = f.id;
-    edit = { name: f.name, kind: f.kind, regular: f.regular };
+    edit = {
+      name: f.name, kind: f.kind, regular: f.regular,
+      category: f.category_id == null ? '' : String(f.category_id),
+      flags: Object.fromEntries(f.flag_ids.map((id) => [id, true])),
+    };
   }
   async function saveEdit(f: Food) {
     try {
       await invoke('update_food', { id: f.id, name: edit.name, kind: edit.kind, regular: edit.regular, active: f.active });
+      // Tags are only saved (and marked as yours) when they changed, so an AI tag you
+      // didn't touch stays marked as the AI's.
+      const categoryId = edit.category ? Number(edit.category) : null;
+      const flagIds = flags.filter((g) => edit.flags[g.id]).map((g) => g.id);
+      const same = categoryId === f.category_id
+        && flagIds.length === f.flag_ids.length && flagIds.every((id) => f.flag_ids.includes(id));
+      if (!same) await invoke('set_food_tags', { foodId: f.id, categoryId, flagIds });
       editId = null;
       await Promise.all([loadDefinitions(), loadDay()]);
     } catch (e) {
       showToast(String(e), 'error');
     }
   }
+  async function retag(f: Food) {
+    try {
+      showToast(`Re-tagging ${f.name}…`);
+      await invoke('retag_food', { foodId: f.id });
+      await loadDefinitions();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  }
+  function categoryName(id: number | null): string | null {
+    return id == null ? null : categories.find((c) => c.id === id)?.name ?? null;
+  }
+  function flagNames(ids: number[]): string[] {
+    return flags.filter((g) => ids.includes(g.id)).map((g) => g.name);
+  }
+
+  // ── Panels ──
+  let showTidy = $state(false);
+  let showTags = $state(false);
+  async function afterTidy() { await Promise.all([loadDefinitions(), loadDay(), loadHistory()]); }
+
+  // ── Same as yesterday ──
+  let yesterday = $derived(recent.filter((e) => e.log_date === shiftISO(selectedDate, -1)));
+  let showCopy = $state(false);
+  let copyPicks = $state<Record<number, boolean>>({});
+  function openCopy() {
+    showCopy = !showCopy;
+    copyPicks = Object.fromEntries(yesterday.map((e) => [e.id, true]));
+  }
+  async function copyYesterday() {
+    const picked = yesterday.filter((e) => copyPicks[e.id]);
+    if (!picked.length) return;
+    try {
+      // Same times as yesterday: they're meal times, not when the button was pressed.
+      await invoke('add_food_log', {
+        logDate: selectedDate,
+        entries: picked.map((e) => ({ food_id: e.food_id, time_taken: e.time_taken, amount: e.amount, group_id: e.group_id })),
+      });
+      showCopy = false;
+      await refreshAfterLog();
+      showToast(`${picked.length} item${picked.length === 1 ? '' : 's'} copied from yesterday`);
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  }
+
+  // ── Recent meals and suggested groups ──
+  // Both come from the same thing: sets of items had together (see findMeals).
+  let meals = $derived(findMeals(recent.filter((e) => e.log_date < selectedDate)));
+  // Two weeks back, skipping anything that was a group being logged (already one tap).
+  let recentMeals = $derived(meals.filter((m) => !m.fromGroup && m.last >= shiftISO(selectedDate, -14)).slice(0, 6));
+  async function logMeal(m: Meal) {
+    try {
+      await invoke('add_food_log', {
+        logDate: selectedDate,
+        entries: m.food_ids.map((id) => ({ food_id: id, time_taken: defaultTime() || null, amount: null, group_id: null })),
+      });
+      await refreshAfterLog();
+      showToast(`${m.names.length} items logged`);
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  }
+
+  // A set had together three or more times that isn't a group yet. "Not now" is
+  // remembered on this PC only — it's a nudge, not data.
+  const DISMISS_KEY = 'food:dismissedMeals';
+  let dismissedMeals = $state<string[]>((() => {
+    try { return JSON.parse(localStorage.getItem(DISMISS_KEY) ?? '[]'); } catch { return []; }
+  })());
+  function dismissMeal(m: Meal) {
+    dismissedMeals = [...dismissedMeals, m.key];
+    try { localStorage.setItem(DISMISS_KEY, JSON.stringify(dismissedMeals)); } catch {}
+  }
+  let groupKeys = $derived(new Set(groups.map((g) => [...g.food_ids].sort((a, b) => a - b).join(','))));
+  let suggestedGroups = $derived(
+    meals.filter((m) => m.count >= 3 && !groupKeys.has(m.key) && !dismissedMeals.includes(m.key))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 2),
+  );
+  let mealGroupNames = $state<Record<string, string>>({});
+  function suggestedName(m: Meal): string {
+    const base = mealName(m.time);
+    const taken = new Set(groups.map((g) => g.name.toLowerCase()));
+    let name = base, n = 2;
+    while (taken.has(name.toLowerCase())) name = `${base} ${n++}`;
+    return name;
+  }
+  async function saveMealGroup(m: Meal) {
+    const name = (mealGroupNames[m.key] ?? suggestedName(m)).trim();
+    if (!name) return;
+    try {
+      await invoke('save_food_group', { id: null, name, defaultTime: m.time, foodIds: m.food_ids });
+      await loadDefinitions();
+      showToast(`${name} saved as a group`);
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  }
+
   async function setActive(f: Food, active: boolean) {
     await invoke('update_food', { id: f.id, name: f.name, kind: f.kind, regular: f.regular, active });
     await loadDefinitions();
@@ -387,8 +522,23 @@
     const fatigue = new Map<string, number>();
     for (const l of fatigueLogs) if (l.fatigue_rating != null) fatigue.set(l.log_date, l.fatigue_rating);
     const tracked = new Set(foodDays.map((d) => d.log_date));
-    const byFood = new Map<number, Set<string>>();
-    for (const d of foodDays) (byFood.get(d.food_id) ?? byFood.set(d.food_id, new Set()).get(d.food_id)!).add(d.log_date);
+    // Days per item, or per flag / category (a day counts once however many items had it).
+    const keysFor = (foodId: number): string[] => {
+      const f = foods.find((x) => x.id === foodId);
+      if (cmpBy === 'item') return [`i${foodId}`];
+      if (!f) return [];
+      if (cmpBy === 'flag') return f.flag_ids.map((id) => `f${id}`);
+      return f.category_id == null ? [] : [`c${f.category_id}`];
+    };
+    const nameOf = (key: string): string => {
+      const id = Number(key.slice(1));
+      if (key[0] === 'i') return foodName(id);
+      return (key[0] === 'f' ? flags : categories).find((t) => t.id === id)?.name ?? '?';
+    };
+    const byFood = new Map<string, Set<string>>();
+    for (const d of foodDays) {
+      for (const k of keysFor(d.food_id)) (byFood.get(k) ?? byFood.set(k, new Set()).get(k)!).add(d.log_date);
+    }
 
     const values = (days: Iterable<string>, shift: number) => {
       const out: number[] = [];
@@ -411,7 +561,7 @@
       const baseNextAvg = baseNext.length >= MIN_DAYS ? mean(baseNext) : null;
       rows.push({
         foodId,
-        name: foodName(foodId),
+        name: nameOf(foodId),
         days: days.size,
         sameAvg,
         nextAvg,
@@ -448,6 +598,8 @@
         <button class="today-btn" onclick={goToday}>Today</button>
       {/if}
     </div>
+    <button class="ghost-btn" onclick={() => { showTags = false; showTidy = !showTidy; }} title="Tag new items and look for duplicates">Tidy up</button>
+    <button class="ghost-btn" onclick={() => { showTidy = false; showTags = !showTags; }}>Categories &amp; flags</button>
     <button class="ghost-btn" onclick={() => startGroupForm(null)}>New group</button>
     <button class="primary-btn" onclick={() => { closeForms(); showAddItem = !showAddItem; }}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -455,6 +607,13 @@
     </button>
   </div>
 </div>
+
+{#if showTidy}
+  <FoodTidy {foods} onchange={afterTidy} onclose={() => showTidy = false} />
+{/if}
+{#if showTags}
+  <FoodTagManager {categories} {flags} onchange={loadDefinitions} onclose={() => showTags = false} />
+{/if}
 
 {#if showAddItem}
   <div class="form-card">
@@ -527,6 +686,17 @@
         <label class="check"><input type="checkbox" bind:checked={edit.regular} /> Quick-add</label>
         <button class="save-sm" onclick={() => saveEdit(f)}>Save</button>
         <button class="cancel-sm" onclick={() => editId = null}>Cancel</button>
+        <div class="edit-tags">
+          <select class="cat-select" bind:value={edit.category} aria-label="Category">
+            <option value="">No category</option>
+            {#each categories as c (c.id)}<option value={String(c.id)}>{c.name}</option>{/each}
+          </select>
+          {#each flags as g (g.id)}
+            <label class="flag-pick" class:on={edit.flags[g.id]}>
+              <input type="checkbox" bind:checked={edit.flags[g.id]} />{g.name}
+            </label>
+          {/each}
+        </div>
       </div>
     {:else}
       <div class="item-row" class:dimmed={!f.active} class:picked={picked[f.id]} class:menu-open={openMenuId === f.id}>
@@ -541,6 +711,17 @@
           <span class="item-detail">
             {#if !f.active}hidden · {/if}{#if !f.regular && f.active}{f.kind} · {/if}{f.days_logged ? `${f.days_logged} day${f.days_logged === 1 ? '' : 's'}` : 'not logged yet'}{#if listSort === 'recent' && f.last_logged} · last {formatDate(f.last_logged)}{/if}
           </span>
+          {#if f.tag_source}
+            {@const cat = categoryName(f.category_id)}
+            {@const fl = flagNames(f.flag_ids)}
+            {#if cat || fl.length}
+              <span class="item-tags" title={f.tag_source === 'ai' ? 'Tagged by AI. Edit the item to correct it.' : 'Set by you'}>
+                {#if cat}<span class="item-cat">{cat}</span>{/if}
+                {#each fl as n}<span class="item-flag">{n}</span>{/each}
+                {#if f.tag_source === 'ai'}<span class="ai-mark">AI</span>{/if}
+              </span>
+            {/if}
+          {/if}
         </div>
         {#if f.active}
           <button class="add-dose-btn" onclick={() => openLog(f)} aria-label="Log {f.name}" title="Log {f.name}">
@@ -554,6 +735,7 @@
           {#if openMenuId === f.id}
             <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
               <button class="menu-item" role="menuitem" onclick={() => startEdit(f)}>Edit</button>
+              <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; retag(f); }}>Re-tag with AI</button>
               <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; setActive(f, !f.active); }}>{f.active ? 'Hide' : 'Restore'}</button>
               {#if f.days_logged === 0}
                 <button class="menu-item danger" role="menuitem" onclick={() => { openMenuId = null; removeItem(f); }}>Delete</button>
@@ -594,9 +776,22 @@
         {/if}
       </div>
       <div class="section-divider">Groups</div>
-      {#if groups.length === 0}
+      {#if groups.length === 0 && !suggestedGroups.length}
         <div class="section-empty">No groups yet &mdash; use <strong>New group</strong> to log a usual meal in one go.</div>
       {/if}
+      {#each suggestedGroups as m (m.key)}
+        <div class="meal-sugg">
+          <div class="meal-sugg-text">
+            You've had <strong>{m.names.join(', ')}</strong> together {m.count} times. Save as a group?
+          </div>
+          <div class="meal-sugg-row">
+            <input class="sm-input wide" value={mealGroupNames[m.key] ?? suggestedName(m)}
+              oninput={(e) => mealGroupNames[m.key] = e.currentTarget.value} aria-label="Group name" />
+            <button class="save-sm" onclick={() => saveMealGroup(m)}>Save group</button>
+            <button class="cancel-sm" onclick={() => dismissMeal(m)}>Not now</button>
+          </div>
+        </div>
+      {/each}
       {#each groups as g (g.id)}
         <div class="item-row" class:menu-open={openMenuId === -g.id}>
           <span class="pick-box-gap"></span>
@@ -727,6 +922,35 @@
             </label>
           {/if}
         </div>
+        {#if yesterday.length || recentMeals.length}
+          <div class="repeat">
+            {#if yesterday.length}
+              <button class="repeat-btn" class:open={showCopy} onclick={openCopy}>
+                Same as yesterday <span class="repeat-n">{yesterday.length}</span>
+              </button>
+            {/if}
+            {#each recentMeals as m (m.key)}
+              <button class="meal-chip" onclick={() => logMeal(m)} title="Log {m.names.join(', ')}{selectedDate === today ? ' now' : ''}">
+                {m.names.join(' · ')}{#if m.count > 1}<span class="repeat-n">×{m.count}</span>{/if}
+              </button>
+            {/each}
+          </div>
+          {#if showCopy}
+            <div class="copy-list">
+              {#each yesterday as e (e.id)}
+                <label class="check"><input type="checkbox" bind:checked={copyPicks[e.id]} />
+                  <span class="entry-time">{e.time_taken ?? '--:--'}</span>{e.food_name}{#if e.amount}<span class="entry-amt">{e.amount}</span>{/if}
+                </label>
+              {/each}
+              <div class="inline-form-row">
+                <button class="cancel-sm" onclick={() => showCopy = false}>Cancel</button>
+                <button class="save-sm" onclick={copyYesterday} disabled={!yesterday.some((e) => copyPicks[e.id])}>
+                  Add {yesterday.filter((e) => copyPicks[e.id]).length}
+                </button>
+              </div>
+            </div>
+          {/if}
+        {/if}
         {#if entries.length === 0}
           <p class="muted center">Nothing logged</p>
         {:else}
@@ -752,11 +976,16 @@
   <div class="compare-card">
     <div class="compare-head">
       <div>
-        <div class="card-heading">Fatigue alongside each item</div>
+        <div class="card-heading">Fatigue alongside each {cmpBy === 'item' ? 'item' : cmpBy}</div>
         <div class="card-subtitle">
-          Average fatigue rating on the days you had it, and the day after, compared with the other
+          Average fatigue rating on the days you had {cmpBy === 'item' ? 'it' : `anything with that ${cmpBy}`}, and the day after, compared with the other
           {comparison.trackedDays} day{comparison.trackedDays === 1 ? '' : 's'} you logged food.
         </div>
+      </div>
+      <div class="seg-control sm">
+        <button class="seg-btn" class:active={cmpBy === 'item'} onclick={() => cmpBy = 'item'}>Items</button>
+        <button class="seg-btn" class:active={cmpBy === 'flag'} onclick={() => cmpBy = 'flag'}>Flags</button>
+        <button class="seg-btn" class:active={cmpBy === 'category'} onclick={() => cmpBy = 'category'}>Categories</button>
       </div>
       <div class="seg-control sm">
         <button class="seg-btn" class:active={sortBy === 'days'} onclick={() => sortBy = 'days'}>Most logged</button>
@@ -764,10 +993,10 @@
       </div>
     </div>
     {#if comparison.rows.length === 0}
-      <p class="muted">Items appear here once they've been logged on at least {MIN_DAYS} days that also have a fatigue rating.</p>
+      <p class="muted">{cmpBy === 'item' ? 'Items appear' : `A ${cmpBy} appears`} here once logged on at least {MIN_DAYS} days that also have a fatigue rating.{#if cmpBy !== 'item'} Items get flags and categories when they're tagged — try <strong>Tidy up</strong>.{/if}</p>
     {:else}
       <div class="cmp-grid cmp-head">
-        <span>Item</span><span>Days</span><span>Same day</span><span>vs other days</span><span>Day after</span><span>vs other days</span>
+        <span>{cmpBy === 'item' ? 'Item' : cmpBy === 'flag' ? 'Flag' : 'Category'}</span><span>Days</span><span>Same day</span><span>vs other days</span><span>Day after</span><span>vs other days</span>
       </div>
       {#each comparison.rows as r (r.foodId)}
         <div class="cmp-grid cmp-row">
@@ -784,7 +1013,7 @@
       A record, not a verdict: higher = more fatigued (0&ndash;10). A few days either way can swing
       these averages a long way, and a bad day can change what you eat as easily as the other way
       round &mdash; treat a gap as something to keep an eye on.
-      {#if comparison.hidden}{comparison.hidden} item{comparison.hidden === 1 ? ' is' : 's are'} hidden until logged on {MIN_DAYS}+ rated days.{/if}
+      {#if comparison.hidden}{comparison.hidden} {cmpBy === 'item' ? 'item' : cmpBy === 'flag' ? 'flag' : 'categor'}{comparison.hidden === 1 ? (cmpBy === 'category' ? 'y is' : ' is') : (cmpBy === 'category' ? 'ies are' : 's are')} hidden until logged on {MIN_DAYS}+ rated days.{/if}
     </div>
   </div>
 {/if}
@@ -852,6 +1081,19 @@
   .item-name.drink { background:var(--sky-soft); }
   .item-name.group { background:var(--amber-soft); }
   .item-detail { font-size:11.5px; color:var(--tm); }
+  .item-tags { display:inline-flex; align-items:center; gap:4px; flex-wrap:wrap; }
+  .item-cat { font-size:10.5px; font-weight:700; color:var(--ts); }
+  .item-flag { font-size:10px; font-weight:700; color:var(--ts); background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:1px 7px; }
+  .ai-mark { font-size:9px; font-weight:800; letter-spacing:.05em; color:var(--tm); border:1px dashed var(--border); border-radius:5px; padding:0 4px; }
+  .edit-tags { width:100%; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .cat-select { background:var(--card); border:1px solid var(--border); border-radius:9px; padding:6px 8px; font-size:12.5px; color:var(--tp); }
+  .flag-pick { display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border:1px solid var(--border); border-radius:999px; font-size:11.5px; font-weight:600; color:var(--ts); cursor:pointer; background:var(--card); }
+  .flag-pick.on { background:var(--accent-soft); color:var(--accent-fg); border-color:var(--accent-soft); }
+  .flag-pick input { display:none; }
+  .meal-sugg { margin:4px 14px 10px; padding:10px 12px; border:1px dashed var(--accent); border-radius:12px; background:var(--accent-soft); display:flex; flex-direction:column; gap:8px; }
+  .meal-sugg-text { font-size:12.5px; color:var(--ts); line-height:1.45; }
+  .meal-sugg-text strong { color:var(--tp); }
+  .meal-sugg-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .slot-btn { background:var(--accent-soft); color:var(--accent-fg); border:1px solid var(--border); border-radius:999px; padding:6px 13px; font-size:11.5px; font-weight:700; cursor:pointer; }
   .add-dose-btn { display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;background:var(--card);color:var(--accent-fg);border:2px solid var(--accent-fg);border-radius:999px;padding:0;cursor:pointer;flex-shrink:0; }
   .add-dose-btn:hover { background:var(--accent-soft); }
@@ -915,6 +1157,14 @@
   .sugg-tag { font-size:10.5px; font-weight:700; color:var(--tm); width:62px; text-align:center; }
   .sugg-kind { width:62px; font-size:10.5px; font-weight:700; color:var(--accent-fg); background:var(--accent-soft); border:none; border-radius:999px; padding:3px 0; cursor:pointer; }
   .sugg-actions { display:flex; align-items:center; gap:8px; justify-content:flex-end; margin-top:4px; }
+  .repeat { display:flex; flex-wrap:wrap; gap:6px; padding:0 18px 12px; }
+  .repeat-btn, .meal-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border); border-radius:999px; padding:5px 11px; font-size:12px; font-weight:600; cursor:pointer; background:var(--card); color:var(--ts); max-width:100%; text-align:left; }
+  .repeat-btn { background:var(--accent-soft); color:var(--accent-fg); border-color:var(--accent-soft); font-weight:700; }
+  .repeat-btn.open { border-color:var(--accent); }
+  .meal-chip:hover, .repeat-btn:hover { filter:brightness(.97); }
+  .repeat-n { font-size:10.5px; font-weight:800; color:var(--tm); }
+  .copy-list { display:flex; flex-direction:column; gap:6px; margin:0 18px 12px; padding:10px 12px; background:var(--inset); border-radius:12px; }
+  .copy-list .entry-time { width:auto; }
   .day-footer { padding:12px 18px; border-top:1px solid var(--border); font-size:12px; color:var(--tm); }
 
   .compare-card { background:var(--card); border:1px solid var(--border); border-radius:18px; padding:22px; box-shadow:var(--shadow); margin-top:16px; display:flex; flex-direction:column; gap:10px; }
