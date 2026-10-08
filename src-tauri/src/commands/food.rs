@@ -18,6 +18,10 @@ pub struct Food {
     pub active: bool,
     /// Days this item appears on — shown in the list and used to refuse a delete.
     pub days_logged: i64,
+    /// Log entries for this item (a day can hold several) — the "most added" sort.
+    pub times_logged: i64,
+    /// Most recent day it was logged — the "recently used" sort.
+    pub last_logged: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,7 +94,7 @@ fn blank_to_none(v: Option<String>) -> Option<String> {
 pub async fn list_foods(pool: State<'_, SqlitePool>) -> Result<Vec<Food>, String> {
     sqlx::query_as::<_, Food>(
         "SELECT f.id, f.name, f.kind, f.regular, f.active, \
-                CAST(COUNT(DISTINCT fl.log_date) AS INTEGER) AS days_logged \
+                CAST(COUNT(DISTINCT fl.log_date) AS INTEGER) AS days_logged,                 CAST(COUNT(fl.id) AS INTEGER) AS times_logged,                 MAX(fl.log_date) AS last_logged \
          FROM foods f LEFT JOIN food_log fl ON fl.food_id = f.id \
          GROUP BY f.id ORDER BY f.name COLLATE NOCASE",
     )

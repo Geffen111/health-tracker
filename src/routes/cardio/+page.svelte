@@ -7,6 +7,7 @@
   import { dateFromUrl, pushDate, dateHref } from '$lib/dateParam';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
+  import { adjustForCalibration, dailyAverages, type BpReading, type Calibration } from '$lib/bpCorrection';
 
   let today = $state(todayISO());
   let nowTime = new Date().toTimeString().slice(0, 5);
@@ -25,6 +26,7 @@
   let calDays = $state<number | null>(null);
   let lastCal = $state<any>(null);
   let calHistory = $state<any[]>([]);
+  let calibrations = $state<Calibration[]>([]);
   let calDate = $state(today);
   let calTime = $state(nowTime);
 
@@ -43,9 +45,30 @@
   const saved = recallView<any>('cardio');
   let histDays = $state<number>(typeof saved.histDays === 'number' ? saved.histDays : 30);
   let histMetric = $state<'bp' | 'minmax' | 'avg'>(oneOf(saved.histMetric, ['bp', 'minmax', 'avg'] as const, 'bp'));
-  $effect(() => rememberView('cardio', { histDays, histMetric }));
+  // BP chart: watch readings adjusted for calibration shifts (default) or as measured.
+  let bpAdjusted = $state(saved.bpAdjusted !== false);
+  $effect(() => rememberView('cardio', { histDays, histMetric, bpAdjusted }));
   let histLogs = $state<any[]>([]);   // daily_logs (HR fields), oldest first
-  let bpHistory = $state<any[]>([]);  // daily-averaged BP, oldest first
+  let bpRaw = $state<BpReading[]>([]); // every reading, as measured
+
+  // See $lib/bpCorrection: each calibration shifts the watch's readings by the cuff's
+  // error that day, so the steps are measured and taken out. Recomputed when a
+  // calibration is logged or deleted.
+  let bpAdjustment = $derived(adjustForCalibration(bpRaw, calibrations));
+  let bpHistory = $derived.by(() => {
+    const from = shiftISO(today, -60);
+    return dailyAverages(bpAdjusted ? bpAdjustment.readings : bpRaw).filter((d) => d.log_date >= from);
+  });
+  // Periods whose readings were moved, newest first, for the note under the chart.
+  let bpShifts = $derived(
+    bpAdjustment.periods
+      .filter((p) => p.days > 0 && (Math.abs(p.sys) >= 0.5 || Math.abs(p.dia) >= 0.5))
+      .reverse(),
+  );
+  function signed(v: number): string {
+    const r = Math.round(v);
+    return r > 0 ? `+${r}` : r < 0 ? `−${-r}` : '0';
+  }
 
   const HIST: Record<string, { label: string; src: 'bp' | 'hr'; unit: string; a: { key: string; label: string; color: string }; b: { key: string; label: string; color: string } }> = {
     bp: { label: 'Blood pressure', src: 'bp', unit: 'mmHg', a: { key: 'avg_systolic', label: 'Systolic', color: 'var(--red)' }, b: { key: 'avg_diastolic', label: 'Diastolic', color: 'var(--peri)' } },
@@ -146,9 +169,9 @@
 
   async function loadHistory() {
     try {
-      [histLogs, bpHistory] = await Promise.all([
+      [histLogs, bpRaw] = await Promise.all([
         invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 }),
-        invoke<any[]>('get_bp_history', { days: 60 }),
+        invoke<BpReading[]>('list_bp_readings'),
       ]);
     } catch (e) { console.error('Error loading cardio history:', e); }
   }
@@ -169,7 +192,9 @@
   async function loadCal() {
     try {
       calDays = await invoke('days_since_calibration');
-      const all: any[] = await invoke('list_watch_calibrations', { limit: 50 });
+      // All of them: every calibration feeds the BP chart's adjustment.
+      const all: any[] = await invoke('list_watch_calibrations', { limit: 10000 });
+      calibrations = all;
       // Most recent drives the "last calibrated" line; the rest become history.
       lastCal = all.length > 0 ? all[0] : null;
       calHistory = all.slice(1);
@@ -212,7 +237,7 @@
         },
       });
       nTime = ''; nSys = ''; nDia = ''; nPulse = ''; nNote = '';
-      await loadBP();
+      await Promise.all([loadBP(), loadHistory()]);
     } catch (e) { console.error('Error saving BP:', e); }
   }
 
@@ -243,7 +268,7 @@
   async function deleteReading(readingNum: number) {
     try {
       await invoke('delete_bp', { logDate: selectedDate, readingNum });
-      await loadBP();
+      await Promise.all([loadBP(), loadHistory()]);
     } catch (e) { console.error('Error deleting BP:', e); }
   }
 
@@ -410,9 +435,15 @@
   <div class="hist-header">
     <div>
       <div class="card-heading">History</div>
-      <div class="card-subtitle">{histCfg.label} · {histDays} days</div>
+      <div class="card-subtitle">{histCfg.label} · {histDays} days{#if histMetric === 'bp'} · {bpAdjusted ? 'watch readings adjusted for calibration' : 'as measured'}{/if}</div>
     </div>
     <div class="hist-controls">
+      {#if histMetric === 'bp'}
+        <div class="seg" title="Adjusted removes the jumps each cuff calibration puts into the watch's readings">
+          <button class="seg-btn" class:active={bpAdjusted} onclick={() => bpAdjusted = true}>Adjusted</button>
+          <button class="seg-btn" class:active={!bpAdjusted} onclick={() => bpAdjusted = false}>As measured</button>
+        </div>
+      {/if}
       <div class="seg">
         <button class="seg-btn" class:active={histMetric === 'bp'} onclick={() => histMetric = 'bp'}>BP</button>
         <button class="seg-btn" class:active={histMetric === 'minmax'} onclick={() => histMetric = 'minmax'}>Min/Max HR</button>
@@ -432,6 +463,21 @@
       <div class="hist-empty">No {histCfg.label.toLowerCase()} data in this range.</div>
     {/if}
   </div>
+  {#if histMetric === 'bp' && bpAdjusted}
+    <div class="hist-note">
+      Each calibration sets the watch against the cuff, and the cuff's own error that day carries
+      into every watch reading until the next one. The step at each calibration (median of the week
+      after vs the week before) is taken out, and the whole series keeps its overall average, so no
+      one calibration counts as the true one. Cuff readings are shown as taken.
+      {#if bpShifts.length}
+        <span class="hist-shifts">
+          {#each bpShifts as p}
+            <span class="hist-shift">{p.from ? `From ${formatDateShort(p.from)}` : 'Before first calibration'}: {signed(p.sys)}/{signed(p.dia)}</span>
+          {/each}
+        </span>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <div class="cal-card">
@@ -563,6 +609,9 @@
   .seg { display:flex; background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; }
   .seg-btn { background:transparent; border:none; color:var(--ts); border-radius:999px; padding:6px 12px; font-size:12px; font-weight:700; cursor:pointer; font-family:inherit; white-space:nowrap; }
   .seg-btn.active { background:var(--accent); color:#fff; }
+  .hist-note { font-size:11.5px; color:var(--tm); line-height:1.55; max-width:100ch; }
+  .hist-shifts { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+  .hist-shift { font-size:11px; font-weight:700; color:var(--ts); background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:2px 9px; font-variant-numeric:tabular-nums; }
   .hist-empty { height:100%; display:flex; align-items:center; justify-content:center; color:var(--tm); font-size:13px; }
   .cal-entry { display:flex; align-items:center; gap:8px; }
   .cal-input { background:var(--inset); border:1px solid var(--border); border-radius:9px; padding:8px 10px; font-size:12.5px; color:var(--tp); font-variant-numeric:tabular-nums; }

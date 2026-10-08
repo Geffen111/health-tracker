@@ -33,6 +33,29 @@ pub async fn get_bp_history(
     .map_err(|e| e.to_string())
 }
 
+/// One reading, as measured — the input to the Cardio chart's calibration adjustment.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct BpPoint {
+    pub log_date: String,
+    pub time_taken: Option<String>,
+    pub systolic: i64,
+    pub diastolic: i64,
+    pub source: Option<String>,
+}
+
+/// Every reading, oldest first. The calibration adjustment needs the whole history:
+/// each shift is measured against the readings either side of a calibration, however
+/// far back it was.
+#[tauri::command]
+pub async fn list_bp_readings(pool: State<'_, SqlitePool>) -> Result<Vec<BpPoint>, String> {
+    sqlx::query_as::<_, BpPoint>(
+        "SELECT log_date, time_taken, systolic, diastolic, source FROM blood_pressure          WHERE systolic IS NOT NULL AND diastolic IS NOT NULL          ORDER BY log_date, COALESCE(time_taken, '00:00'), reading_num",
+    )
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_bp_for_date(
     pool: State<'_, SqlitePool>,

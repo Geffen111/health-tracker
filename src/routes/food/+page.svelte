@@ -15,7 +15,7 @@
   // is to see what was eaten beside how the fatigue went. Like the Medication page:
   // regular items get quick-add buttons, groups log several items at once.
 
-  interface Food { id: number; name: string; kind: 'food' | 'drink'; regular: boolean; active: boolean; days_logged: number; }
+  interface Food { id: number; name: string; kind: 'food' | 'drink'; regular: boolean; active: boolean; days_logged: number; times_logged: number; last_logged: string | null; }
   interface Group { id: number; name: string; default_time: string | null; food_ids: number[]; }
 
   let today = $state(todayISO());
@@ -30,7 +30,9 @@
   const saved = recallView<any>('food');
   let showOther = $state(saved.showOther === true);
   let sortBy = $state<'days' | 'next'>(oneOf(saved.sortBy, ['days', 'next'] as const, 'days'));
-  $effect(() => rememberView('food', { showOther, sortBy }));
+  // Order of the item list (the comparison table has its own `sortBy`).
+  let listSort = $state<'name' | 'count' | 'recent'>(oneOf(saved.listSort, ['name', 'count', 'recent'] as const, 'name'));
+  $effect(() => rememberView('food', { showOther, sortBy, listSort }));
 
   onMount(async () => {
     try {
@@ -78,9 +80,17 @@
   // Logging for a past day shouldn't stamp the entry with this minute — leave the time blank.
   function defaultTime(): string { return selectedDate === today ? nowHHMM() : ''; }
 
-  let regularFoods = $derived(foods.filter((f) => f.active && f.regular && f.kind === 'food'));
-  let regularDrinks = $derived(foods.filter((f) => f.active && f.regular && f.kind === 'drink'));
-  let otherItems = $derived(foods.filter((f) => !f.active || !f.regular));
+  // list_foods returns A-Z, so that is the tie-break for the other two orders.
+  let sortedFoods = $derived.by(() => {
+    if (listSort === 'name') return foods;
+    const rank = listSort === 'count'
+      ? (a: Food, b: Food) => b.times_logged - a.times_logged
+      : (a: Food, b: Food) => (b.last_logged ?? '').localeCompare(a.last_logged ?? '');
+    return [...foods].sort(rank);
+  });
+  let regularFoods = $derived(sortedFoods.filter((f) => f.active && f.regular && f.kind === 'food'));
+  let regularDrinks = $derived(sortedFoods.filter((f) => f.active && f.regular && f.kind === 'drink'));
+  let otherItems = $derived(sortedFoods.filter((f) => !f.active || !f.regular));
   let activeFoods = $derived(foods.filter((f) => f.active));
   function foodName(id: number): string { return foods.find((f) => f.id === id)?.name ?? '?'; }
 
@@ -101,6 +111,31 @@
       logId = null;
       await refreshAfterLog();
       showToast(`${f.name} logged`);
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  }
+
+  // ── Log several ticked items at once ──
+  let picked = $state<Record<number, boolean>>({});
+  let pickedIds = $derived(foods.filter((f) => f.active && picked[f.id]).map((f) => f.id));
+  let pickTime = $state('');
+  // Ticking the first item fills in the time, as opening a log form does.
+  function togglePick(f: Food, on: boolean) {
+    if (on && !pickedIds.length) pickTime = defaultTime();
+    picked[f.id] = on;
+  }
+  async function savePicked() {
+    const ids = pickedIds;
+    if (!ids.length) return;
+    try {
+      await invoke('add_food_log', {
+        logDate: selectedDate,
+        entries: ids.map((id) => ({ food_id: id, time_taken: pickTime || null, amount: null, group_id: null })),
+      });
+      picked = {};
+      await refreshAfterLog();
+      showToast(`${ids.length} item${ids.length === 1 ? '' : 's'} logged`);
     } catch (e) {
       showToast(String(e), 'error');
     }
@@ -494,11 +529,17 @@
         <button class="cancel-sm" onclick={() => editId = null}>Cancel</button>
       </div>
     {:else}
-      <div class="item-row" class:dimmed={!f.active} class:menu-open={openMenuId === f.id}>
+      <div class="item-row" class:dimmed={!f.active} class:picked={picked[f.id]} class:menu-open={openMenuId === f.id}>
+        {#if f.active}
+          <input type="checkbox" class="pick-box" checked={!!picked[f.id]}
+            onchange={(e) => togglePick(f, e.currentTarget.checked)} aria-label="Select {f.name}" />
+        {:else}
+          <span class="pick-box-gap"></span>
+        {/if}
         <div class="item-info">
           <span class="item-name" class:drink={f.kind === 'drink'}>{f.name}</span>
           <span class="item-detail">
-            {#if !f.active}hidden · {/if}{#if !f.regular && f.active}{f.kind} · {/if}{f.days_logged ? `${f.days_logged} day${f.days_logged === 1 ? '' : 's'}` : 'not logged yet'}
+            {#if !f.active}hidden · {/if}{#if !f.regular && f.active}{f.kind} · {/if}{f.days_logged ? `${f.days_logged} day${f.days_logged === 1 ? '' : 's'}` : 'not logged yet'}{#if listSort === 'recent' && f.last_logged} · last {formatDate(f.last_logged)}{/if}
           </span>
         </div>
         {#if f.active}
@@ -536,12 +577,29 @@
 
   <div class="layout">
     <div class="list-card">
+      <div class="list-bar" class:active={pickedIds.length > 0}>
+        {#if pickedIds.length}
+          <span class="pick-count">{pickedIds.length} selected</span>
+          <span class="lbl">at</span>
+          <input class="sm-input" type="time" bind:value={pickTime} aria-label="Time" />
+          <button class="save-sm" onclick={savePicked}>Log {pickedIds.length}</button>
+          <button class="cancel-sm" onclick={() => picked = {}}>Clear</button>
+        {:else}
+          <span class="lbl">Tick items to log several at once</span>
+          <div class="seg-control sm sort" role="radiogroup" aria-label="Sort items">
+            <button class="seg-btn" class:active={listSort === 'name'} onclick={() => listSort = 'name'}>A&ndash;Z</button>
+            <button class="seg-btn" class:active={listSort === 'count'} onclick={() => listSort = 'count'}>Most added</button>
+            <button class="seg-btn" class:active={listSort === 'recent'} onclick={() => listSort = 'recent'}>Recent</button>
+          </div>
+        {/if}
+      </div>
       <div class="section-divider">Groups</div>
       {#if groups.length === 0}
         <div class="section-empty">No groups yet &mdash; use <strong>New group</strong> to log a usual meal in one go.</div>
       {/if}
       {#each groups as g (g.id)}
         <div class="item-row" class:menu-open={openMenuId === -g.id}>
+          <span class="pick-box-gap"></span>
           <div class="item-info">
             <span class="item-name group">{g.name}</span>
             <span class="item-detail">{g.food_ids.map(foodName).join(', ')}{g.default_time ? ` · ${g.default_time}` : ''}</span>
@@ -772,9 +830,18 @@
   .layout { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:16px; align-items:start; }
   /* Side by side needs room; in a half-width window the list would be squeezed to nothing. */
   @media (max-width: 1000px) { .layout { grid-template-columns:minmax(0,1fr); } }
-  .list-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
+  /* clip, not hidden: hidden would make the card a scroll container and stop the bar sticking. */
+  .list-card { background:var(--card); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); overflow:clip; }
+  .list-bar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:9px; min-height:52px; padding:8px 18px; background:var(--card); border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  .list-bar.active { background:var(--accent-soft); }
+  .list-bar .sort { margin-left:auto; }
+  .list-bar .save-sm { margin-left:auto; }
+  .pick-count { font-size:12.5px; font-weight:700; color:var(--accent-fg); }
+  .pick-box { width:15px; height:15px; margin:0; accent-color:var(--accent); cursor:pointer; flex-shrink:0; }
+  .pick-box-gap { width:15px; flex-shrink:0; }
+  .item-row.picked { background:var(--accent-soft); }
   .section-divider { font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; font-weight:800; color:var(--tm); border-top:1px solid var(--border); padding:10px 18px 6px; }
-  .section-divider:first-child { border-top:none; }
+  .list-bar + .section-divider { border-top:none; }
   .section-empty { font-size:12.5px; color:var(--tm); padding:4px 18px 12px; }
 
   .item-row { display:flex; align-items:center; gap:10px; padding:9px 18px; border-top:1px solid var(--border); }
