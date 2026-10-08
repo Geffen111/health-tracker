@@ -7,7 +7,7 @@
   import { dateFromUrl, pushDate, dateHref } from '$lib/dateParam';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
-  import { adjustForCalibration, dailyAverages, type BpReading, type Calibration } from '$lib/bpCorrection';
+  import { dailyAverages, type BpSeries } from '$lib/bpCorrection';
 
   let today = $state(todayISO());
   let nowTime = new Date().toTimeString().slice(0, 5);
@@ -26,7 +26,6 @@
   let calDays = $state<number | null>(null);
   let lastCal = $state<any>(null);
   let calHistory = $state<any[]>([]);
-  let calibrations = $state<Calibration[]>([]);
   let calDate = $state(today);
   let calTime = $state(nowTime);
 
@@ -49,19 +48,18 @@
   let bpAdjusted = $state(saved.bpAdjusted !== false);
   $effect(() => rememberView('cardio', { histDays, histMetric, bpAdjusted }));
   let histLogs = $state<any[]>([]);   // daily_logs (HR fields), oldest first
-  let bpRaw = $state<BpReading[]>([]); // every reading, as measured
-
-  // See $lib/bpCorrection: each calibration shifts the watch's readings by the cuff's
-  // error that day, so the steps are measured and taken out. Recomputed when a
-  // calibration is logged or deleted.
-  let bpAdjustment = $derived(adjustForCalibration(bpRaw, calibrations));
+  // Raw and calibration-adjusted readings from the backend (load_bp_series), which the
+  // weekly summary uses too: each calibration shifts the watch's readings by the cuff's
+  // error that day, and the steps are measured and taken out. Reloaded when a
+  // calibration or reading is added or deleted.
+  let bpSeries = $state<BpSeries>({ raw: [], adjusted: [], periods: [] });
   let bpHistory = $derived.by(() => {
     const from = shiftISO(today, -60);
-    return dailyAverages(bpAdjusted ? bpAdjustment.readings : bpRaw).filter((d) => d.log_date >= from);
+    return dailyAverages(bpAdjusted ? bpSeries.adjusted : bpSeries.raw).filter((d) => d.log_date >= from);
   });
   // Periods whose readings were moved, newest first, for the note under the chart.
   let bpShifts = $derived(
-    bpAdjustment.periods
+    bpSeries.periods
       .filter((p) => p.days > 0 && (Math.abs(p.sys) >= 0.5 || Math.abs(p.dia) >= 0.5))
       .reverse(),
   );
@@ -169,9 +167,9 @@
 
   async function loadHistory() {
     try {
-      [histLogs, bpRaw] = await Promise.all([
+      [histLogs, bpSeries] = await Promise.all([
         invoke<any[]>('list_daily_logs', { limit: 60, offset: 0 }),
-        invoke<BpReading[]>('list_bp_readings'),
+        invoke<BpSeries>('get_bp_series'),
       ]);
     } catch (e) { console.error('Error loading cardio history:', e); }
   }
@@ -192,9 +190,7 @@
   async function loadCal() {
     try {
       calDays = await invoke('days_since_calibration');
-      // All of them: every calibration feeds the BP chart's adjustment.
-      const all: any[] = await invoke('list_watch_calibrations', { limit: 10000 });
-      calibrations = all;
+      const all: any[] = await invoke('list_watch_calibrations', { limit: 50 });
       // Most recent drives the "last calibrated" line; the rest become history.
       lastCal = all.length > 0 ? all[0] : null;
       calHistory = all.slice(1);
@@ -204,7 +200,7 @@
   async function deleteCal(id: number) {
     try {
       await invoke('delete_watch_calibration', { id });
-      await loadCal();
+      await Promise.all([loadCal(), loadHistory()]);
     } catch (e) { console.error('Error deleting calibration:', e); }
   }
 
@@ -296,7 +292,7 @@
         calDate: calDate || null,
         calTime: calTime || null,
       });
-      await loadCal();
+      await Promise.all([loadCal(), loadHistory()]);
       banner = true;
       setTimeout(() => banner = false, 3000);
     } catch (e) { console.error('Error logging calibration:', e); }

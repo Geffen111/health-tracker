@@ -15,7 +15,7 @@
 // the titles of changed vault notes go to OpenRouter. Raw vault note text does not.
 
 use crate::commands::ai::{call_openrouter, strip_code_fences};
-use crate::commands::{pacing, settings, vault};
+use crate::commands::{blood_pressure, pacing, settings, vault};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -351,17 +351,22 @@ async fn load_days(
         }
     }
 
-    let bp: Vec<(String, f64, f64)> = sqlx::query_as(
-        "SELECT log_date, CAST(AVG(systolic) AS REAL), CAST(AVG(diastolic) AS REAL)
-         FROM blood_pressure WHERE log_date >= ? AND log_date <= ? GROUP BY log_date",
-    )
-    .bind(&f).bind(&t)
-    .fetch_all(pool).await.map_err(|e| format!("DB error bp: {}", e))?;
-    for (d, sys, dia) in bp {
+    // Calibration-adjusted, like the Cardio chart: otherwise each cuff calibration's
+    // error shows up as weeks of "unusual" BP (see blood_pressure::load_bp_series).
+    let mut bp: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
+    for r in blood_pressure::load_bp_series(pool).await?.adjusted {
+        if r.log_date.as_str() >= f.as_str() && r.log_date.as_str() <= t.as_str() {
+            let e = bp.entry(r.log_date).or_insert((0.0, 0.0, 0.0));
+            e.0 += r.systolic;
+            e.1 += r.diastolic;
+            e.2 += 1.0;
+        }
+    }
+    for (d, (sys, dia, n)) in bp {
         if let Some(date) = parse(&d) {
             let day = days.entry(date).or_default();
-            day.sys = Some(sys);
-            day.dia = Some(dia);
+            day.sys = Some(sys / n);
+            day.dia = Some(dia / n);
         }
     }
     Ok(days)
@@ -851,6 +856,7 @@ How to read the data:
 - correlations: Pearson r of fatigue against a measure over the last {cd} days (lag 0 = same day, lag 1 = the measure from the day before). Only pairs with |r| >= 0.3 are listed, out of correlations_tested. Describe them tentatively with n, as associations, never as causes.
 - new_lab_results: results newly noticed in the records vault (from the last lab extraction); vault_changes: notes added or edited this week (titles only). If vault_changes contains a pathology note but new_lab_results is empty, say the results may not have been extracted yet (Records page → Labs).
 - exposures and food are things they logged; mention them descriptively only.
+- Blood pressure (sys/dia) comes from a watch calibrated against a cuff, and each calibration shifts every later watch reading by the cuff's error that day. The figures given are already adjusted to remove those shifts, so treat them as comparable across weeks.
 
 Important: in this person's log, exertion (steps, activity hours, activity load) has shown no measurable correlation with the NEXT day's fatigue, and low activity tends to FOLLOW a bad day rather than precede one. Do not claim that an activity level caused or predicts a crash. Do not forecast next week. Do not diagnose or recommend treatment changes; for medication or results, suggest raising things with their clinician rather than acting.
 

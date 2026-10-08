@@ -74,11 +74,12 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   and the sync leaves it entirely alone — a cuff reading minutes after a watch reading is a
   second reading, not a correction. Readings are displayed in `time_taken` order; `reading_num`
   is only an identity key.
-- **The Cardio BP chart is calibration-adjusted by default** (`$lib/bpCorrection.ts`). Each
+- **BP is calibration-adjusted for analysis**, in one place: `load_bp_series` in
+  `commands/blood_pressure.rs`, used by the Cardio chart (default; "As measured" toggle) and the
+  weekly summary. Each
   `watch_calibration` shifts every later watch reading by the cuff's error that day; the step
   (median of 7 days after vs 7 before, >= 3 days each side) is removed and the series re-centred
-  on its overall mean. Only `source = 'watch'` rows move; the stored readings are never changed —
-  it's display-only, with an "As measured" toggle.
+  on its overall mean. Only `source = 'watch'` rows move; the stored readings are never changed.
 - **View settings persist via `$lib/viewState.ts`** (localStorage, key `view:<page>`): a page
   reads `recallView()` at init and writes `rememberView()` from an `$effect`. Chart ranges,
   metric picks, tabs — never data. Validate recalled values (`oneOf`) since options change.

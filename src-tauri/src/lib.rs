@@ -71,7 +71,7 @@ pub fn run() {
             commands::watch_calibration::days_since_calibration,
             commands::blood_pressure::get_bp_for_date,
             commands::blood_pressure::get_bp_history,
-            commands::blood_pressure::list_bp_readings,
+            commands::blood_pressure::get_bp_series,
             commands::blood_pressure::upsert_bp,
             commands::blood_pressure::delete_bp,
             commands::activity::list_activity_categories,
