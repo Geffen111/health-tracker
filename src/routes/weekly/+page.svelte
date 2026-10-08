@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import WeeklyReport from '$lib/components/WeeklyReport.svelte';
-  import { weekly, refreshWeeklyBanner, markWeeklySeen } from '$lib/stores/weekly.svelte';
+  import { weekly, refreshWeeklyBanner, markWeeklySeen, runPendingWeekly } from '$lib/stores/weekly.svelte';
   import { showToast } from '$lib/stores/toast.svelte';
   import { formatDate, todayISO, shiftISO } from '$lib/formatDate';
 
@@ -52,9 +52,16 @@
     }
   }
 
+  async function writePending() {
+    if (await runPendingWeekly()) {
+      await load();
+      showToast('Weekly summary ready');
+    }
+  }
+
   onMount(load);
 
-  // The launch hook may still be writing the summary when this page opens; pick it up.
+  // A summary started from the Dashboard may land while this page is open; pick it up.
   $effect(() => {
     if (!weekly.generating && weekly.banner && !loading && (!latest || latest.week_start < weekly.banner.week_start)) {
       load();
@@ -66,7 +73,7 @@
   <div>
     <div class="page-title">Weekly summary</div>
     <div class="page-subtitle">
-      {#if latest}Week of {formatDate(latest.week_start)} – {formatDate(latest.week_end)}{:else}A write-up of each week's log, made when you first open the app on a Monday{/if}
+      {#if latest}Week of {formatDate(latest.week_start)} – {formatDate(latest.week_end)}{:else}A write-up of each week's log, written when you ask for it after the week ends{/if}
     </div>
   </div>
   <div class="header-actions">
@@ -80,6 +87,19 @@
 
 {#if error}
   <p class="error">{error}</p>
+{/if}
+
+{#if weekly.pending && !loading && latest}
+  <div class="pending">
+    <span>
+      <strong>Week of {formatDate(weekly.pending.week_start)} – {formatDate(weekly.pending.week_end)}</strong>
+      hasn't been written up yet. Once Sunday's data is up to date, write it.
+      {#if weekly.error}<span class="pending-error">{weekly.error}</span>{/if}
+    </span>
+    <button class="primary-btn" onclick={writePending} disabled={weekly.generating || busy}>
+      {weekly.generating ? 'Writing…' : 'Write summary'}
+    </button>
+  </div>
 {/if}
 
 {#if loading}
@@ -111,7 +131,7 @@
     {#if weekly.generating || busy}
       <p>Writing last week's summary… this takes about half a minute.</p>
     {:else}
-      <p>No summary yet. One is written automatically the first time you open the app after a week ends, once an OpenRouter key is set in Settings.</p>
+      <p>No summary yet. After each week ends the Dashboard offers to write one — run it once Sunday's data is in. Needs an OpenRouter key in Settings.</p>
       <button class="primary-btn" onclick={() => generate(lastFullWeekStart())} disabled={busy}>Write last week's summary now</button>
     {/if}
   </div>
@@ -126,6 +146,10 @@
   .ghost-btn { background: var(--card); color: var(--tp); border: 1px solid var(--border); border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .ghost-btn:disabled, .primary-btn:disabled { opacity: 0.6; cursor: default; }
   .loading-text { color: var(--ts); font-size: 14px; text-align: center; padding: 48px; }
+  .pending { display: flex; align-items: center; gap: 16px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 14px; padding: 12px 16px; margin-bottom: 18px; font-size: 13px; color: var(--ts); }
+  .pending > span { flex: 1; line-height: 1.5; }
+  .pending strong { color: var(--tp); }
+  .pending-error { display: block; color: var(--red-fg); }
   .error { background: var(--red-soft); color: var(--red-fg); border-radius: 12px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
   .empty { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 36px; text-align: center; color: var(--ts); font-size: 14px; display: flex; flex-direction: column; gap: 16px; align-items: center; }
   .empty p { margin: 0; max-width: 520px; line-height: 1.6; }

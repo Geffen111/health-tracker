@@ -971,26 +971,24 @@ async fn generate(pool: &SqlitePool, ws: NaiveDate) -> Result<WeeklySummary, Str
     fetch_one(pool, &metrics.week_start).await?.ok_or_else(|| "Saved summary vanished".to_string())
 }
 
-/// Called on launch: make the last full week's summary if it doesn't exist yet.
-/// Returns the banner info either way (None when there is nothing to show).
+/// The last full week, when it has no summary yet and one could be written (a key is
+/// set and something was logged). Not generated here: Sunday's entries are often still
+/// being filled in on Monday morning, so the Dashboard asks first and the person runs
+/// it with `generate_weekly_summary` once the week is up to date.
 #[tauri::command]
-pub async fn ensure_weekly_summary(pool: State<'_, SqlitePool>) -> Result<Option<WeeklyBanner>, String> {
+pub async fn get_pending_weekly(pool: State<'_, SqlitePool>) -> Result<Option<WeeklyBanner>, String> {
     let ws = last_full_week_start();
+    let we = ws + Duration::days(6);
     let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM weekly_summaries WHERE week_start = ?")
         .bind(iso(ws))
         .fetch_optional(&*pool).await.map_err(|e| format!("DB error weekly: {}", e))?;
-    if exists.is_none() {
-        // No key yet, or nothing logged that week: nothing to do, and not an error.
-        if settings::get_api_key().await?.is_none() {
-            return get_weekly_banner(pool).await;
-        }
-        match generate(&pool, ws).await {
-            Ok(_) => {}
-            Err(e) if e == "Nothing was logged in that week." => {}
-            Err(e) => return Err(e),
-        }
+    if exists.is_some() || settings::get_api_key().await?.is_none() {
+        return Ok(None);
     }
-    get_weekly_banner(pool).await
+    let logged: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM daily_logs WHERE log_date BETWEEN ? AND ? LIMIT 1")
+        .bind(iso(ws)).bind(iso(we))
+        .fetch_optional(&*pool).await.map_err(|e| format!("DB error weekly: {}", e))?;
+    Ok(logged.map(|_| WeeklyBanner { week_start: iso(ws), week_end: iso(we), seen: false }))
 }
 
 /// Make (or remake) the summary for a chosen Monday.

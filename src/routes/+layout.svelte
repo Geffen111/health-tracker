@@ -6,7 +6,7 @@
   import Toast from '$lib/components/Toast.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { theme, initTheme, toggleTheme } from '$lib/stores/theme.svelte';
-  import { weekly, ensureWeeklySummary } from '$lib/stores/weekly.svelte';
+  import { weekly, refreshWeeklyBanner } from '$lib/stores/weekly.svelte';
 
   // Update check: this build is stamped with its git commit (vite define); CI
   // publishes a build-info.json carrying the latest commit to the rolling
@@ -104,9 +104,9 @@
       syncing = false;
     }
     checkForUpdate();
-    // After the import (so the week's totals are final), and not awaited: it is one model
-    // call, and the pages shouldn't wait on it. The Dashboard banner appears when it lands.
-    ensureWeeklySummary();
+    // After the import, so a week only counts as logged once its synced data is in.
+    // Only a check: the summary itself is written when the person asks (Dashboard banner).
+    refreshWeeklyBanner();
   });
 
   let { children }: { children: import('svelte').Snippet } = $props();

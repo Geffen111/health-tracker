@@ -122,7 +122,7 @@ pub fn run() {
             commands::labs::get_lab_series,
             commands::labs::get_labs_last_extract,
             commands::records_ask::ask_records,
-            commands::weekly::ensure_weekly_summary,
+            commands::weekly::get_pending_weekly,
             commands::weekly::generate_weekly_summary,
             commands::weekly::get_weekly_banner,
             commands::weekly::list_weekly_summaries,

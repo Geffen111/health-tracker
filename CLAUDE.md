@@ -101,9 +101,10 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **Weekly summary: Rust owns the numbers, the model only writes prose.** `weekly.rs` builds
   `WeekMetrics` (scorecard vs the previous 8 weekly means, flagged at >= 1 SD; meds; food;
   exposures; new labs; changed vault notes; lag correlations with n shown) and the model
-  narrates it. Stored in `weekly_summaries`, so old weeks never re-call the model. It is made
-  by `ensureWeeklySummary()` from the layout *after* the launch import, un-awaited, for the
-  last full week only (a missed Monday is caught up on the next launch). A "missed" dose is
+  narrates it. Stored in `weekly_summaries`, so old weeks never re-call the model. **Never
+  generated automatically**: on Monday Sunday's data is often still being entered, so the
+  layout only checks `get_pending_weekly` (last full week, no summary yet) after the launch
+  import, and the Dashboard banner offers "Write summary" (`runPendingWeekly()`). A "missed" dose is
   *inferred* (current schedule slots minus doses logged, on days with any dose logged) — there
   is no skipped-dose record. Lab results are listed once: `reported_lab_keys` in the previous
   summary's metrics suppresses repeats. Same descriptive-only rule: no forecasts.

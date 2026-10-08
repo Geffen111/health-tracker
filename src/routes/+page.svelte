@@ -6,7 +6,7 @@
   import { formatDate, todayISO, shiftISO, fatigueBand } from '$lib/formatDate';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
-  import { weekly } from '$lib/stores/weekly.svelte';
+  import { weekly, runPendingWeekly } from '$lib/stores/weekly.svelte';
   import { resolveCSSVar } from '$lib/chartTheme';
   import { theme } from '$lib/stores/theme.svelte';
 
@@ -542,10 +542,21 @@
     </span>
     <span class="wb-go">Read it →</span>
   </a>
-{:else if weekly.generating}
+{/if}
+{#if weekly.generating}
   <div class="weekly-banner is-working">
     <span class="wb-icon">📋</span>
     <span class="wb-text"><strong>Writing last week's summary…</strong><span>It will appear here when it's ready.</span></span>
+  </div>
+{:else if weekly.pending}
+  <div class="weekly-banner is-pending">
+    <span class="wb-icon">📋</span>
+    <span class="wb-text">
+      <strong>Last week's summary is ready to write</strong>
+      <span>Week of {formatDate(weekly.pending.week_start)} – {formatDate(weekly.pending.week_end)}. Once Sunday's data is up to date, write it.</span>
+      {#if weekly.error}<span class="wb-error">{weekly.error}</span>{/if}
+    </span>
+    <button class="wb-btn" onclick={runPendingWeekly}>Write summary</button>
   </div>
 {/if}
 
@@ -867,6 +878,9 @@
   .wb-text strong { font-size: 14.5px; color: var(--tp); }
   .wb-go { font-size: 13px; font-weight: 700; white-space: nowrap; }
   a.weekly-banner:hover { filter: brightness(0.97); }
+  .weekly-banner.is-pending { background: var(--card); border-color: var(--border); color: var(--ts); }
+  .wb-error { color: var(--red-fg); }
+  .wb-btn { background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 9px 16px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 
   .header-actions {
     display: flex;
