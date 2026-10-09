@@ -8,12 +8,25 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let pool = tauri::async_runtime::block_on(db::init_db());
-            app.manage(pool);
+            // The database opens here only when the data folder is known and no other
+            // computer has it open; otherwise the frontend's setup screen takes over.
+            app.manage(commands::data_location::StartupState::default());
+            if let Some(dir) = db::resolve_data_dir() {
+                tauri::async_runtime::block_on(commands::data_location::open(app.handle(), dir, false));
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::data_location::get_startup_state,
+            commands::data_location::retry_startup,
+            commands::data_location::open_despite_lock,
+            commands::data_location::choose_data_location,
+            commands::data_location::suggest_data_locations,
+            commands::data_location::get_data_location,
+            commands::data_location::change_data_location,
+            commands::data_location::folder_has_data,
             commands::daily_log::get_daily_log,
             commands::daily_log::upsert_daily_log,
             commands::daily_log::list_daily_logs,
@@ -141,6 +154,11 @@ pub fn run() {
             commands::weekly::list_weekly_summaries,
             commands::weekly::mark_weekly_seen,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                commands::data_location::release(app);
+            }
+        });
 }

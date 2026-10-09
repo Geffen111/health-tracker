@@ -24,8 +24,17 @@ pnpm tauri dev
 ```
 
 ## Database
-- Path: `%OneDrive%\Apps\HealthTracker\health.db` on Windows (syncs across devices), else
-  `dirs::data_dir()/health-tracker/`. See `src-tauri/src/db/mod.rs`.
+- **The data folder is chosen per machine**, recorded in `location.json` in local app data
+  (`db::local_dir()`, next to `secrets.json`), never in the synced folder. With nothing recorded,
+  an existing `%OneDrive%\Apps\HealthTracker\health.db` is adopted silently; otherwise the first
+  launch shows `DataSetup.svelte`. See `src-tauri/src/db/mod.rs`, `commands/data_location.rs`.
+- **The pool is opened late.** `setup` only opens it when the folder is known and not locked;
+  until `get_startup_state` is `ready`, `+layout.svelte` renders no page, so nothing may call a
+  command taking `State<SqlitePool>` before then.
+- **`health.lock`** (db/lock.rs) in the data folder: machine name + heartbeat every 2 min,
+  removed on exit, stale after 10 min. A fresh lock from another computer blocks launch
+  ("open anyway" overrides); if another computer takes over, the window gets `data-lock-lost`.
+  It exists because a synced SQLite file open on two PCs leaves conflict copies (`health-<PC>.db`).
 - **Migrations are embedded** via `sqlx::migrate!("./migrations")` — never read from disk at
   runtime (`CARGO_MANIFEST_DIR` only exists on the build machine).
 

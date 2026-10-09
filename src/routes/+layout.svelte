@@ -7,6 +7,8 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { theme, initTheme, toggleTheme } from '$lib/stores/theme.svelte';
   import { weekly, refreshWeeklyBanner } from '$lib/stores/weekly.svelte';
+  import DataSetup from '$lib/components/DataSetup.svelte';
+  import type { StartupInfo } from '$lib/dataLocation';
 
   // Update check: this build is stamped with its git commit (vite define); CI
   // publishes a build-info.json carrying the latest commit to the rolling
@@ -86,10 +88,32 @@
   // before the import wrote to it and show yesterday's data until the next
   // launch — and the Daily Log would autosave those stale totals back over the
   // freshly imported ones.
+  //
+  // Before any of that, the database has to be open: on first run it needs a folder,
+  // and it waits if another computer has it open (see commands/data_location.rs).
+  // No page renders until `startup` is ready, so no page touches the DB before then.
+  let startup = $state<StartupInfo | null>(null);
   let syncing = $state(true);
+  // Set when another computer takes the data folder over while this window is open.
+  let lockLost = $state<string | null>(null);
+
   onMount(async () => {
     initTheme();
     collapsed = localStorage.getItem('sidebarCollapsed') === '1';
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      listen<string>('data-lock-lost', (e) => lockLost = e.payload);
+    } catch {}
+    startup = await invoke<StartupInfo>('get_startup_state');
+    if (startup.status === 'ready') await afterReady();
+  });
+
+  function onSetupReady(info: StartupInfo) {
+    startup = info;
+    afterReady();
+  }
+
+  async function afterReady() {
     try {
       const s: any = await invoke('get_sync_settings');
       if (s?.auto_import) {
@@ -107,7 +131,7 @@
     // After the import, so a week only counts as logged once its synced data is in.
     // Only a check: the summary itself is written when the person asks (Dashboard banner).
     refreshWeeklyBanner();
-  });
+  }
 
   let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -213,13 +237,28 @@
     </div>
   </aside>
   <main class="main-content" class:wide={$page.url.pathname === '/daily'}>
-    {#if syncing}
-      <div class="launch-sync">Syncing health data…</div>
+    {#if startup && startup.status !== 'ready'}
+      <DataSetup {startup} onready={onSetupReady} />
+    {:else if syncing}
+      <div class="launch-sync">{startup ? 'Syncing health data…' : 'Opening…'}</div>
     {:else}
       {@render children()}
     {/if}
   </main>
 </div>
+
+{#if lockLost}
+  <div class="lock-lost" role="alertdialog" aria-modal="true" aria-label="Opened on another computer">
+    <div class="lock-lost-card">
+      <div class="lock-lost-title">Health Tracker was opened on {lockLost}</div>
+      <p>To avoid conflicting copies of your data, close it here. Everything you've already entered is saved.</p>
+      <div class="lock-lost-actions">
+        <button class="lock-lost-close" onclick={() => winAction('close')}>Close Health Tracker</button>
+        <button class="lock-lost-keep" onclick={() => lockLost = null}>Keep it open</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <Toast />
 <ConfirmDialog />
@@ -230,6 +269,14 @@
     padding: 0;
     box-sizing: border-box;
   }
+
+  .lock-lost { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; padding:16px; }
+  .lock-lost-card { max-width:460px; background:var(--card); border:1px solid var(--border); border-radius:18px; padding:24px; box-shadow:0 12px 40px rgba(0,0,0,.25); display:flex; flex-direction:column; gap:12px; }
+  .lock-lost-title { font-family:'Source Serif 4',serif; font-size:20px; font-weight:600; color:var(--tp); }
+  .lock-lost-card p { font-size:13.5px; color:var(--ts); line-height:1.55; }
+  .lock-lost-actions { display:flex; gap:10px; }
+  .lock-lost-close { background:var(--accent); color:#fff; border:none; border-radius:999px; padding:10px 18px; font-size:13px; font-weight:700; cursor:pointer; }
+  .lock-lost-keep { background:transparent; border:none; color:var(--ts); font-size:13px; font-weight:600; cursor:pointer; }
 
   :global(body) {
     font-family: 'Public Sans', sans-serif;

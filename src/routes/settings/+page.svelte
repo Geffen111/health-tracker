@@ -4,6 +4,9 @@
   import { formatDate } from '$lib/formatDate';
   import { showToast } from '$lib/stores/toast.svelte';
   import { theme, setTheme } from '$lib/stores/theme.svelte';
+  import { confirmAction } from '$lib/stores/confirm.svelte';
+  import { revealItemInDir } from '@tauri-apps/plugin-opener';
+  import type { DataLocation } from '$lib/dataLocation';
 
   // Suggested OpenRouter models; the field also accepts any custom model id.
   const MODEL_SUGGESTIONS = [
@@ -243,6 +246,37 @@
       importing = false;
     }
   }
+
+  // ── Data folder (see commands/data_location.rs) ──
+  let dataLoc = $state<DataLocation | null>(null);
+  let moving = $state(false);
+  let moveErr = $state('');
+  async function loadDataLocation() {
+    try { dataLoc = await invoke<DataLocation>('get_data_location'); } catch (e) { console.warn(e); }
+  }
+  loadDataLocation();
+  async function showDataFolder() {
+    if (!dataLoc) return;
+    try { await revealItemInDir(dataLoc.path + (dataLoc.path.includes('/') ? '/' : '\\') + 'health.db'); } catch (e) { moveErr = String(e); }
+  }
+  async function moveDataFolder() {
+    moveErr = '';
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const dir = await open({ directory: true, multiple: false, title: 'Choose the new data folder' });
+      if (typeof dir !== 'string') return;
+      const hasData = await invoke<boolean>('folder_has_data', { path: dir });
+      const ok = await confirmAction(hasData
+        ? { title: 'Switch to the data in that folder?', message: `${dir} already has Health Tracker data. The app will restart using it. Your current data stays where it is, untouched.`, confirmLabel: 'Switch and restart' }
+        : { title: 'Move your data there?', message: `A copy of your data goes to ${dir} and the app restarts using it. The current folder is left as it is, as a backup. On your other computers, choose the new folder in Settings too.`, confirmLabel: 'Copy and restart' });
+      if (!ok) return;
+      moving = true;
+      await invoke('change_data_location', { path: dir, mode: hasData ? 'existing' : 'copy' });
+    } catch (e) {
+      moveErr = String(e);
+      moving = false;
+    }
+  }
 </script>
 
 <div class="page-header">
@@ -253,6 +287,30 @@
 </div>
 
 <div class="settings-content">
+  <div class="card">
+    <div>
+      <div class="card-heading">Data folder</div>
+      <div class="card-subtitle">Where this computer keeps your log. To use Health Tracker on another computer, keep this in a cloud folder (OneDrive, Dropbox, Google Drive) and choose the same folder there. Only have it open on one computer at a time.</div>
+    </div>
+    {#if dataLoc}
+      <div class="data-path">{dataLoc.path}</div>
+      <div class="field-hint">This computer: {dataLoc.machine}</div>
+      {#if dataLoc.stray_copies.length}
+        <div class="stray">
+          <strong>Possible conflicting copies in this folder:</strong> {dataLoc.stray_copies.join(', ')}.
+          A sync service makes these when two computers changed the data before syncing. The app
+          doesn't use them, so anything entered only into one of those copies isn't in your log.
+          Once you're sure nothing is missing, they can be deleted.
+        </div>
+      {/if}
+    {/if}
+    <div class="export-btns">
+      <button class="export-btn secondary" onclick={showDataFolder} disabled={!dataLoc}>Show in folder</button>
+      <button class="export-btn secondary" onclick={moveDataFolder} disabled={moving}>{moving ? 'Moving…' : 'Move to another folder…'}</button>
+    </div>
+    {#if moveErr}<div class="export-msg err">{moveErr}</div>{/if}
+  </div>
+
   <div class="card">
     <div>
       <div class="card-heading">Watch &amp; health sync</div>
@@ -494,6 +552,8 @@
 
   .card { background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:16px; }
   .row-card { flex-direction:row; align-items:center; justify-content:space-between; gap:16px; }
+  .data-path { font-family:ui-monospace, Consolas, monospace; font-size:12.5px; color:var(--tp); background:var(--inset); border:1px solid var(--border); border-radius:10px; padding:9px 12px; overflow-wrap:anywhere; }
+  .stray { font-size:12.5px; color:var(--amber-fg); background:var(--amber-soft); border-radius:10px; padding:10px 12px; line-height:1.5; }
   .card-heading { font-family:'Source Serif 4',serif; font-size:17px; font-weight:600; color:var(--tp); }
   .card-subtitle { font-size:12.5px; color:var(--ts); margin-top:2px; }
 

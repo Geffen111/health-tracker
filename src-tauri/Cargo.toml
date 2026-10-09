@@ -31,4 +31,5 @@ dirs = "6"
 sha2 = "0.10"
 calamine = "0.26"
 base64 = "0.22"
+tauri-plugin-dialog = "2"
 

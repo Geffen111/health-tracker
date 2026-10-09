@@ -1,5 +1,5 @@
-// Non-secret app settings persist as JSON next to the database (OneDrive-synced
-// via get_data_dir), so preferences like the CSV root, sync flags and the chosen
+// Non-secret app settings persist as JSON next to the database (in the data folder,
+// usually a synced one — see db/mod.rs), so preferences like the CSV root, sync flags and the chosen
 // AI model follow the user across machines like the DB does.
 //
 // The OpenRouter API key is a plaintext secret and is deliberately kept OUT of
@@ -24,10 +24,7 @@ fn settings_path() -> PathBuf {
 /// Drive client materialises the same files at its own pace, so one machine's
 /// record of what it has already read says nothing about another's).
 pub fn local_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .unwrap_or_else(get_data_dir)
-        .join("health-tracker")
+    crate::db::local_dir()
 }
 
 // Machine-local, NOT cloud-synced. Holds secrets only.
