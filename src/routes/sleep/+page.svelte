@@ -17,7 +17,12 @@
 
   // Chart settings survive leaving the page (see $lib/viewState).
   const saved = recallView<any>('sleep');
-  let rangeDays = $state(oneOf(saved.rangeDays, [14, 30, 60], 30));
+  // 0 = all history.
+  let rangeDays = $state(oneOf(saved.rangeDays, [14, 30, 60, 0], 30));
+  // Overlays on the trend chart, on their own axes: fatigue (daily + a 7-day average)
+  // and active calories burned.
+  let showFatigue = $state(saved.showFatigue === true);
+  let showCalories = $state(saved.showCalories === true);
 
   onMount(async () => {
     await loadLogs();
@@ -26,7 +31,8 @@
 
   async function loadLogs() {
     try {
-      logs = await invoke('list_daily_logs', { limit: 60, offset: 0 });
+      // Everything, for the "All" range (a few hundred rows).
+      logs = await invoke('list_daily_logs', { limit: 100000, offset: 0 });
     } catch (e) {
       console.error('Error loading sleep data:', e);
     }
@@ -39,8 +45,8 @@
       currentLog = fromList;
       return;
     }
-    // Older than the 60 days loaded for the trend — fetch that one day, so a
-    // day with data never reads as blank (and never gets typed over by mistake).
+    // Not in the loaded list (no row yet, or one written since) — fetch that one day, so
+    // a day with data never reads as blank (and never gets typed over by mistake).
     currentLog = null;
     invoke('get_daily_log', { date })
       .then((l: any) => { if (selectedDate === date) currentLog = l ?? null; })
@@ -48,7 +54,9 @@
   });
 
   // Oldest first, limited to the selected range.
-  let trendLogs = $derived([...logs].reverse().slice(-rangeDays));
+  let allLogs = $derived([...logs].reverse());
+  let trendLogs = $derived(rangeDays ? allLogs.slice(-rangeDays) : allLogs);
+  let rangeLabel = $derived(rangeDays ? `${rangeDays}-day` : 'All-time');
 
   // Changing day closes the editor rather than re-pointing a half-typed form at
   // a different night.
@@ -57,7 +65,7 @@
   function nextDay() { goDay(shiftISO(selectedDate, 1)); }
 
   let selectedMetric = $state<string>(typeof saved.selectedMetric === 'string' ? saved.selectedMetric : 'score');
-  $effect(() => rememberView('sleep', { rangeDays, selectedMetric }));
+  $effect(() => rememberView('sleep', { rangeDays, selectedMetric, showFatigue, showCalories }));
 
   function pickMetric(k: string) { selectedMetric = k; }
 
@@ -108,7 +116,101 @@
   }
 
   let chartLabels = $derived(trendLogs.map((l: any) => formatDateShort(l.log_date)));
+  // Nulls stay in (spanGaps bridges them) so every value keeps its own date.
   let chartData = $derived(trendLogs.map((l: any) => fieldOf(l, curMetric.field)));
+
+  // Trailing 7-day mean of the fatigue rating, over the whole log so the first days of a
+  // range still average their week. Needs 3 rated days in the window.
+  let fatigueAvg7 = $derived.by(() => {
+    const byDate = new Map<string, number>();
+    for (const l of allLogs) if (l.fatigue_rating != null) byDate.set(l.log_date, l.fatigue_rating);
+    return trendLogs.map((l: any) => {
+      const vals: number[] = [];
+      for (let k = 0; k < 7; k++) {
+        const v = byDate.get(shiftISO(l.log_date, -k));
+        if (v != null) vals.push(v);
+      }
+      return vals.length >= 3 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    });
+  });
+
+  let chartDatasets = $derived.by(() => {
+    const dense = trendLogs.length > 90;
+    const ds: any[] = [{
+      label: curMetric.label,
+      data: chartData,
+      borderColor: curMetric.color,
+      backgroundColor: curMetric.color,
+      pointRadius: dense ? 0 : 2,
+      yAxisID: 'y',
+      order: 1,
+    }];
+    if (showFatigue) {
+      ds.push({
+        label: 'Fatigue',
+        data: trendLogs.map((l: any) => l.fatigue_rating ?? null),
+        borderColor: 'var(--red)',
+        backgroundColor: 'var(--red)',
+        borderWidth: 1.25,
+        pointRadius: dense ? 0 : 1.5,
+        yAxisID: 'yFatigue',
+        order: 2,
+      });
+      ds.push({
+        label: 'Fatigue (7-day avg)',
+        data: fatigueAvg7,
+        borderColor: 'var(--red)',
+        backgroundColor: 'var(--red)',
+        borderWidth: 2,
+        borderDash: [5, 4],
+        pointRadius: 0,
+        tension: 0.3,
+        yAxisID: 'yFatigue',
+        order: 3,
+      });
+    }
+    if (showCalories) {
+      ds.push({
+        label: 'Active calories',
+        data: trendLogs.map((l: any) => l.activity_calories ?? null),
+        borderColor: 'var(--peri)',
+        backgroundColor: 'var(--peri)',
+        borderWidth: 1.25,
+        pointRadius: dense ? 0 : 1.5,
+        yAxisID: 'yCalories',
+        order: 4,
+      });
+    }
+    return ds;
+  });
+
+  let chartOptions = $derived({
+    elements: { point: { radius: 2, hoverRadius: 5 } },
+    spanGaps: true,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      y: { beginAtZero: true, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      yFatigue: {
+        display: showFatigue, position: 'right', min: 0, max: 10,
+        grid: { display: false },
+        title: { display: true, text: 'Fatigue', color: 'var(--red)', font: { size: 10 } },
+        ticks: { color: 'var(--red)', font: { size: 10 } },
+      },
+      yCalories: {
+        display: showCalories, position: 'right', beginAtZero: true,
+        grid: { display: false },
+        title: { display: true, text: 'kcal', color: 'var(--peri)', font: { size: 10 } },
+        ticks: { color: 'var(--peri)', font: { size: 10 } },
+      },
+      x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
+    },
+    plugins: {
+      legend: {
+        display: showFatigue || showCalories,
+        labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 },
+      },
+    },
+  });
 
   // ── Manual entry ──────────────────────────────────────────────────────────
   // The stage breakdown normally arrives from the watch CSV import (Settings →
@@ -383,12 +485,18 @@
 <div class="trend-card">
   <div class="trend-header">
     <div>
-      <div class="card-title">{rangeDays}-day trend</div>
+      <div class="card-title">{rangeLabel} trend</div>
       <div class="card-subtitle">Choose what to plot</div>
       <div class="seg-range">
         <button class="metric-btn" class:active={rangeDays === 14} onclick={() => rangeDays = 14}>14D</button>
         <button class="metric-btn" class:active={rangeDays === 30} onclick={() => rangeDays = 30}>30D</button>
         <button class="metric-btn" class:active={rangeDays === 60} onclick={() => rangeDays = 60}>60D</button>
+        <button class="metric-btn" class:active={rangeDays === 0} onclick={() => rangeDays = 0}>All</button>
+      </div>
+      <div class="overlay-row">
+        <span class="overlay-label">Overlay</span>
+        <button class="metric-btn overlay" class:active={showFatigue} onclick={() => showFatigue = !showFatigue} aria-pressed={showFatigue}>Fatigue</button>
+        <button class="metric-btn overlay" class:active={showCalories} onclick={() => showCalories = !showCalories} aria-pressed={showCalories}>Calories burned</button>
       </div>
     </div>
     <div class="metric-toggle">
@@ -407,29 +515,15 @@
       <div class="trend-metric-label">{curMetric.label} · last night</div>
       <div class="trend-metric-value">{curLastFmt}<span class="trend-unit"> {curMetric.unit}</span></div>
     </div>
-    <div class="trend-avg">{rangeDays}-day average <strong>{curAvgVal != null ? curAvgVal.toFixed(1) : '—'} {curMetric.unit}</strong></div>
+    <div class="trend-avg">{rangeLabel} average <strong>{curAvgVal != null ? curAvgVal.toFixed(1) : '—'} {curMetric.unit}</strong></div>
   </div>
-  <div style="height:200px;">
+  <div style="height:{showFatigue || showCalories ? 240 : 200}px;">
     <Chart
       type="line"
       labels={chartLabels}
-      datasets={[
-        {
-          label: curMetric.label,
-          data: chartData.filter((v): v is number => v != null),
-          borderColor: curMetric.color,
-          backgroundColor: curMetric.color,
-        },
-      ]}
-      options={{
-        elements: { point: { radius: 2, hoverRadius: 5 } },
-        scales: {
-          y: { beginAtZero: true, grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
-          x: { grid: { display: false }, ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 6 } },
-        },
-        plugins: { legend: { display: false } },
-      }}
-      chartArea="200px"
+      datasets={chartDatasets}
+      options={chartOptions}
+      chartArea={showFatigue || showCalories ? '240px' : '200px'}
     />
   </div>
   <div class="chart-xlabels">
@@ -504,6 +598,9 @@
   .trend-header { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap; }
   .card-title { font-family:'Source Serif 4',serif; font-size:18px; font-weight:600; color:var(--tp); }
   .card-subtitle { font-size:12.5px; color:var(--ts); margin-top:2px; }
+  .overlay-row { display:flex; align-items:center; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .overlay-label { font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:800; color:var(--tm); margin-right:2px; }
+  .metric-btn.overlay { border:1px solid var(--border); }
   .seg-range { display:inline-flex; margin-top:10px; background:var(--inset); border:1px solid var(--border); border-radius:999px; padding:3px; gap:2px; }
   .metric-toggle { display:flex; flex-wrap:wrap; background:var(--inset); border:1px solid var(--border); border-radius:16px; padding:3px; gap:2px; }
   .metric-btn { background:transparent; border:none; border-radius:999px; padding:6px 14px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap; color:var(--ts); font-family:inherit; }
