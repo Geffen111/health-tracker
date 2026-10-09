@@ -20,12 +20,15 @@
     load: number;
   }
 
-  interface FoodItem { id: number; name: string; kind: 'food' | 'drink'; }
+  interface FoodItem { id: number; name: string; kind: 'food' | 'drink'; category_id: number | null; flag_ids: number[]; }
+  interface FoodTag { id: number; name: string; }
   interface FoodDay { food_id: number; log_date: string; }
 
   let rows = $state<ActivityRow[]>([]);
   let foodItems = $state<FoodItem[]>([]);
   let foodDays = $state<FoodDay[]>([]);
+  let foodCategories = $state<FoodTag[]>([]);
+  let foodFlags = $state<FoodTag[]>([]);
   let logs = $state<any[]>([]);
   let loading = $state(true);
 
@@ -38,11 +41,13 @@
 
   onMount(async () => {
     try {
-      [rows, logs, foodItems, foodDays] = await Promise.all([
+      [rows, logs, foodItems, foodDays, foodCategories, foodFlags] = await Promise.all([
         invoke<ActivityRow[]>('get_activity_history', { from: null }),
         invoke<any[]>('list_daily_logs', { limit: 500, offset: 0 }),
         invoke<FoodItem[]>('list_foods'),
         invoke<FoodDay[]>('get_food_days'),
+        invoke<FoodTag[]>('list_food_categories'),
+        invoke<FoodTag[]>('list_food_flags'),
       ]);
     } catch (e) {
       console.error('Pacing load error:', e);
@@ -119,7 +124,9 @@
   let pickedActivities = $state<string[]>(Array.isArray(saved.pickedActivities) ? saved.pickedActivities : []);
   let foodKind = $state<'all' | 'food' | 'drink'>(oneOf(saved.foodKind, ['all', 'food', 'drink'] as const, 'all'));
   let pickedFoods = $state<string[]>(Array.isArray(saved.pickedFoods) ? saved.pickedFoods : []);
-  $effect(() => rememberView('pacing', { rangeMonths, bucket, groupBy, pickedActivities, foodKind, pickedFoods }));
+  // The food chart's series: single items, their category, or their flags (food_tags.rs).
+  let foodGroupBy = $state<'item' | 'category' | 'flag'>(oneOf(saved.foodGroupBy, ['item', 'category', 'flag'] as const, 'item'));
+  $effect(() => rememberView('pacing', { rangeMonths, bucket, groupBy, pickedActivities, foodKind, pickedFoods, foodGroupBy }));
   function togglePick(name: string) {
     pickedActivities = pickedActivities.includes(name)
       ? pickedActivities.filter((n) => n !== name)
@@ -221,13 +228,32 @@
     const f = foodById.get(d.food_id);
     return d.log_date >= fromDate && f != null && (foodKind === 'all' || f.kind === foodKind);
   }));
-  // Items in range, most-often-had first.
+  // What a logged item counts towards in the current grouping: its name, its category, or
+  // each of its flags (none for an item with no flags).
+  let categoryName = $derived(new Map(foodCategories.map((c) => [c.id, c.name])));
+  let flagName = $derived(new Map(foodFlags.map((g) => [g.id, g.name])));
+  function foodKeys(foodId: number): string[] {
+    const f = foodById.get(foodId)!;
+    if (foodGroupBy === 'item') return [f.name];
+    if (foodGroupBy === 'category') return [(f.category_id != null ? categoryName.get(f.category_id) : null) ?? 'Uncategorised'];
+    return f.flag_ids.map((id) => flagName.get(id)).filter((n): n is string => !!n);
+  }
+  // One entry per (series, day): several dairy items on one day is one dairy day.
+  let rangeFoodKeyDays = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: { key: string; log_date: string }[] = [];
+    for (const d of rangeFoodDays) {
+      for (const key of foodKeys(d.food_id)) {
+        const id = key + '|' + d.log_date;
+        if (!seen.has(id)) { seen.add(id); out.push({ key, log_date: d.log_date }); }
+      }
+    }
+    return out;
+  });
+  // Series in range, most-days-had first.
   let foodRanking = $derived.by(() => {
     const counts = new Map<string, number>();
-    for (const d of rangeFoodDays) {
-      const n = foodById.get(d.food_id)!.name;
-      counts.set(n, (counts.get(n) ?? 0) + 1);
-    }
+    for (const d of rangeFoodKeyDays) counts.set(d.key, (counts.get(d.key) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n]) => n);
   });
   function toggleFood(name: string) {
@@ -237,17 +263,22 @@
   let foodSeriesNames = $derived.by(() => {
     if (activePickedFoods.length) return foodRanking.filter((n) => activePickedFoods.includes(n));
     if (foodRanking.length <= 10) return foodRanking;
+    // Flags overlap, so they can't fold into a single "Other": show the top 10.
+    if (foodGroupBy === 'flag') return foodRanking.slice(0, 10);
     return [...foodRanking.slice(0, 9), 'Other'];
   });
   let foodBucketKeys = $derived([...new Set(rangeFoodDays.map((d) => bucketKey(d.log_date)))].sort());
   let foodCounts = $derived.by(() => {
     const keep = new Set(foodSeriesNames);
-    const fold = activePickedFoods.length === 0;
+    const fold = activePickedFoods.length === 0 && foodGroupBy !== 'flag';
     const m = new Map<string, Map<string, number>>();
-    for (const d of rangeFoodDays) {
-      let name = foodById.get(d.food_id)!.name;
+    // "Other" counts days too: one per day, however many other things were had.
+    const otherSeen = new Set<string>();
+    for (const d of rangeFoodKeyDays) {
+      let name = d.key;
       if (!keep.has(name)) {
-        if (!fold) continue;
+        if (!fold || otherSeen.has(d.log_date)) continue;
+        otherSeen.add(d.log_date);
         name = 'Other';
       }
       const inner = m.get(name) ?? new Map<string, number>();
@@ -281,11 +312,13 @@
       order: 2,
     },
   ]);
+  // Flags overlap (a day can be both gluten and dairy), so they sit side by side, not stacked.
   let foodOptions = $derived({
     ...activityOptions,
     scales: {
       ...activityOptions.scales,
-      y: { ...activityOptions.scales.y, ticks: { ...activityOptions.scales.y.ticks, precision: 0 },
+      x: { ...activityOptions.scales.x, stacked: foodGroupBy !== 'flag' },
+      y: { ...activityOptions.scales.y, stacked: foodGroupBy !== 'flag', ticks: { ...activityOptions.scales.y.ticks, precision: 0 },
            title: { display: true, text: 'Days had', color: 'var(--tm)', font: { size: 11 } } },
     },
   });
@@ -542,7 +575,12 @@
     <div class="card-head">
       <div>
         <div class="card-heading">Food &amp; drink over time</div>
-        <div class="card-subtitle">Days each item was had per {bucket}, stacked, with average fatigue overlaid. Logged on the <a href="/food">Food &amp; Drink</a> page.</div>
+        <div class="card-subtitle">
+          {#if foodGroupBy === 'item'}Days each item was had per {bucket}, stacked,
+          {:else if foodGroupBy === 'category'}Days with anything from each category per {bucket}, stacked,
+          {:else}Days with anything carrying each flag per {bucket}, side by side (a day can have several),{/if}
+          with average fatigue overlaid. Logged on the <a href="/food">Food &amp; Drink</a> page{#if foodGroupBy !== 'item'}, where each item's category and flags are set{/if}.
+        </div>
       </div>
       <div class="controls">
         <div class="seg-control">
@@ -554,12 +592,17 @@
           <button class="seg-btn" class:active={foodKind === 'food'} onclick={() => foodKind = 'food'}>Food</button>
           <button class="seg-btn" class:active={foodKind === 'drink'} onclick={() => foodKind = 'drink'}>Drinks</button>
         </div>
+        <div class="seg-control">
+          <button class="seg-btn" class:active={foodGroupBy === 'item'} onclick={() => foodGroupBy = 'item'}>Items</button>
+          <button class="seg-btn" class:active={foodGroupBy === 'category'} onclick={() => foodGroupBy = 'category'}>Categories</button>
+          <button class="seg-btn" class:active={foodGroupBy === 'flag'} onclick={() => foodGroupBy = 'flag'}>Flags</button>
+        </div>
       </div>
     </div>
     {#if foodRanking.length > 1}
       <div class="picker">
         <span class="picker-label">
-          {activePickedFoods.length ? `Showing ${activePickedFoods.length} selected` : 'Top 9 by days had'}
+          {activePickedFoods.length ? `Showing ${activePickedFoods.length} selected` : foodRanking.length <= 10 ? 'All shown' : foodGroupBy === 'flag' ? 'Top 10 by days had' : 'Top 9 by days had'}
         </span>
         <div class="chips">
           {#each foodRanking as name}
@@ -573,6 +616,8 @@
     {/if}
     {#if foodBucketKeys.length === 0}
       <p class="empty-text">No food or drink logged in this range.</p>
+    {:else if foodRanking.length === 0}
+      <p class="empty-text">Nothing in this range has {foodGroupBy === 'flag' ? 'flags' : 'a category'} yet. Set them per item on the <a href="/food">Food &amp; Drink</a> page.</p>
     {:else}
       <div style="height:300px;">
         <Chart
