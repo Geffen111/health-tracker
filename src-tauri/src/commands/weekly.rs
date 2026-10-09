@@ -15,7 +15,7 @@
 // the titles of changed vault notes go to OpenRouter. Raw vault note text does not.
 
 use crate::commands::ai::{call_openrouter, strip_code_fences};
-use crate::commands::{blood_pressure, food_tags, pacing, settings, vault};
+use crate::commands::{blood_pressure, food_tags, labs, pacing, settings, vault};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -665,51 +665,38 @@ async fn build_labs(
     we: NaiveDate,
     already: &HashSet<String>,
 ) -> Result<Vec<LabItem>, String> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        test_name: String,
-        result_date: String,
-        value_num: Option<f64>,
-        value_text: Option<String>,
-        unit: Option<String>,
-        ref_text: Option<String>,
-        flag: Option<String>,
-        source_note: String,
-    }
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT test_name, result_date, value_num, value_text, unit, ref_text, flag, source_note
-         FROM lab_results WHERE result_date >= ? AND result_date <= ?
-         ORDER BY result_date DESC, test_name",
-    )
-    .bind(iso(we - Duration::days(LAB_LOOKBACK_DAYS))).bind(iso(we))
-    .fetch_all(pool).await.map_err(|e| format!("DB error labs: {}", e))?;
+    // Renamed and de-duplicated (labs::load_consolidated), so a result repeated in a
+    // later report's history table, or under another name, is listed once.
+    let all = labs::load_consolidated(pool).await?;
+    let (from, to) = (iso(we - Duration::days(LAB_LOOKBACK_DAYS)), iso(we));
 
-    let show = |text: Option<String>, num: Option<f64>, unit: &Option<String>| -> Option<String> {
-        let v = text.filter(|t| !t.trim().is_empty()).or_else(|| num.map(|n| format!("{}", n)))?;
+    let show = |text: &Option<String>, num: Option<f64>, unit: &Option<String>| -> Option<String> {
+        let v = text.clone().filter(|t| !t.trim().is_empty()).or_else(|| num.map(|n| format!("{}", n)))?;
         Some(match unit.as_deref().filter(|u| !u.is_empty()) {
             Some(u) => format!("{} {}", v, u),
             None => v,
         })
     };
 
+    let mut recent: Vec<&labs::LabPoint> = all.iter().filter(|p| p.result_date >= from && p.result_date <= to).collect();
+    recent.sort_by(|a, b| b.result_date.cmp(&a.result_date).then(a.test_name.cmp(&b.test_name)));
+
     let mut out = Vec::new();
-    for r in rows {
-        if already.contains(&lab_key(&r.test_name, &r.result_date, &r.source_note)) { continue; }
-        let prev: Option<(Option<String>, Option<f64>, String)> = sqlx::query_as(
-            "SELECT value_text, value_num, result_date FROM lab_results
-             WHERE test_name = ? AND result_date < ? ORDER BY result_date DESC LIMIT 1",
-        )
-        .bind(&r.test_name).bind(&r.result_date)
-        .fetch_optional(pool).await.map_err(|e| format!("DB error prior lab: {}", e))?;
-        let previous = prev.and_then(|(t, n, d)| show(t, n, &r.unit).map(|v| format!("{} ({})", v, d)));
+    for r in recent {
+        if r.sources.iter().any(|s| already.contains(&lab_key(&r.test_name, &r.result_date, s))) { continue; }
+        let previous = all
+            .iter()
+            .filter(|p| p.test_name == r.test_name && p.result_date < r.result_date)
+            .last()
+            .and_then(|p| show(&p.value_text, p.value_num, &r.unit).map(|v| format!("{} ({})", v, p.result_date)));
         out.push(LabItem {
-            value: show(r.value_text, r.value_num, &r.unit).unwrap_or_default(),
-            test: r.test_name,
-            date: r.result_date,
-            reference: r.ref_text.filter(|t| !t.trim().is_empty()),
-            flag: r.flag.filter(|t| !t.trim().is_empty()),
+            value: show(&r.value_text, r.value_num, &r.unit).unwrap_or_default(),
+            test: r.test_name.clone(),
+            date: r.result_date.clone(),
+            reference: r.ref_text.clone().filter(|t| !t.trim().is_empty()),
+            flag: r.flag.clone().filter(|t| !t.trim().is_empty()),
             previous,
-            source: r.source_note,
+            source: r.source_note.clone(),
         });
         if out.len() >= 40 { break; }
     }

@@ -28,6 +28,8 @@
     result_date: string; value_num: number | null; value_text: string | null;
     unit: string | null; ref_low: number | null; ref_high: number | null;
     ref_text: string | null; flag: string | null; source_note: string;
+    /** Every note reporting this result (a later report's history table repeats it). */
+    sources: string[];
   }
   interface SourceRef { title: string; rel_path: string; }
   interface RecordsAnswer { answer: string; sources: SourceRef[]; }
@@ -181,6 +183,7 @@
   let labsLastExtract = $state<string | null>(null);
   let extracting = $state(false);
   let extractMsg = $state('');
+  let extractErrors = $state<string[]>([]);
 
   let labGroups = $derived.by(() => {
     const map = new Map<string, LabTestSummary[]>();
@@ -220,11 +223,13 @@
   async function extractNow() {
     extracting = true;
     extractMsg = '';
+    extractErrors = [];
     try {
       const r: any = await invoke('extract_lab_results');
       labsLastExtract = r.extracted_at;
       labTests = await invoke<LabTestSummary[]>('get_lab_tests');
       labsLoaded = true;
+      extractErrors = r.errors ?? [];
       extractMsg = `Extracted ${r.rows_extracted} results from ${r.notes_processed} notes`
         + (r.notes_failed ? ` · ${r.notes_failed} note(s) failed` : '');
       if (labTests.length) selectTest(selectedTest && labTests.some(t => t.test_name === selectedTest) ? selectedTest : labTests[0].test_name);
@@ -241,12 +246,44 @@
   let selectedTestSummary = $derived(labTests.find((t) => t.test_name === selectedTest) ?? null);
   let hasRef = $derived(series.some((p) => p.ref_low != null || p.ref_high != null));
 
-  let chartLabels = $derived(series.map((p) => prettyDate(p.result_date)));
+  // A time axis (days since 1970), so results years apart sit years apart rather than
+  // side by side like evenly spaced labels would put them.
+  const DAY = 86_400_000;
+  const xOf = (d: string) => Date.parse(d + 'T00:00:00Z') / DAY;
+  const xLabel = (x: number) => {
+    const d = new Date(x * DAY);
+    return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  };
+  const at = (pick: (p: LabPoint) => number | null) =>
+    series.map((p) => ({ x: xOf(p.result_date), y: pick(p) }));
+  let chartOptions = $derived.by(() => {
+    const xs = series.map((p) => xOf(p.result_date));
+    const lo = Math.min(...xs), hi = Math.max(...xs);
+    const pad = Math.max(20, (hi - lo) * 0.04);
+    return {
+      scales: {
+        x: {
+          type: 'linear', min: lo - pad, max: hi + pad,
+          grid: { display: false },
+          ticks: { color: 'var(--tm)', font: { size: 10 }, maxTicksLimit: 7, callback: (v: any) => xLabel(Number(v)) },
+        },
+        y: { grid: { color: 'var(--border)' }, ticks: { color: 'var(--ts)', font: { size: 11 } } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items: any[]) => items.length ? prettyDate(series[items[0].dataIndex]?.result_date ?? null) : '',
+          },
+        },
+      },
+    };
+  });
   let chartDatasets = $derived.by<any[]>(() => {
     const ds: any[] = [
       {
         label: selectedTest ?? 'Value',
-        data: series.map((p) => p.value_num),
+        data: at((p) => p.value_num),
         borderColor: 'var(--accent)',
         backgroundColor: 'var(--accent)',
         tension: 0.25,
@@ -259,12 +296,12 @@
     ];
     if (hasRef) {
       ds.push({
-        label: 'Ref high', data: series.map((p) => p.ref_high),
+        label: 'Ref high', data: at((p) => p.ref_high),
         borderColor: 'var(--amber-soft)', borderDash: [4, 4], pointRadius: 0,
         backgroundColor: 'var(--amber-soft)', fill: '+1', tension: 0, order: 2,
       });
       ds.push({
-        label: 'Ref low', data: series.map((p) => p.ref_low),
+        label: 'Ref low', data: at((p) => p.ref_low),
         borderColor: 'var(--amber-soft)', borderDash: [4, 4], pointRadius: 0,
         fill: false, tension: 0, order: 3,
       });
@@ -388,6 +425,12 @@
         <span class="labs-sub">No pathology data extracted yet</span>
       {/if}
       {#if extractMsg}<span class="extract-msg">{extractMsg}</span>{/if}
+      {#if extractErrors.length}
+        <details class="extract-errors">
+          <summary>Notes that couldn't be read</summary>
+          {#each extractErrors as e}<div>{e}</div>{/each}
+        </details>
+      {/if}
     </div>
     <button class="extract-btn" onclick={extractNow} disabled={extracting}>
       {extracting ? 'Extracting… (this can take a minute)' : labsLastExtract ? 'Re-extract pathology' : 'Extract pathology data'}
@@ -440,7 +483,7 @@
           </div>
 
           {#if series.filter((p) => p.value_num != null).length >= 1}
-            <Chart type="line" labels={chartLabels} datasets={chartDatasets} chartArea="260px" />
+            <Chart type="line" labels={[]} datasets={chartDatasets} options={chartOptions} chartArea="260px" />
             {#if hasRef}<div class="chart-caption">Shaded band = reference range · red points = flagged abnormal</div>{/if}
           {:else}
             <div class="empty-state">This marker has no numeric values to chart (qualitative result).</div>
@@ -451,14 +494,17 @@
               <tr><th>Date</th><th>Result</th><th>Unit</th><th>Reference</th><th>Flag</th><th>Source</th></tr>
             </thead>
             <tbody>
-              {#each [...series].reverse() as p (p.result_date + p.source_note)}
+              {#each [...series].reverse() as p (p.result_date + p.source_note + (p.value_text ?? ''))}
                 <tr class:flagged={!!p.flag}>
                   <td>{prettyDate(p.result_date)}</td>
                   <td class="num">{p.value_text ?? (p.value_num ?? '')}</td>
                   <td>{p.unit ?? ''}</td>
                   <td>{p.ref_text ?? ''}</td>
                   <td>{#if p.flag}<span class="flag-badge">{p.flag}</span>{/if}</td>
-                  <td><button class="src-link" onclick={() => openInBrowse(p.source_note)}>note</button></td>
+                  <td>
+                    <button class="src-link" onclick={() => openInBrowse(p.source_note)}>note</button>
+                    {#if p.sources.length > 1}<span class="src-more" title={'Also reported in: ' + p.sources.slice(1).join(', ')}>+{p.sources.length - 1}</span>{/if}
+                  </td>
                 </tr>
               {/each}
             </tbody>
@@ -566,6 +612,10 @@
   .lab-cat { font-size: 12px; color: var(--tm); margin-top: 1px; }
   .lab-latest-big { font-size: 22px; font-weight: 700; color: var(--tp); display: flex; align-items: baseline; gap: 7px; }
   .lab-unit { font-size: 13px; font-weight: 500; color: var(--tm); }
+  .src-more { font-size:10.5px; color:var(--tm); margin-left:4px; cursor:help; }
+  .extract-errors { font-size:12px; color:var(--red-fg); width:100%; }
+  .extract-errors summary { cursor:pointer; font-weight:600; }
+  .extract-errors div { margin-top:4px; overflow-wrap:anywhere; }
   .flag-badge { font-size: 10px; font-weight: 700; color: var(--red-fg); background: var(--red-soft); padding: 1px 6px; border-radius: 8px; letter-spacing: 0.03em; align-self: center; }
   .chart-caption { font-size: 11.5px; color: var(--tm); margin-top: 8px; text-align: center; }
 
