@@ -242,6 +242,22 @@ Guards, so the manage panel can't corrupt the log:
   rows keep the cost stored on them, so history doesn't shift underfoot. Editing a category's
   `energy_weight` or `load_group` *does* apply to history, since load is computed on demand.
 
+## Sharing with other people (2026-10-09)
+
+Goal: one codebase anyone with fatigue can install, with the setup-specific parts optional.
+No separate "lite" branch — switches instead (`commands/features.rs`).
+
+1. ✅ **Data folder per machine + two-computer lock** — first-run folder choice (local or a
+   detected cloud folder, or an existing one), `health.lock` heartbeat, Settings → Data folder.
+2. ✅ **Feature switches** — first-run "what do you want to track?", module toggles in Settings,
+   Advanced section (watch sync, health records folder with picker + setup instructions, AI
+   features with a master switch and one switch per feature, spreadsheet import). New users get
+   modules on, Advanced off; an existing install gets everything on.
+3. ⏳ Weekly summary without AI (Rust already computes `WeekMetrics`; template the prose).
+4. ⏳ Built-in food dataset (category + flags) as a non-AI tagger (`tag_source = 'dataset'`).
+5. ⏳ Sweep for assumptions specific to this log (e.g. the weekly prompt's exertion finding),
+   then signed installers, auto-update and a getting-started guide.
+
 ## Family Finance patterns to follow
 
 1. CSS token system — `:root` + `:global(.dark)` with `--bg-primary`, `--accent`, `--radius-card`, etc.

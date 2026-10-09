@@ -7,6 +7,7 @@
   import { dateFromUrl, pushDate, dateHref } from '$lib/dateParam';
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
+  import { features } from '$lib/stores/features.svelte';
   import { dailyAverages, type BpSeries } from '$lib/bpCorrection';
 
   let today = $state(todayISO());
@@ -55,7 +56,8 @@
   let bpSeries = $state<BpSeries>({ raw: [], adjusted: [], periods: [] });
   let bpHistory = $derived.by(() => {
     const from = shiftISO(today, -60);
-    return dailyAverages(bpAdjusted ? bpSeries.adjusted : bpSeries.raw).filter((d) => d.log_date >= from);
+    const adjusted = bpAdjusted && features.health_sync;
+    return dailyAverages(adjusted ? bpSeries.adjusted : bpSeries.raw).filter((d) => d.log_date >= from);
   });
   // Periods whose readings were moved, newest first, for the note under the chart.
   let bpShifts = $derived(
@@ -431,10 +433,10 @@
   <div class="hist-header">
     <div>
       <div class="card-heading">History</div>
-      <div class="card-subtitle">{histCfg.label} · {histDays} days{#if histMetric === 'bp'} · {bpAdjusted ? 'watch readings adjusted for calibration' : 'as measured'}{/if}</div>
+      <div class="card-subtitle">{histCfg.label} · {histDays} days{#if histMetric === 'bp' && features.health_sync} · {bpAdjusted ? 'watch readings adjusted for calibration' : 'as measured'}{/if}</div>
     </div>
     <div class="hist-controls">
-      {#if histMetric === 'bp'}
+      {#if histMetric === 'bp' && features.health_sync}
         <div class="seg" title="Adjusted removes the jumps each cuff calibration puts into the watch's readings">
           <button class="seg-btn" class:active={bpAdjusted} onclick={() => bpAdjusted = true}>Adjusted</button>
           <button class="seg-btn" class:active={!bpAdjusted} onclick={() => bpAdjusted = false}>As measured</button>
@@ -459,7 +461,7 @@
       <div class="hist-empty">No {histCfg.label.toLowerCase()} data in this range.</div>
     {/if}
   </div>
-  {#if histMetric === 'bp' && bpAdjusted}
+  {#if histMetric === 'bp' && bpAdjusted && features.health_sync}
     <div class="hist-note">
       Each calibration sets the watch against the cuff, and the cuff's own error that day carries
       into every watch reading until the next one. The step at each calibration (median of the week
@@ -476,6 +478,7 @@
   {/if}
 </div>
 
+{#if features.health_sync}
 <div class="cal-card">
   <div class="cal-icon">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg>
@@ -521,6 +524,7 @@
       {/each}
     </div>
   </div>
+{/if}
 {/if}
 
 <style>

@@ -13,6 +13,7 @@
   import { findMeals, mealName, type Food, type FoodTag, type FoodLogEntry, type Meal } from '$lib/food';
   import FoodTagManager from '$lib/components/FoodTagManager.svelte';
   import FoodTidy from '$lib/components/FoodTidy.svelte';
+  import { aiOn } from '$lib/stores/features.svelte';
 
   // Food & drink log. Not calorie counting: an item is a name and a kind, and the point
   // is to see what was eaten beside how the fatigue went. Like the Medication page:
@@ -71,6 +72,7 @@
   }
   // Tag newly created items in the background; the list refreshes when the tags land.
   function tagNew() {
+    if (!aiOn('ai_food_tags')) return;
     invoke<number>('tag_untagged_foods')
       .then((n) => { if (n) loadDefinitions(); })
       .catch((e) => console.warn('Food tagging failed:', e));
@@ -598,7 +600,9 @@
         <button class="today-btn" onclick={goToday}>Today</button>
       {/if}
     </div>
-    <button class="ghost-btn" onclick={() => { showTags = false; showTidy = !showTidy; }} title="Tag new items and look for duplicates">Tidy up</button>
+    {#if aiOn('ai_food_tags')}
+      <button class="ghost-btn" onclick={() => { showTags = false; showTidy = !showTidy; }} title="Tag new items and look for duplicates">Tidy up</button>
+    {/if}
     <button class="ghost-btn" onclick={() => { showTidy = false; showTags = !showTags; }}>Categories &amp; flags</button>
     <button class="ghost-btn" onclick={() => startGroupForm(null)}>New group</button>
     <button class="primary-btn" onclick={() => { closeForms(); showAddItem = !showAddItem; }}>
@@ -735,7 +739,9 @@
           {#if openMenuId === f.id}
             <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
               <button class="menu-item" role="menuitem" onclick={() => startEdit(f)}>Edit</button>
-              <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; retag(f); }}>Re-tag with AI</button>
+              {#if aiOn('ai_food_tags')}
+                <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; retag(f); }}>Re-tag with AI</button>
+              {/if}
               <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; setActive(f, !f.active); }}>{f.active ? 'Hide' : 'Restore'}</button>
               {#if f.days_logged === 0}
                 <button class="menu-item danger" role="menuitem" onclick={() => { openMenuId = null; removeItem(f); }}>Delete</button>
@@ -871,6 +877,7 @@
             </div>
           </div>
         {/if}
+        {#if aiOn('ai_food_photo')}
         <div class="photo-zone">
           {#if photoUrl}
             <div class="photo-result">
@@ -922,6 +929,7 @@
             </label>
           {/if}
         </div>
+        {/if}
         {#if yesterday.length || recentMeals.length}
           <div class="repeat">
             {#if yesterday.length}
@@ -993,7 +1001,7 @@
       </div>
     </div>
     {#if comparison.rows.length === 0}
-      <p class="muted">{cmpBy === 'item' ? 'Items appear' : `A ${cmpBy} appears`} here once logged on at least {MIN_DAYS} days that also have a fatigue rating.{#if cmpBy !== 'item'} Items get flags and categories when they're tagged — try <strong>Tidy up</strong>.{/if}</p>
+      <p class="muted">{cmpBy === 'item' ? 'Items appear' : `A ${cmpBy} appears`} here once logged on at least {MIN_DAYS} days that also have a fatigue rating.{#if cmpBy !== 'item'} Items get flags and categories when they're tagged{#if aiOn('ai_food_tags')} — try <strong>Tidy up</strong>{:else} — set them with <strong>Edit</strong> on each item{/if}.{/if}</p>
     {:else}
       <div class="cmp-grid cmp-head">
         <span>{cmpBy === 'item' ? 'Item' : cmpBy === 'flag' ? 'Flag' : 'Category'}</span><span>Days</span><span>Same day</span><span>vs other days</span><span>Day after</span><span>vs other days</span>

@@ -7,6 +7,7 @@
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { weekly, runPendingWeekly } from '$lib/stores/weekly.svelte';
+  import { aiOn } from '$lib/stores/features.svelte';
   import { resolveCSSVar } from '$lib/chartTheme';
   import { theme } from '$lib/stores/theme.svelte';
 
@@ -533,7 +534,7 @@
   </div>
 </div>
 
-{#if weekly.banner && !weekly.banner.seen}
+{#if aiOn('ai_weekly') && weekly.banner && !weekly.banner.seen}
   <a href="/weekly" class="weekly-banner">
     <span class="wb-icon">📋</span>
     <span class="wb-text">

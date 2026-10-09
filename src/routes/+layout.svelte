@@ -8,6 +8,8 @@
   import { theme, initTheme, toggleTheme } from '$lib/stores/theme.svelte';
   import { weekly, refreshWeeklyBanner } from '$lib/stores/weekly.svelte';
   import DataSetup from '$lib/components/DataSetup.svelte';
+  import Onboarding from '$lib/components/Onboarding.svelte';
+  import { features, loadFeatures, aiOn } from '$lib/stores/features.svelte';
   import type { StartupInfo } from '$lib/dataLocation';
 
   // Update check: this build is stamped with its git commit (vite define); CI
@@ -58,6 +60,22 @@
     { href: '/records', label: 'Records', svg: '<path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>' },
     { href: '/settings', label: 'Settings', svg: '<path d="M4 8h16M4 16h16"/><circle cx="14" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/>' },
   ];
+
+  // Pages that are switched off (Settings) leave the sidebar; Dashboard, Daily Log and
+  // Settings are always there.
+  const NAV_FEATURE: Record<string, () => boolean> = {
+    '/sleep': () => features.sleep,
+    '/activity': () => features.activity,
+    '/cardio': () => features.cardio,
+    '/medication': () => features.medication,
+    '/food': () => features.food,
+    '/work': () => features.work,
+    '/weekly': () => aiOn('ai_weekly'),
+    '/pacing': () => features.pacing,
+    '/ask': () => aiOn('ai_ask'),
+    '/records': () => features.vault,
+  };
+  let visibleNav = $derived(navItems.filter((i) => NAV_FEATURE[i.href]?.() ?? true));
 
   // ── Window chrome ─────────────────────────────────────────────────────────
   // The window is undecorated (`decorations: false`) and launches maximized, so
@@ -115,8 +133,13 @@
 
   async function afterReady() {
     try {
+      await loadFeatures();
+    } catch (e) {
+      console.warn('Loading features failed:', e);
+    }
+    try {
       const s: any = await invoke('get_sync_settings');
-      if (s?.auto_import) {
+      if (features.health_sync && s?.auto_import) {
         await invoke('import_health_csv', { root: s.csv_root ?? null, full: false });
       }
     } catch (e) {
@@ -200,7 +223,7 @@
     </button>
 
     <nav class="sidebar-nav">
-      {#each navItems as item}
+      {#each visibleNav as item}
         <a
           href={item.href}
           class="nav-item"
@@ -241,6 +264,8 @@
       <DataSetup {startup} onready={onSetupReady} />
     {:else if syncing}
       <div class="launch-sync">{startup ? 'Syncing health data…' : 'Opening…'}</div>
+    {:else if !features.onboarded}
+      <Onboarding />
     {:else}
       {@render children()}
     {/if}

@@ -178,6 +178,10 @@ pub fn setting_str(key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+pub fn get_setting(key: &str) -> Option<serde_json::Value> {
+    read_settings().get(key).filter(|v| !v.is_null()).cloned()
+}
+
 pub fn put_setting(key: &str, value: serde_json::Value) -> Result<(), String> {
     write_setting(key, value)
 }

@@ -27,6 +27,8 @@ pub fn run() {
             commands::data_location::get_data_location,
             commands::data_location::change_data_location,
             commands::data_location::folder_has_data,
+            commands::features::get_features,
+            commands::features::save_features,
             commands::daily_log::get_daily_log,
             commands::daily_log::upsert_daily_log,
             commands::daily_log::list_daily_logs,

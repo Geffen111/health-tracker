@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { aiOn } from '$lib/stores/features.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { onMount } from 'svelte';
@@ -37,7 +38,8 @@
   type Tab = 'browse' | 'labs' | 'ask';
   // The open tab and charted test survive leaving the page (see $lib/viewState).
   const saved = recallView<any>('records');
-  let tab = $state<Tab>(oneOf(saved.tab, ['browse', 'labs', 'ask'] as const, 'browse'));
+  // Ask needs its AI switch; a remembered Ask tab falls back to browsing without it.
+  let tab = $state<Tab>(oneOf(saved.tab, (aiOn('ai_records') ? ['browse', 'labs', 'ask'] : ['browse', 'labs']) as Tab[], 'browse'));
 
   // ── Browse ──
   let loading = $state(true);
@@ -357,7 +359,9 @@
 <div class="tab-bar">
   <button class="tab" class:active={tab === 'browse'} onclick={() => switchTab('browse')}>Browse</button>
   <button class="tab" class:active={tab === 'labs'} onclick={() => switchTab('labs')}>Labs</button>
-  <button class="tab" class:active={tab === 'ask'} onclick={() => switchTab('ask')}>Ask</button>
+  {#if aiOn('ai_records')}
+    <button class="tab" class:active={tab === 'ask'} onclick={() => switchTab('ask')}>Ask</button>
+  {/if}
 </div>
 
 {#if loading}
@@ -432,16 +436,18 @@
         </details>
       {/if}
     </div>
-    <button class="extract-btn" onclick={extractNow} disabled={extracting}>
-      {extracting ? 'Extracting… (this can take a minute)' : labsLastExtract ? 'Re-extract pathology' : 'Extract pathology data'}
-    </button>
+    {#if aiOn('ai_records')}
+      <button class="extract-btn" onclick={extractNow} disabled={extracting}>
+        {extracting ? 'Extracting… (this can take a minute)' : labsLastExtract ? 'Re-extract pathology' : 'Extract pathology data'}
+      </button>
+    {/if}
   </div>
 
   {#if labTests.length === 0}
     <div class="card missing-card">
       <div class="card-heading">No lab results yet</div>
       <div class="card-subtitle">
-        Click <strong>Extract pathology data</strong> above. The app reads each pathology note in your vault and pulls
+        {#if aiOn('ai_records')}Click <strong>Extract pathology data</strong> above.{:else}Switch on <strong>Records</strong> under Settings → Advanced → AI features, then extract.{/if} The app reads each pathology note in your folder and pulls
         the numeric results into a chartable table. Values keep a link back to the source note so you can verify them.
       </div>
       <p class="missing-note">Extraction sends note content to your configured AI provider (OpenRouter) — your choice, set in Settings.</p>
@@ -514,7 +520,7 @@
     </div>
   {/if}
 
-{:else if tab === 'ask'}
+{:else if tab === 'ask' && aiOn('ai_records')}
   <div class="ask-wrap">
     <div class="card ask-card">
       <div class="card-heading">Ask your records</div>

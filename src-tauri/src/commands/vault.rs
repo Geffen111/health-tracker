@@ -16,11 +16,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const VAULT_ROOT_SETTING: &str = "vault_root";
-const DEFAULT_VAULT: &str = "C:\\Users\\gavin\\OneDrive\\Obsidian\\Health-Records";
 
-/// Configured vault root, or the default OneDrive location.
+/// The configured vault folder. Empty when none is set — not a directory, so every
+/// reader treats it as "no vault" (Settings → Advanced connects one).
 pub(crate) fn vault_root() -> PathBuf {
-    PathBuf::from(settings::setting_str(VAULT_ROOT_SETTING).unwrap_or_else(|| DEFAULT_VAULT.to_string()))
+    settings::setting_str(VAULT_ROOT_SETTING).map(PathBuf::from).unwrap_or_default()
 }
 
 #[derive(Serialize)]

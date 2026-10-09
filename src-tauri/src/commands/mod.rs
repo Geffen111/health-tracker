@@ -21,6 +21,7 @@ pub mod records_ask;
 pub mod food;
 pub mod food_tags;
 pub mod data_location;
+pub mod features;
 pub mod exposures;
 pub mod weekly;
 pub mod health_notes;

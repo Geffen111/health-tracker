@@ -7,6 +7,27 @@
   import { confirmAction } from '$lib/stores/confirm.svelte';
   import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import type { DataLocation } from '$lib/dataLocation';
+  import { features, setFeatures, type AiFeature } from '$lib/stores/features.svelte';
+
+  type Module = 'sleep' | 'activity' | 'cardio' | 'medication' | 'food' | 'work' | 'pacing';
+  const MODULES: { key: Module; label: string; about: string }[] = [
+    { key: 'sleep', label: 'Sleep', about: 'Hours, quality and how rested you felt' },
+    { key: 'activity', label: 'Activity', about: 'What you did and how much it took out of you' },
+    { key: 'pacing', label: 'Pacing', about: 'Activity load over time, beside your fatigue' },
+    { key: 'cardio', label: 'Blood pressure & heart rate', about: 'Readings from a cuff or monitor' },
+    { key: 'medication', label: 'Medication', about: 'Doses, schedules and changes' },
+    { key: 'food', label: 'Food & drink', about: 'What you had each day, beside how you felt' },
+    { key: 'work', label: 'Work', about: 'Hours worked' },
+  ];
+  // What each AI feature sends, so the choice is an informed one.
+  const AI_FEATURES: { key: AiFeature; label: string; about: string }[] = [
+    { key: 'ai_weekly', label: 'Weekly summary', about: 'A written summary of each week. Sends that week\'s figures (averages, medication, food, lab results) — not your notes.' },
+    { key: 'ai_ask', label: 'Ask', about: 'Ask questions about your log in plain English. Sends your question and the log figures needed to answer it.' },
+    { key: 'ai_food_photo', label: 'Meal photos', about: 'Suggests what\'s in a photo of a meal. The photo is sent and not kept.' },
+    { key: 'ai_food_tags', label: 'Food tagging & tidy-up', about: 'Gives new food items a category and flags (gluten, dairy…) and suggests clean-ups. Sends item names only.' },
+    { key: 'ai_records', label: 'Records: lab charts & questions', about: 'Reads lab results out of your pathology notes, and answers questions about your records. Sends those notes\' text.' },
+  ];
+  let showAdvanced = $state(false);
 
   // Suggested OpenRouter models; the field also accepts any custom model id.
   const MODEL_SUGGESTIONS = [
@@ -38,7 +59,7 @@
   let addDefault = $state('');
 
   let showImport = $state(false);
-  let importPath = $state('G:\\Health\\Fatigue_Log_V6.xlsx');
+  let importPath = $state('');
   let importResult = $state('');
   let importing = $state(false);
   let lastImportInfo = $state('');
@@ -52,7 +73,8 @@
   let lastSync = $state<string | null>(null);
 
   // Health Records vault (read-only Obsidian browser).
-  let vaultRoot = $state('C:\\Users\\gavin\\OneDrive\\Obsidian\\Health-Records');
+  let vaultRoot = $state('');
+  let vaultStatus = $state<{ ok: boolean; text: string } | null>(null);
   let syncing = $state(false);
   let syncMsg = $state('');
   let syncErr = $state(false);
@@ -83,6 +105,7 @@
     try {
       const v: any = await invoke('get_vault_settings');
       if (v?.vault_root) vaultRoot = v.vault_root;
+      checkVault();
     } catch {}
     try {
       const p: any = await invoke('get_app_prefs');
@@ -134,8 +157,29 @@
   async function saveVaultSettings() {
     try {
       await invoke('save_vault_settings', { vaultRoot });
-      showToast('Records vault folder saved');
+      showToast('Records folder saved');
+      checkVault();
     } catch (e) { console.error('Error saving vault settings:', e); }
+  }
+  async function chooseVault() {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const dir = await open({ directory: true, multiple: false, title: 'Choose your health records folder' });
+      if (typeof dir === 'string') { vaultRoot = dir; await saveVaultSettings(); }
+    } catch (e) { showToast(String(e), 'error'); }
+  }
+  // Say what was found, so a wrong folder shows up straight away.
+  async function checkVault() {
+    if (!vaultRoot.trim()) { vaultStatus = null; return; }
+    try {
+      const idx: any = await invoke('get_vault_index');
+      if (!idx.exists) { vaultStatus = { ok: false, text: "That folder can't be found." }; return; }
+      const notes: any[] = idx.notes ?? [];
+      const path = notes.filter((n) => n.folder === 'Pathology Results' || n.note_type === 'pathology_result').length;
+      vaultStatus = notes.length
+        ? { ok: true, text: `Found ${notes.length} note${notes.length === 1 ? '' : 's'}${path ? `, ${path} of them pathology reports` : ' — no "Pathology Results" folder yet'}.` }
+        : { ok: false, text: 'No .md notes found in that folder.' };
+    } catch (e) { vaultStatus = { ok: false, text: String(e) }; }
   }
 
   async function toggleAutoImport() {
@@ -234,6 +278,14 @@
     }
   }
 
+  async function chooseImportFile() {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const f = await open({ multiple: false, title: 'Choose the spreadsheet', filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
+      if (typeof f === 'string') importPath = f;
+    } catch (e) { showToast(String(e), 'error'); }
+  }
+
   async function runImport() {
     importing = true;
     importResult = '';
@@ -279,10 +331,16 @@
   }
 </script>
 
+{#snippet toggle(on: boolean, onclick: () => void, label: string)}
+  <button class="toggle" class:active={on} {onclick} role="switch" aria-checked={on} aria-label={label}>
+    <span class="toggle-knob"></span>
+  </button>
+{/snippet}
+
 <div class="page-header">
   <div>
     <div class="page-title">Settings</div>
-    <div class="page-subtitle">Sync, appearance, data &amp; one-time setup</div>
+    <div class="page-subtitle">Your data, what you track, and optional extras</div>
   </div>
 </div>
 
@@ -313,54 +371,19 @@
 
   <div class="card">
     <div>
-      <div class="card-heading">Watch &amp; health sync</div>
-      <div class="card-subtitle">Reads the Samsung Health CSVs that Health Sync writes to Google Drive (steps, heart rate, sleep &amp; energy).</div>
+      <div class="card-heading">What you track</div>
+      <div class="card-subtitle">Pages you don't use leave the sidebar. Nothing is deleted — switch one back on and its history is still there.</div>
     </div>
-    <div class="expects-box">
-      <div class="expects-title">How this works</div>
-      <ol class="expects-list">
-        <li>The <strong>Health Sync</strong> app (Android) exports Samsung Health data to Google Drive.</li>
-        <li><strong>Google Drive for Desktop</strong> mirrors those files to a local drive on this PC — there's no cloud login here, it just reads the synced folder.</li>
-        <li>Point the root below at that mirrored Drive folder. It must contain these four sub-folders (exact names):
-          <span class="expects-folders">Health Sync Steps · Health Sync Heart rate · Health Sync Sleep · Health Sync Energy burned</span>
-        </li>
-      </ol>
-      <div class="expects-note">Manually-entered values are never overwritten. A missing folder is skipped silently. Use <strong>Full re-sync</strong> the first time, then spot-check a day or two against Samsung Health.</div>
-    </div>
-    <div class="text-field">
-      <label for="csv-path">Google Drive root folder</label>
-      <input id="csv-path" bind:value={csvRoot} onchange={saveSyncSettings} class="mono-input" />
-      <span class="field-hint">e.g. <code>G:\My Drive</code> — wherever Drive for Desktop mounts. Set this if your Drive uses a different letter or path.</span>
-    </div>
-    <div class="toggle-card-row">
-      <div>
-        <div class="toggle-label">Auto-import on launch</div>
-        <div class="toggle-sub">{lastSync ? `Last synced ${lastSync}` : 'Not synced yet'} · steps, HR, sleep &amp; energy</div>
-      </div>
-      <button class="toggle" class:active={autoImport} onclick={toggleAutoImport} aria-label="Toggle auto-import">
-        <span class="toggle-knob"></span>
-      </button>
-    </div>
-    <div class="sync-actions">
-      <button class="run-import-btn" onclick={() => syncNow(false)} disabled={syncing}>
-        {syncing ? 'Syncing…' : 'Sync now'}
-      </button>
-      <button class="sync-full-btn" onclick={() => syncNow(true)} disabled={syncing}>Full re-sync</button>
-    </div>
-    {#if syncMsg}
-      <div class="export-msg" class:err={syncErr}>{syncMsg}</div>
-    {/if}
-  </div>
-
-  <div class="card">
-    <div>
-      <div class="card-heading">Health Records vault</div>
-      <div class="card-subtitle">Folder of your Obsidian "Health Records" vault. The <a href="/records" class="inline-link">Records</a> page reads these notes (pathology, topics, timeline…) read-only — it never writes to the vault.</div>
-    </div>
-    <div class="text-field">
-      <label for="vault-path">Vault folder</label>
-      <input id="vault-path" bind:value={vaultRoot} onchange={saveVaultSettings} class="mono-input" />
-      <span class="field-hint">e.g. <code>C:\Users\gavin\OneDrive\Obsidian\Health-Records</code> — the folder Obsidian opens as the vault.</span>
+    <div class="module-grid">
+      {#each MODULES as m (m.key)}
+        <div class="toggle-card-row">
+          <div>
+            <div class="toggle-label">{m.label}</div>
+            <div class="toggle-sub">{m.about}</div>
+          </div>
+          {@render toggle(features[m.key], () => setFeatures({ [m.key]: !features[m.key] }), m.label)}
+        </div>
+      {/each}
     </div>
   </div>
 
@@ -445,11 +468,133 @@
     {/if}
   </div>
 
-  <div class="card">
+  {#if features.pacing}
+  <div class="card row-card">
     <div>
-      <div class="card-heading">AI assistant</div>
-      <div class="card-subtitle">Powers the <a href="/ask" class="inline-link">Ask</a> page &amp; AI insights via OpenRouter.</div>
+      <div class="card-heading">Pacing &amp; activity history</div>
+      <div class="card-subtitle">Activity over time, fatigue trends and the signal check.</div>
     </div>
+    <a href="/pacing" class="nav-link">
+      Open Pacing
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+
+  {/if}
+
+  <button class="advanced-toggle" onclick={() => showAdvanced = !showAdvanced} aria-expanded={showAdvanced}>
+    <span>
+      <span class="advanced-title">Advanced</span>
+      <span class="advanced-sub">Watch data import · health records folder · AI features · spreadsheet import</span>
+    </span>
+    <span class="collapsible-chevron" style="transform:rotate({showAdvanced ? '180deg' : '0deg'});">⌄</span>
+  </button>
+
+  {#if showAdvanced}
+  <div class="card">
+    <div class="toggle-card-row">
+      <div>
+        <div class="card-heading">Watch &amp; health sync</div>
+        <div class="card-subtitle">Imports steps, heart rate, sleep, energy and blood pressure from Samsung Health via the Health Sync app, and adds watch calibration to the Cardio page.</div>
+      </div>
+      {@render toggle(features.health_sync, () => setFeatures({ health_sync: !features.health_sync }), 'Watch & health sync')}
+    </div>
+    {#if features.health_sync}
+    <div class="expects-box">
+      <div class="expects-title">How this works</div>
+      <ol class="expects-list">
+        <li>The <strong>Health Sync</strong> app (Android) exports Samsung Health data to Google Drive.</li>
+        <li><strong>Google Drive for Desktop</strong> mirrors those files to a local drive on this PC — there's no cloud login here, it just reads the synced folder.</li>
+        <li>Point the root below at that mirrored Drive folder. It must contain these four sub-folders (exact names):
+          <span class="expects-folders">Health Sync Steps · Health Sync Heart rate · Health Sync Sleep · Health Sync Energy burned</span>
+        </li>
+      </ol>
+      <div class="expects-note">Manually-entered values are never overwritten. A missing folder is skipped silently. Use <strong>Full re-sync</strong> the first time, then spot-check a day or two against Samsung Health.</div>
+    </div>
+    <div class="text-field">
+      <label for="csv-path">Google Drive root folder</label>
+      <input id="csv-path" bind:value={csvRoot} onchange={saveSyncSettings} class="mono-input" />
+      <span class="field-hint">e.g. <code>G:\My Drive</code> — wherever Drive for Desktop mounts. Set this if your Drive uses a different letter or path.</span>
+    </div>
+    <div class="toggle-card-row">
+      <div>
+        <div class="toggle-label">Auto-import on launch</div>
+        <div class="toggle-sub">{lastSync ? `Last synced ${lastSync}` : 'Not synced yet'} · steps, HR, sleep &amp; energy</div>
+      </div>
+      <button class="toggle" class:active={autoImport} onclick={toggleAutoImport} aria-label="Toggle auto-import">
+        <span class="toggle-knob"></span>
+      </button>
+    </div>
+    <div class="sync-actions">
+      <button class="run-import-btn" onclick={() => syncNow(false)} disabled={syncing}>
+        {syncing ? 'Syncing…' : 'Sync now'}
+      </button>
+      <button class="sync-full-btn" onclick={() => syncNow(true)} disabled={syncing}>Full re-sync</button>
+    </div>
+    {#if syncMsg}
+      <div class="export-msg" class:err={syncErr}>{syncMsg}</div>
+    {/if}
+    {/if}
+  </div>
+
+  <div class="card">
+    <div class="toggle-card-row">
+      <div>
+        <div class="card-heading">Health records folder</div>
+        <div class="card-subtitle">Adds a <strong>Records</strong> page that reads a folder of notes — test results, letters, a timeline. It only ever reads them; nothing in the folder is changed.</div>
+      </div>
+      {@render toggle(features.vault, () => setFeatures({ vault: !features.vault }), 'Health records folder')}
+    </div>
+    {#if features.vault}
+      <div class="text-field">
+        <span class="field-label">Folder</span>
+        <div class="key-row">
+          <input id="vault-path" bind:value={vaultRoot} onchange={saveVaultSettings} class="mono-input" placeholder="No folder chosen" />
+          <button class="key-save-btn" onclick={chooseVault}>Choose…</button>
+        </div>
+        {#if vaultStatus}<span class="field-hint" class:warn={!vaultStatus.ok}>{vaultStatus.text}</span>{/if}
+      </div>
+      <div class="expects-box">
+        <div class="expects-title">How the folder needs to be set up</div>
+        <ol class="expects-list">
+          <li>Any folder of <strong>Markdown (.md) notes</strong> works. An <strong>Obsidian</strong> vault is ideal, but Obsidian isn't required. Notes in sub-folders are included.</li>
+          <li>Each <strong>top-level folder</strong> becomes a group on the Records page, e.g. <em>Health Topics</em>, <em>Pathology Results</em>, <em>Reports</em>. A note's title is its first heading.</li>
+          <li>Give each note a date: in the file name (<code>FBE_2026-03-03.md</code>) or in its frontmatter (<code>date: 2026-03-03</code>).</li>
+          <li>For <strong>lab charts</strong>, keep each pathology report as its own note in a folder named exactly
+            <span class="expects-folders">Pathology Results</span>
+            (or add <code>type: pathology_result</code> to the frontmatter), with the results in a table: test, result, units, reference range. Notes with "index" in the name are skipped.</li>
+        </ol>
+        <pre class="example">---
+date: 2026-03-03
+type: pathology_result
+---
+# Full Blood Examination — 3 Mar 2026
+
+| Test        | Result | Units | Reference |
+|-------------|--------|-------|-----------|
+| Haemoglobin | 155    | g/L   | 130–180   |
+| Platelets   | 199    | ×10⁹/L| 150–450   |</pre>
+        <div class="expects-note">Pulling numbers out of reports into charts, and asking questions about your records, use AI — switch on <strong>Records</strong> under AI features below. Browsing the notes doesn't.</div>
+      </div>
+    {/if}
+  </div>
+
+  <div class="card">
+    <div class="toggle-card-row">
+      <div>
+        <div class="card-heading">AI features</div>
+        <div class="card-subtitle">Optional extras that send some of your data to an AI model through <strong>OpenRouter</strong>, using your own API key (you pay OpenRouter directly, usually cents a month). Each one is switched on separately.</div>
+      </div>
+      {@render toggle(features.ai, () => setFeatures({ ai: !features.ai }), 'AI features')}
+    </div>
+    {#if features.ai}
+      <div class="expects-box">
+        <div class="expects-title">Getting an API key</div>
+        <ol class="expects-list">
+          <li>Create an account at <strong>openrouter.ai</strong> and add a little credit (a few dollars lasts a long time).</li>
+          <li>Under <strong>Keys</strong>, create a key and paste it below. It's stored only on this computer, never in your synced data folder.</li>
+        </ol>
+      </div>
     <div class="text-field">
       <label for="api-key">OpenRouter API key</label>
       <div class="key-row">
@@ -460,7 +605,7 @@
       </div>
       <span class="field-hint">Stored only on this device — the key is never synced to the cloud.</span>
       {#if apiKeySaved}
-        <span class="key-status">Key saved · the Ask page is ready to use.</span>
+        <span class="key-status">Key saved.</span>
       {/if}
     </div>
     <div class="text-field">
@@ -489,17 +634,18 @@
       </div>
       <span class="field-hint">Reads meal photos dropped on the Food &amp; Drink page — must accept images. The photo is sent to OpenRouter and not kept.</span>
     </div>
-  </div>
-
-  <div class="card row-card">
-    <div>
-      <div class="card-heading">Pacing &amp; activity history</div>
-      <div class="card-subtitle">Activity over time, fatigue trends and the signal check.</div>
-    </div>
-    <a href="/pacing" class="nav-link">
-      Open Pacing
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
-    </a>
+      <div class="ai-list">
+        {#each AI_FEATURES as a (a.key)}
+          <div class="toggle-card-row">
+            <div>
+              <div class="toggle-label">{a.label}{#if a.key === 'ai_records' && !features.vault}<span class="needs"> · needs a health records folder</span>{/if}</div>
+              <div class="toggle-sub">{a.about}</div>
+            </div>
+            {@render toggle(features[a.key], () => setFeatures({ [a.key]: !features[a.key] }), a.label)}
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <div class="collapsible-card">
@@ -519,9 +665,11 @@
       <div class="collapsible-content">
         <div class="text-field">
           <label for="import-path">Fatigue Log spreadsheet (.xlsx)</label>
-          <div class="path-row">
-            <input id="import-path" bind:value={importPath} class="mono-input" />
+          <div class="key-row">
+            <input id="import-path" bind:value={importPath} class="mono-input" placeholder="No file chosen" />
+            <button class="key-save-btn" onclick={chooseImportFile}>Choose…</button>
           </div>
+          <span class="field-hint">For moving over from the CFS/ME Fatigue Log spreadsheet this app replaced. Most people won't need it.</span>
         </div>
         {#if lastImportInfo}
           <div class="import-info">
@@ -541,6 +689,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
@@ -584,7 +733,16 @@
   .sync-full-btn { background:var(--card); color:var(--tp); border:1px solid var(--border); border-radius:999px; padding:11px 18px; font-size:13px; font-weight:700; cursor:pointer; }
   .sync-full-btn:disabled, .run-import-btn:disabled { opacity:.6; cursor:not-allowed; }
 
-  .toggle-card-row { display:flex; align-items:center; justify-content:space-between; }
+  .toggle-card-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .module-grid, .ai-list { display:flex; flex-direction:column; gap:12px; }
+  .ai-list { border-top:1px solid var(--border); padding-top:14px; }
+  .needs { font-weight:500; color:var(--amber-fg); font-size:12px; }
+  .field-hint.warn { color:var(--amber-fg); }
+  .example { font-family:ui-monospace, Consolas, monospace; font-size:11px; color:var(--ts); background:var(--card); border:1px solid var(--border); border-radius:9px; padding:9px 11px; overflow-x:auto; white-space:pre; margin:0; }
+  .expects-list code { background:var(--card); border:1px solid var(--border); border-radius:5px; padding:0 4px; font-size:11px; }
+  .advanced-toggle { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; margin-top:10px; padding:14px 4px; background:transparent; border:none; border-top:1px solid var(--border); cursor:pointer; text-align:left; }
+  .advanced-title { display:block; font-family:'Source Serif 4',serif; font-size:19px; font-weight:600; color:var(--tp); }
+  .advanced-sub { display:block; font-size:12px; color:var(--tm); margin-top:2px; }
   .toggle-label { font-size:13.5px; color:var(--tp); font-weight:600; }
   .toggle-sub { font-size:11.5px; color:var(--tm); }
   .toggle { width:46px;height:26px;border-radius:999px;border:none;background:var(--border);position:relative;cursor:pointer;flex-shrink:0;padding:0;transition:background .15s; }
@@ -605,7 +763,6 @@
   .export-msg.err { color:var(--red-fg); background:var(--red-soft); }
 
   .nav-link { display:inline-flex;align-items:center;gap:7px;background:var(--card);color:var(--tp);border:1px solid var(--border);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;cursor:pointer;text-decoration:none;white-space:nowrap; }
-  .inline-link { color:var(--accent-fg); font-weight:700; text-decoration:none; }
   .key-row { display:flex; gap:10px; }
   .key-save-btn { background:var(--accent); color:#fff; border:none; border-radius:12px; padding:0 18px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; }
   .key-save-btn:disabled { opacity:.6; cursor:not-allowed; }
@@ -618,7 +775,6 @@
   .collapsible-chevron { font-size:18px; color:var(--tm); transition:transform .15s; }
 
   .collapsible-content { padding:4px 22px 22px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:16px; }
-  .path-row { display:flex; gap:10px; }
 
   .import-info { display:flex; align-items:center; gap:11px; background:var(--accent-soft); border:1px solid var(--border); border-radius:12px; padding:12px 14px; }
   .import-info span { font-size:12.5px; color:var(--accent-fg); }

@@ -15,7 +15,7 @@
 // the titles of changed vault notes go to OpenRouter. Raw vault note text does not.
 
 use crate::commands::ai::{call_openrouter, strip_code_fences};
-use crate::commands::{blood_pressure, food_tags, labs, pacing, settings, vault};
+use crate::commands::{blood_pressure, features, food_tags, labs, pacing, settings, vault};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -1006,7 +1006,7 @@ pub async fn get_pending_weekly(pool: State<'_, SqlitePool>) -> Result<Option<We
     let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM weekly_summaries WHERE week_start = ?")
         .bind(iso(ws))
         .fetch_optional(&*pool).await.map_err(|e| format!("DB error weekly: {}", e))?;
-    if exists.is_some() || settings::get_api_key().await?.is_none() {
+    if exists.is_some() || !features::ai(|f| f.ai_weekly) || settings::get_api_key().await?.is_none() {
         return Ok(None);
     }
     let logged: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM daily_logs WHERE log_date BETWEEN ? AND ? LIMIT 1")

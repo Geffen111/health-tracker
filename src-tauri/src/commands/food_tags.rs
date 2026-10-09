@@ -203,6 +203,9 @@ fn parse_json<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, String> {
 /// API key it does nothing (not an error: tagging is a nicety). Called after an item is
 /// created, by "Tidy up" on the Food page, and before each weekly summary.
 pub async fn tag_untagged(pool: &SqlitePool) -> Result<i64, String> {
+    if !crate::commands::features::ai(|f| f.ai_food_tags) {
+        return Ok(0);
+    }
     let Some(api_key) = settings::get_api_key().await? else { return Ok(0) };
     if TAGGING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Ok(0); // a run is already going; it re-queries, so it will pick these up

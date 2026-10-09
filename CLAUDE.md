@@ -105,6 +105,12 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   markers only — same rule as Pacing.
   Each source (`exposures`, `health_notes`, `medication_history`) has a `hide_from_timeline`
   flag that `get_timeline_events` filters on — a new marker source needs one too.
+- **Feature switches** (`commands/features.rs`, `$lib/stores/features.svelte.ts`): `features` in
+  settings.json. Modules (sleep, activity, cardio, medication, food, work, pacing) default on;
+  `health_sync`, `vault` and AI default off for a new user. Each AI feature needs `ai` **and** its
+  own flag — use `aiOn('ai_…')` in the UI and `features::ai(|f| f.ai_…)` in Rust for anything that
+  runs unasked (food tagging, the weekly pending check). A new page/feature that is specific to one
+  setup or calls a model needs a switch. There is no default vault path any more.
 - **Food tags: the AI tags, the person owns.** `foods.tag_source` is NULL (untagged), 'ai' or
   'user'. `tag_untagged` only ever touches NULL rows (after an item is created, on Tidy up, and
   before each weekly summary), so a hand edit is never overwritten. Clean-ups (merge/rename/split)
