@@ -41,7 +41,7 @@ pnpm tauri dev
 ## Backend layout (`src-tauri/src/commands/`)
 `daily_log`, `medications` (+ dose logging, day note), `blood_pressure`, `activity`, `pacing`
 (descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups), `food_tags` (categories/flags, AI tagging, merge/split clean-ups),
-`exposures` (exposures of note + photo attachments), `weekly` (Monday-to-Sunday AI summaries), `health_notes` (dated appointment/test
+`exposures` (exposures of note + photo attachments), `weekly` (Monday-to-Sunday summaries; `weekly_text` writes the words without AI), `health_notes` (dated appointment/test
 notes + `get_timeline_events`, the merged event list for the dashboard Timeline), `import_xlsx` (one-time spreadsheet
 import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 
@@ -122,7 +122,9 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
 - **Weekly summary: Rust owns the numbers, the model only writes prose.** `weekly.rs` builds
   `WeekMetrics` (scorecard vs the previous 8 weekly means, flagged at >= 1 SD; meds; food;
   exposures; new labs; changed vault notes; lag correlations with n shown) and the model
-  narrates it. Stored in `weekly_summaries`, so old weeks never re-call the model. **Never
+  narrates it — or, with the AI summary off (or after it fails, "Write it without AI"),
+  `weekly_text::narrative` writes the same `Narrative` from templates (`model` = 'built-in').
+  Stored in `weekly_summaries`, so old weeks never re-call the model. **Never
   generated automatically**: on Monday Sunday's data is often still being entered, so the
   layout only checks `get_pending_weekly` (last full week, no summary yet) after the launch
   import, and the Dashboard banner offers "Write summary" (`runPendingWeekly()`). A "missed" dose is

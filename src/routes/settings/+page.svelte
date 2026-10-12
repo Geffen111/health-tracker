@@ -21,7 +21,7 @@
   ];
   // What each AI feature sends, so the choice is an informed one.
   const AI_FEATURES: { key: AiFeature; label: string; about: string }[] = [
-    { key: 'ai_weekly', label: 'Weekly summary', about: 'A written summary of each week. Sends that week\'s figures (averages, medication, food, lab results) — not your notes.' },
+    { key: 'ai_weekly', label: 'Weekly summary', about: 'Has the AI write each week\'s summary. Sends that week\'s figures (averages, medication, food, lab results) — not your notes. Without it, the app writes a plainer summary itself.' },
     { key: 'ai_ask', label: 'Ask', about: 'Ask questions about your log in plain English. Sends your question and the log figures needed to answer it.' },
     { key: 'ai_food_photo', label: 'Meal photos', about: 'Suggests what\'s in a photo of a meal. The photo is sent and not kept.' },
     { key: 'ai_food_tags', label: 'Food tagging & tidy-up', about: 'Gives new food items a category and flags (gluten, dairy…) and suggests clean-ups. Sends item names only.' },

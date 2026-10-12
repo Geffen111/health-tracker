@@ -176,7 +176,11 @@
     </section>
   {/if}
 
-  <p class="foot">Week of {formatDate(m.week_start)} – {formatDate(m.week_end)} · written {summary.generated_at}. Descriptive only: it shows what was logged, not a forecast.</p>
+  <p class="foot">
+    Week of {formatDate(m.week_start)} – {formatDate(m.week_end)} · written {summary.generated_at}
+    {summary.written_by === 'built-in' ? 'by the app' : summary.written_by ? `by AI (${summary.written_by})` : ''}.
+    Descriptive only: it shows what was logged, not a forecast.
+  </p>
 </div>
 
 <style>

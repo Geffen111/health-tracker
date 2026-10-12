@@ -15,7 +15,7 @@
 // the titles of changed vault notes go to OpenRouter. Raw vault note text does not.
 
 use crate::commands::ai::{call_openrouter, strip_code_fences};
-use crate::commands::{blood_pressure, features, food_tags, labs, pacing, settings, vault};
+use crate::commands::{blood_pressure, features, food_tags, labs, pacing, settings, vault, weekly_text};
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -199,6 +199,8 @@ pub struct WeeklySummary {
     pub week_start: String,
     pub week_end: String,
     pub generated_at: String,
+    /// The model that wrote the words, or `weekly_text::BUILT_IN` when the app did.
+    pub written_by: Option<String>,
     pub seen: bool,
     pub metrics: WeekMetrics,
     pub narrative: Narrative,
@@ -945,8 +947,8 @@ async fn require_key() -> Result<String, String> {
 }
 
 async fn fetch_one(pool: &SqlitePool, week_start: &str) -> Result<Option<WeeklySummary>, String> {
-    let row: Option<(String, String, String, String, String, i64)> = sqlx::query_as(
-        "SELECT week_start, week_end, generated_at, metrics_json, narrative_json, seen
+    let row: Option<(String, String, String, String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT week_start, week_end, generated_at, metrics_json, narrative_json, seen, model
          FROM weekly_summaries WHERE week_start = ?",
     )
     .bind(week_start)
@@ -954,7 +956,7 @@ async fn fetch_one(pool: &SqlitePool, week_start: &str) -> Result<Option<WeeklyS
     row.map(row_to_summary).transpose()
 }
 
-fn row_to_summary(r: (String, String, String, String, String, i64)) -> Result<WeeklySummary, String> {
+fn row_to_summary(r: (String, String, String, String, String, i64, Option<String>)) -> Result<WeeklySummary, String> {
     Ok(WeeklySummary {
         week_start: r.0,
         week_end: r.1,
@@ -962,13 +964,15 @@ fn row_to_summary(r: (String, String, String, String, String, i64)) -> Result<We
         metrics: serde_json::from_str(&r.3).map_err(|e| format!("Bad stored metrics: {}", e))?,
         narrative: serde_json::from_str(&r.4).map_err(|e| format!("Bad stored narrative: {}", e))?,
         seen: r.5 != 0,
+        written_by: r.6,
     })
 }
 
-/// Build, narrate and store one week. Refuses a week with no log entries.
-async fn generate(pool: &SqlitePool, ws: NaiveDate) -> Result<WeeklySummary, String> {
+/// Build, narrate and store one week. Refuses a week with no log entries. With `use_ai`
+/// the model writes the words; otherwise the app does (weekly_text.rs), from the same numbers.
+async fn generate(pool: &SqlitePool, ws: NaiveDate, use_ai: bool) -> Result<WeeklySummary, String> {
     let _busy = Busy::acquire().ok_or_else(|| "A weekly summary is already being generated.".to_string())?;
-    let api_key = require_key().await?;
+    let api_key = if use_ai { Some(require_key().await?) } else { None };
     // Tag any new food items first so the week's flag counts include them. A failure here
     // only means fewer flags counted; it shouldn't stop the summary.
     if let Err(e) = food_tags::tag_untagged(pool).await {
@@ -978,7 +982,10 @@ async fn generate(pool: &SqlitePool, ws: NaiveDate) -> Result<WeeklySummary, Str
     if metrics.completeness.days_in_week == 0 {
         return Err("Nothing was logged in that week.".to_string());
     }
-    let narrative = call_model(&api_key, &metrics).await?;
+    let (narrative, written_by) = match &api_key {
+        Some(key) => (call_model(key, &metrics).await?, settings::model()),
+        None => (weekly_text::narrative(&metrics), weekly_text::BUILT_IN.to_string()),
+    };
     let generated_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let metrics_json = serde_json::to_string(&metrics).map_err(|e| e.to_string())?;
     let narrative_json = serde_json::to_string(&narrative).map_err(|e| e.to_string())?;
@@ -990,13 +997,13 @@ async fn generate(pool: &SqlitePool, ws: NaiveDate) -> Result<WeeklySummary, Str
            metrics_json = excluded.metrics_json, narrative_json = excluded.narrative_json",
     )
     .bind(&metrics.week_start).bind(&metrics.week_end).bind(&generated_at)
-    .bind(settings::model()).bind(&metrics_json).bind(&narrative_json)
+    .bind(&written_by).bind(&metrics_json).bind(&narrative_json)
     .execute(pool).await.map_err(|e| format!("DB error save weekly: {}", e))?;
     fetch_one(pool, &metrics.week_start).await?.ok_or_else(|| "Saved summary vanished".to_string())
 }
 
-/// The last full week, when it has no summary yet and one could be written (a key is
-/// set and something was logged). Not generated here: Sunday's entries are often still
+/// The last full week, when it has no summary yet and something was logged (the app can
+/// always write one, with or without AI). Not generated here: Sunday's entries are often still
 /// being filled in on Monday morning, so the Dashboard asks first and the person runs
 /// it with `generate_weekly_summary` once the week is up to date.
 #[tauri::command]
@@ -1006,7 +1013,7 @@ pub async fn get_pending_weekly(pool: State<'_, SqlitePool>) -> Result<Option<We
     let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM weekly_summaries WHERE week_start = ?")
         .bind(iso(ws))
         .fetch_optional(&*pool).await.map_err(|e| format!("DB error weekly: {}", e))?;
-    if exists.is_some() || !features::ai(|f| f.ai_weekly) || settings::get_api_key().await?.is_none() {
+    if exists.is_some() {
         return Ok(None);
     }
     let logged: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM daily_logs WHERE log_date BETWEEN ? AND ? LIMIT 1")
@@ -1015,13 +1022,17 @@ pub async fn get_pending_weekly(pool: State<'_, SqlitePool>) -> Result<Option<We
     Ok(logged.map(|_| WeeklyBanner { week_start: iso(ws), week_end: iso(we), seen: false }))
 }
 
-/// Make (or remake) the summary for a chosen Monday.
+/// Make (or remake) the summary for a chosen Monday. `use_ai` defaults to whether the AI
+/// summary is switched on and a key is set; `false` asks for the app-written version
+/// (e.g. after the model failed).
 #[tauri::command]
 pub async fn generate_weekly_summary(
     pool: State<'_, SqlitePool>,
     week_start: String,
+    use_ai: Option<bool>,
 ) -> Result<WeeklySummary, String> {
-    generate(&pool, parse_week(&week_start)?).await
+    let ai_ready = features::ai(|f| f.ai_weekly) && settings::get_api_key().await?.is_some();
+    generate(&pool, parse_week(&week_start)?, use_ai.unwrap_or(ai_ready) && ai_ready).await
 }
 
 /// The most recent stored summary, for the Dashboard banner and sidebar dot.
@@ -1036,8 +1047,8 @@ pub async fn get_weekly_banner(pool: State<'_, SqlitePool>) -> Result<Option<Wee
 /// Every stored summary, newest first.
 #[tauri::command]
 pub async fn list_weekly_summaries(pool: State<'_, SqlitePool>) -> Result<Vec<WeeklySummary>, String> {
-    let rows: Vec<(String, String, String, String, String, i64)> = sqlx::query_as(
-        "SELECT week_start, week_end, generated_at, metrics_json, narrative_json, seen
+    let rows: Vec<(String, String, String, String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT week_start, week_end, generated_at, metrics_json, narrative_json, seen, model
          FROM weekly_summaries ORDER BY week_start DESC",
     )
     .fetch_all(&*pool).await.map_err(|e| format!("DB error weekly list: {}", e))?;

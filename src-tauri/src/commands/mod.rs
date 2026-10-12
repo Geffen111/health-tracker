@@ -24,4 +24,5 @@ pub mod data_location;
 pub mod features;
 pub mod exposures;
 pub mod weekly;
+pub mod weekly_text;
 pub mod health_notes;

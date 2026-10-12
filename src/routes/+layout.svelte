@@ -70,7 +70,6 @@
     '/medication': () => features.medication,
     '/food': () => features.food,
     '/work': () => features.work,
-    '/weekly': () => aiOn('ai_weekly'),
     '/pacing': () => features.pacing,
     '/ask': () => aiOn('ai_ask'),
     '/records': () => features.vault,

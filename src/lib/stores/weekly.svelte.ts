@@ -36,14 +36,18 @@ export async function refreshWeeklyBanner() {
   }
 }
 
-/** Write the pending week's summary — run from the Dashboard banner or the /weekly page. */
-export async function runPendingWeekly(): Promise<boolean> {
+/**
+ * Write the pending week's summary — run from the Dashboard banner or the /weekly page.
+ * With AI switched on the model writes it; `useAi: false` has the app write it instead
+ * (offered when the model fails).
+ */
+export async function runPendingWeekly(useAi?: boolean): Promise<boolean> {
   const week = weekly.pending;
   if (!week || weekly.generating) return false;
   weekly.generating = true;
   weekly.error = null;
   try {
-    await invoke('generate_weekly_summary', { weekStart: week.week_start });
+    await invoke('generate_weekly_summary', { weekStart: week.week_start, useAi: useAi ?? null });
     await refreshWeeklyBanner();
     return true;
   } catch (e) {

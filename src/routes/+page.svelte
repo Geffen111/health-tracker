@@ -534,7 +534,7 @@
   </div>
 </div>
 
-{#if aiOn('ai_weekly') && weekly.banner && !weekly.banner.seen}
+{#if weekly.banner && !weekly.banner.seen}
   <a href="/weekly" class="weekly-banner">
     <span class="wb-icon">📋</span>
     <span class="wb-text">
@@ -557,7 +557,10 @@
       <span>Week of {formatDate(weekly.pending.week_start)} – {formatDate(weekly.pending.week_end)}. Once Sunday's data is up to date, write it.</span>
       {#if weekly.error}<span class="wb-error">{weekly.error}</span>{/if}
     </span>
-    <button class="wb-btn" onclick={runPendingWeekly}>Write summary</button>
+    {#if weekly.error && aiOn('ai_weekly')}
+      <button class="wb-btn ghost" onclick={() => runPendingWeekly(false)} title="The app writes a plainer summary from the same numbers">Write it without AI</button>
+    {/if}
+    <button class="wb-btn" onclick={() => runPendingWeekly()}>{weekly.error ? 'Try again' : 'Write summary'}</button>
   </div>
 {/if}
 
@@ -881,6 +884,7 @@
   a.weekly-banner:hover { filter: brightness(0.97); }
   .weekly-banner.is-pending { background: var(--card); border-color: var(--border); color: var(--ts); }
   .wb-error { color: var(--red-fg); }
+  .wb-btn.ghost { background: var(--card); color: var(--ts); border: 1px solid var(--border); }
   .wb-btn { background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 9px 16px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 
   .header-actions {

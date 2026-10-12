@@ -5,11 +5,14 @@
   import { weekly, refreshWeeklyBanner, markWeeklySeen, runPendingWeekly } from '$lib/stores/weekly.svelte';
   import { showToast } from '$lib/stores/toast.svelte';
   import { formatDate, todayISO, shiftISO } from '$lib/formatDate';
+  import { aiOn } from '$lib/stores/features.svelte';
 
   let summaries = $state<any[]>([]);
   let loading = $state(true);
   let busy = $state(false);
   let error = $state<string | null>(null);
+  // The week that last failed, so "Write it without AI" can retry that same week.
+  let failedWeek = $state<string | null>(null);
 
   const latest = $derived(summaries[0] ?? null);
   const older = $derived(summaries.slice(1));
@@ -36,24 +39,27 @@
     }
   }
 
-  async function generate(weekStart: string) {
+  // With AI switched on the model writes it; `useAi: false` has the app write it instead.
+  async function generate(weekStart: string, useAi?: boolean) {
     if (busy) return;
     busy = true;
     error = null;
+    failedWeek = null;
     try {
-      await invoke('generate_weekly_summary', { weekStart });
+      await invoke('generate_weekly_summary', { weekStart, useAi: useAi ?? null });
       await load();
       await refreshWeeklyBanner();
       showToast('Weekly summary ready');
     } catch (e) {
       error = String(e);
+      failedWeek = weekStart;
     } finally {
       busy = false;
     }
   }
 
-  async function writePending() {
-    if (await runPendingWeekly()) {
+  async function writePending(useAi?: boolean) {
+    if (await runPendingWeekly(useAi)) {
       await load();
       showToast('Weekly summary ready');
     }
@@ -86,7 +92,12 @@
 </div>
 
 {#if error}
-  <p class="error">{error}</p>
+  <p class="error">
+    {error}
+    {#if failedWeek && aiOn('ai_weekly')}
+      <button class="ghost-btn inline" onclick={() => generate(failedWeek!, false)} disabled={busy}>Write it without AI</button>
+    {/if}
+  </p>
 {/if}
 
 {#if weekly.pending && !loading && latest}
@@ -96,7 +107,10 @@
       hasn't been written up yet. Once Sunday's data is up to date, write it.
       {#if weekly.error}<span class="pending-error">{weekly.error}</span>{/if}
     </span>
-    <button class="primary-btn" onclick={writePending} disabled={weekly.generating || busy}>
+    {#if weekly.error && aiOn('ai_weekly')}
+      <button class="ghost-btn" onclick={() => writePending(false)} disabled={weekly.generating || busy}>Write it without AI</button>
+    {/if}
+    <button class="primary-btn" onclick={() => writePending()} disabled={weekly.generating || busy}>
       {weekly.generating ? 'Writing…' : 'Write summary'}
     </button>
   </div>
@@ -131,7 +145,7 @@
     {#if weekly.generating || busy}
       <p>Writing last week's summary… this takes about half a minute.</p>
     {:else}
-      <p>No summary yet. After each week ends the Dashboard offers to write one — run it once Sunday's data is in. Needs an OpenRouter key in Settings.</p>
+      <p>No summary yet. After each week ends the Dashboard offers to write one — run it once Sunday's data is in.{#if !aiOn('ai_weekly')} The app writes it from your figures; switch on AI under Settings → Advanced for a written-up version.{/if}</p>
       <button class="primary-btn" onclick={() => generate(lastFullWeekStart())} disabled={busy}>Write last week's summary now</button>
     {/if}
   </div>
@@ -150,6 +164,7 @@
   .pending > span { flex: 1; line-height: 1.5; }
   .pending strong { color: var(--tp); }
   .pending-error { display: block; color: var(--red-fg); }
+  .ghost-btn.inline { margin-left: 10px; padding: 4px 12px; font-size: 12px; }
   .error { background: var(--red-soft); color: var(--red-fg); border-radius: 12px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
   .empty { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 36px; text-align: center; color: var(--ts); font-size: 14px; display: flex; flex-direction: column; gap: 16px; align-items: center; }
   .empty p { margin: 0; max-width: 520px; line-height: 1.6; }
