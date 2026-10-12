@@ -902,7 +902,7 @@ Data:
 }
 
 async fn call_model(api_key: &str, m: &WeekMetrics) -> Result<Narrative, String> {
-    let content = call_openrouter(api_key, &build_prompt(m), 0.3, 6000).await?;
+    let content = call_openrouter(api_key, &build_prompt(m), 0.3, 10000).await?;
     let cleaned = strip_code_fences(&content);
     serde_json::from_str(cleaned).map_err(|e| format!("Failed to parse AI response: {} - {}", e, cleaned))
 }

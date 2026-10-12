@@ -22,22 +22,33 @@ fn reasoning_budget(max_tokens: u32) -> u32 {
     (max_tokens / 2).clamp(128, 1500)
 }
 
+/// Reasoning allowance for the retry after a reply ran out of budget: as little as the
+/// API accepts, so the doubled budget goes to the answer.
+const RETRY_REASONING: u32 = 256;
+
 /// POST a single-prompt chat completion to OpenRouter and return the message text.
 /// Uses the model chosen in Settings, falling back to [`MODEL`].
+///
+/// Some models (or the provider OpenRouter routes them to) ignore the reasoning cap and
+/// think until `max_tokens` runs out, returning no answer at all. That gets one retry with
+/// twice the budget and a minimal reasoning allowance before it's reported.
 pub async fn call_openrouter(
     api_key: &str,
     prompt: &str,
     temperature: f64,
     max_tokens: u32,
 ) -> Result<String, String> {
-    let body = serde_json::json!({
+    let body = |max: u32, reasoning: u32| serde_json::json!({
         "model": crate::commands::settings::model(),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
-        "max_tokens": max_tokens,
-        "reasoning": {"max_tokens": reasoning_budget(max_tokens)},
+        "max_tokens": max,
+        "reasoning": {"max_tokens": reasoning},
     });
-    post(api_key, &body).await
+    match post(api_key, &body(max_tokens, reasoning_budget(max_tokens))).await {
+        Err(e) if e == OUT_OF_BUDGET => post(api_key, &body(max_tokens * 2, RETRY_REASONING)).await,
+        r => r,
+    }
 }
 
 /// A prompt plus one image (a `data:` URL), sent to the vision model from Settings.
@@ -60,7 +71,15 @@ pub async fn call_openrouter_vision(
         "max_tokens": max_tokens,
         "reasoning": {"max_tokens": reasoning_budget(max_tokens)},
     });
-    post(api_key, &body).await
+    match post(api_key, &body).await {
+        Err(e) if e == OUT_OF_BUDGET => {
+            let mut retry = body.clone();
+            retry["max_tokens"] = serde_json::json!(max_tokens * 2);
+            retry["reasoning"] = serde_json::json!({ "max_tokens": RETRY_REASONING });
+            post(api_key, &retry).await
+        }
+        r => r,
+    }
 }
 
 async fn post(api_key: &str, body: &serde_json::Value) -> Result<String, String> {
@@ -125,13 +144,15 @@ fn interpret_response(text: &str) -> Result<String, String> {
     }
 }
 
-/// Explain an empty reply in terms the Ask screen can show the user directly.
+/// An empty reply cut off by `max_tokens` — the one failure `call_openrouter` retries.
+const OUT_OF_BUDGET: &str = "The model used its whole token budget thinking and never wrote an answer, \
+     even after a retry with more room. Try again, or choose a different model in \
+     Settings → Advanced → AI features.";
+
+/// Explain an empty reply in terms any AI screen can show the user directly.
 fn no_content_message(finish_reason: Option<&str>) -> String {
     match finish_reason {
-        Some("length") => {
-            "The model used its whole token budget before writing an answer.              Try a simpler or more specific question."
-                .to_string()
-        }
+        Some("length") => OUT_OF_BUDGET.to_string(),
         Some("content_filter") => "The provider blocked this request.".to_string(),
         Some(other) => format!("The model returned no answer (finish reason: {}).", other),
         None => "The model returned no answer.".to_string(),
