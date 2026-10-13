@@ -40,7 +40,7 @@ pnpm tauri dev
 
 ## Backend layout (`src-tauri/src/commands/`)
 `daily_log`, `medications` (+ dose logging, day note), `blood_pressure`, `activity`, `pacing`
-(descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups), `food_tags` (categories/flags, AI tagging, merge/split clean-ups),
+(descriptive activity/exertion history), `dashboard`, `food` (food & drink log, groups), `food_tags` (categories/flags, AI tagging, merge/split clean-ups), `food_dataset` (built-in food list for tagging without AI, `food_dataset.tsv`),
 `exposures` (exposures of note + photo attachments), `weekly` (Monday-to-Sunday summaries; `weekly_text` writes the words without AI), `health_notes` (dated appointment/test
 notes + `get_timeline_events`, the merged event list for the dashboard Timeline), `import_xlsx` (one-time spreadsheet
 import via calamine). Register new commands in `src-tauri/src/lib.rs`.
@@ -111,9 +111,11 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   own flag — use `aiOn('ai_…')` in the UI and `features::ai(|f| f.ai_…)` in Rust for anything that
   runs unasked (food tagging, the weekly pending check). A new page/feature that is specific to one
   setup or calls a model needs a switch. There is no default vault path any more.
-- **Food tags: the AI tags, the person owns.** `foods.tag_source` is NULL (untagged), 'ai' or
-  'user'. `tag_untagged` only ever touches NULL rows (after an item is created, on Tidy up, and
-  before each weekly summary), so a hand edit is never overwritten. Clean-ups (merge/rename/split)
+- **Food tags: the tagger tags, the person owns.** `foods.tag_source` is NULL (untagged), 'ai',
+  'dataset' (built-in list, used when the AI tagger is off) or 'user'. `tag_untagged` only ever
+  touches NULL rows (on item create, Food page open, Tidy up, before each weekly summary), so a
+  hand edit is never overwritten. The list matches whole words with plurals folded; category from
+  the head of the name (before " - "/"with", last food named), flags unioned, modifiers add/remove. Clean-ups (merge/rename/split)
   rewrite `food_log`, so the model only suggests them and each is applied on accept.
   No FK enforcement in this DB: deleting a food/flag/category clears its link rows by hand.
 - **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,

@@ -1,0 +1,212 @@
+# Built-in food list for tagging without AI (food_dataset.rs).
+#
+# One line per food:  category | flags | name;alias;alias
+#   category codes: fr Fruit, veg Vegetables, gr Grains & bread, da Dairy, mf Meat & fish,
+#     eg Eggs, le Legumes, nu Nuts & seeds, me Meals & dishes, sn Snacks & sweets,
+#     sa Sauces & spreads, hd Hot drinks, cd Cold drinks, al Alcohol,
+#     -  = a modifier word: adds (or with "-X" removes) flags, never sets the category.
+#   flag codes: G Gluten, D Dairy, H High-histamine, C Caffeine, A Alcohol, S Added sugar,
+#     F High-FODMAP, P Protein, B High-fiber, K High-carb
+#
+# Flags describe the food as usually made and eaten; they're approximate. High-histamine
+# and High-FODMAP lists disagree with each other, and serving size matters for FODMAPs —
+# these follow the commonly cited ones (SIGHI-style histamine list, Monash FODMAP) and are
+# meant to be corrected per item. Names are matched as whole words, plurals folded.
+
+# ── Grains & bread ──
+gr|G K|bread;white bread;sandwich bread;bread roll;roll;bun;baguette;loaf
+gr|G K B|wholemeal bread;wholegrain bread;multigrain bread;brown bread;rye bread;seeded bread
+gr|G K|sourdough;sourdough bread
+gr|G K|toast
+gr|G K|bagel;english muffin;crumpet;pita;pita bread;lebanese bread;naan;flatbread;focaccia
+gr|G D K|croissant;brioche;scone
+gr|G K|wrap;flour tortilla;tortilla
+gr|K|corn tortilla;taco shell
+gr|G K|cracker;crispbread;water cracker;rice cracker
+gr|K|rice cake;rice cracker plain
+gr|B K|oat;oats;rolled oat;porridge;oatmeal
+gr|G B K S|muesli;granola;bircher
+gr|G B K|wheat biscuit;weet bix;weetbix;bran flake;all bran;shredded wheat
+gr|K S|cornflake;corn flake;rice bubble;coco pop;frosties;cereal
+gr|G K F|pasta;spaghetti;penne;fusilli;macaroni;linguine;fettuccine;lasagne sheet
+gr|G K|noodle;egg noodle;udon;ramen noodle
+gr|K|rice noodle;vermicelli;glass noodle
+gr|K|rice;white rice;jasmine rice;basmati rice;sushi rice
+gr|K B|brown rice;wild rice
+gr|P B K|quinoa
+gr|G K F|couscous;cous cous;bulgur;freekeh
+gr|G K|flour;plain flour;self raising flour;bread crumb;breadcrumb;panko
+gr|G D K|pancake;pikelet;waffle;crepe
+gr|G K|pastry;puff pastry;shortcrust pastry;filo
+gr|K|polenta;cornmeal
+
+# ── Dairy ──
+da|D P F|milk;cow milk;full cream milk;whole milk;skim milk;low fat milk;light milk;trim milk
+da|D P|lactose free milk
+da|D P H|cheese;cheddar;tasty cheese;colby;edam;gouda;swiss cheese;blue cheese;brie;camembert;halloumi;haloumi;manchego
+da|D P H|parmesan;parmigiano;pecorino;grana padano
+da|D P|mozzarella;bocconcini;ricotta;cottage cheese;paneer
+da|D P H|feta
+da|D F|cream cheese;mascarpone
+da|D P F H|yoghurt;yogurt;greek yoghurt;greek yogurt;natural yoghurt
+da|D P H|kefir
+da|D|butter;dairy spread;spreadable butter
+da|D|cream;thickened cream;double cream;whipped cream
+da|D H|sour cream;creme fraiche
+da|D S F K|ice cream;gelato;frozen yoghurt
+da|D S K|custard
+cd|K|oat milk
+cd|P|soy milk
+cd||almond milk;rice milk;coconut milk drink
+
+# ── Meat & fish ──
+mf|P|chicken;chicken breast;chicken thigh;roast chicken;turkey;duck
+mf|P|beef;steak;mince;beef mince;roast beef;lamb;lamb chop;pork;pork chop;veal;kangaroo;venison
+mf|P H|bacon;ham;salami;pepperoni;prosciutto;chorizo;pastrami;deli meat;cold meat;smallgood;jerky;corned beef;spam
+mf|P H|sausage;snag;frankfurt;frankfurter;hot dog sausage;cabanossi;cabana;kransky;bratwurst
+mf|P G K|chicken nugget;nugget;chicken tender;schnitzel;crumbed chicken;fish finger;crumbed fish;battered fish
+mf|P|fish;white fish;salmon;cod;barramundi;snapper;flathead;hoki;trout;whiting;tilapia
+mf|P H|smoked salmon;tuna;canned tuna;tinned tuna;sardine;anchovy;mackerel;herring;smoked fish;canned salmon
+mf|P H|prawn;shrimp;crab;lobster;mussel;oyster;scallop;squid;calamari;octopus;seafood
+mf|P|meatball;rissole;burger patty;patty
+
+# ── Eggs ──
+eg|P|egg;eggs;boiled egg;poached egg;fried egg;scrambled egg;scrambled eggs;egg white
+eg|P D|omelette;omelet;frittata
+
+# ── Legumes ──
+le|P B K F S|baked bean
+le|P B K F|chickpea;lentil;red lentil;kidney bean;black bean;cannellini bean;borlotti bean;butter bean;bean;pinto bean;refried bean;dal;dhal;split pea
+le|P B F|hummus;houmous
+le|P|tofu;firm tofu;silken tofu
+le|P H|tempeh;miso;natto
+le|P B|edamame;soybean
+
+# ── Nuts & seeds ──
+nu|P B|almond;brazil nut;hazelnut;macadamia;pecan;pine nut;mixed nut;nut
+nu|P F|cashew;pistachio
+nu|P H|peanut;walnut;peanut butter;almond butter;cashew butter
+nu|B|chia;chia seed;flaxseed;linseed;sunflower seed;pumpkin seed;pepita;sesame seed;seed;lsa;tahini
+
+# ── Fruit ──
+fr|F B|apple;green apple;red apple;pear;nashi
+fr|K|banana
+fr|H|orange;mandarin;lemon;lime;grapefruit;tangerine;clementine
+fr|H|strawberry;pineapple;kiwi;kiwi fruit;kiwifruit;papaya;pawpaw
+fr||blueberry;raspberry;grape;rockmelon;cantaloupe;honeydew;passionfruit;dragon fruit;lychee
+fr|F|mango;peach;nectarine;plum;apricot;cherry;watermelon;persimmon;fig;blackberry
+fr|H F B|avocado
+fr|F K|sultana;raisin;date;medjool date;dried fruit;prune;dried apricot;currant;cranberry dried
+fr|B|coconut;desiccated coconut
+fr||fruit;fruit salad;berry;mixed berry
+
+# ── Vegetables ──
+veg|H|tomato;cherry tomato;tinned tomato;canned tomato;sun dried tomato
+veg|H|spinach;baby spinach;eggplant;aubergine
+veg||lettuce;cos;iceberg;rocket;cucumber;carrot;capsicum;bell pepper;zucchini;courgette;pumpkin;butternut;squash;bok choy;pak choy;silverbeet;radish;bean sprout;sprout;herb;parsley;coriander;basil;chive;olive
+veg|K|potato;mashed potato;roast potato;jacket potato
+veg|K B|sweet potato;kumara;corn;sweetcorn;corn on the cob
+veg|B|broccoli;broccolini;cabbage;red cabbage;kale;brussels sprout;green bean;bean green;snow pea;sugar snap pea;pea;peas;carrot stick
+veg|F B|cauliflower;artichoke;asparagus;leek;celery;beetroot;beet
+veg|F|onion;red onion;spring onion bulb;shallot;garlic;mushroom;button mushroom
+veg|H|sauerkraut;kimchi;pickle;gherkin;pickled onion
+veg||salad;green salad;garden salad;mixed leaves;side salad;vegetable;veg;mixed vegetable;stir fry vegetable
+veg|D S|coleslaw
+
+# ── Meals & dishes ──
+me|G D H K|pizza
+me|G D H K P|lasagne;lasagna
+me|G H K P F|spaghetti bolognese;bolognese;spag bol
+me|G D K P|macaroni cheese;mac and cheese;mac n cheese;mornay;tuna mornay;pasta bake
+me|K P|curry;chicken curry;beef curry;butter chicken;korma;tikka masala;green curry;red curry;massaman
+me|K P|fried rice;nasi goreng;risotto;paella
+me|K P|stir fry;stirfry
+me|G H K|ramen;pho;laksa
+me|G K P|dumpling;gyoza;dim sum;dim sim;bao;spring roll
+me|K P H|sushi;sashimi;poke bowl;poke
+me|G K P|burger;hamburger;cheeseburger;chicken burger;quarter pounder;big mac;whopper
+me|G K P|sandwich;toastie;toasted sandwich;sub;roll filled;banh mi
+me|G K P D|pie;meat pie;pastie;pasty;sausage roll;quiche
+me|G K P|taco;burrito;quesadilla;enchilada;fajita;nacho
+me|K P B|chilli con carne;chili con carne;chilli
+me|P|roast;roast dinner;casserole;stew;goulash
+me||soup;broth;vegetable soup;pumpkin soup;minestrone
+me|G P K|fish and chip
+me|K|hot chip;chip;fries;french fries;wedge;potato wedge;hash brown;potato gem
+me|K B|sweet potato chip;sweet potato fries
+me|K P|kebab;souvlaki;gyro;shawarma
+me|G K|noodle stir fry;pad thai;chow mein;lo mein
+me|P|salad with chicken;chicken salad;caesar salad
+me|G K P S|chicken nugget meal;fast food;takeaway
+
+# ── Snacks & sweets ──
+sn|D S H K|chocolate;milk chocolate;chocolate bar;peanut butter cup;choc;choc chip;chocolate chip
+sn|S H C|dark chocolate
+sn|G S K|biscuit;cookie;tim tam;shortbread;anzac biscuit;digestive
+sn|G D S K|cake;cupcake;muffin;brownie;slice;donut;doughnut;danish;cheesecake;banana bread;tart;pastry sweet;eclair
+sn|S K|lolly;lollies;candy;gummy;jelly bean;marshmallow;licorice;liquorice
+sn|D S K|fudge;toffee;caramel
+sn|S|jelly
+sn|K|potato chip;crisp;chips packet;corn chip;tortilla chip
+sn|G K|pretzel
+sn|B K|popcorn
+sn|G S K B|muesli bar;granola bar;cereal bar;nut bar
+sn|P S|protein bar;protein ball
+sn|S K|dessert;pudding;sticky date pudding;crumble;trifle;pavlova
+
+# ── Sauces & spreads ──
+sa|S|jam;jelly spread;marmalade;conserve
+sa|S F K|honey;agave
+sa|S K|maple syrup;golden syrup;syrup;sugar;brown sugar;caster sugar;icing sugar
+sa|H G|vegemite;marmite;promite;yeast extract
+sa|D S H|nutella;chocolate spread;hazelnut spread
+sa|S H|tomato sauce;ketchup;bbq sauce;barbecue sauce;sweet chilli sauce;plum sauce;hoisin
+sa|H G|soy sauce;tamari;fish sauce;worcestershire;oyster sauce
+sa|H|vinegar;balsamic;balsamic vinegar;mustard;dijon;relish;chutney;salsa;hot sauce;sriracha;tabasco;adobo;adobo sauce;chipotle
+sa|D H|pesto
+sa|H F|guacamole
+sa||mayonnaise;mayo;aioli;salad dressing;dressing;olive oil;oil;sauce;gravy powder
+sa|G|gravy
+sa|D S|caramel sauce;custard sauce
+sa||salt;pepper;spice;stock;stock cube
+
+# ── Hot drinks ──
+hd|C|coffee;espresso;long black;short black;americano;black coffee;plunger coffee;french press;filter coffee;instant coffee;cold brew;ristretto;doppio
+hd|C D F|flat white;latte;cappuccino;macchiato;piccolo;mocha;cafe latte;cafe flat white
+hd||decaf;decaf coffee;decaffeinated coffee
+hd|C H|tea;black tea;english breakfast;earl grey;green tea;matcha;oolong;breakfast tea
+hd||herbal tea;peppermint tea;chamomile;rooibos;ginger tea;lemon and ginger;fruit tea
+hd|C D S|chai;chai latte
+hd|D S H|hot chocolate;drinking chocolate;cocoa
+hd|D S G|milo;ovaltine
+
+# ── Cold drinks ──
+cd||water;sparkling water;mineral water;soda water;tonic water
+cd|S|juice;fruit juice;apple juice;orange juice;cordial;lemonade;soft drink;soda;fizzy drink;ginger beer;sports drink;gatorade;powerade;iced tea;flavoured water
+cd|C S|cola;coke;pepsi;energy drink;red bull;v energy;monster
+cd|C|diet coke;coke zero;pepsi max;diet cola
+cd|H|kombucha
+cd|D S|milkshake;thick shake;smoothie
+cd|P D|protein shake;protein milk;protein drink;up and go
+cd|C D S|iced coffee;coffee iced;iced latte;bottled coffee;cold coffee;dare iced coffee;dare
+cd||coconut water
+
+# ── Alcohol ──
+al|A G H K|beer;lager;ale;ipa;stout;pale ale;pilsner
+al|A H|wine;red wine;white wine;rose;sparkling wine;champagne;prosecco;cava;port;sherry
+al|A F|cider
+al|A|spirit;vodka;gin;rum;whisky;whiskey;bourbon;tequila;brandy;liqueur
+al|A S|cocktail;mixer;premix;rtd;margarita;mojito;spritz;sangria
+
+# ── Modifiers: add or remove flags, never set the category ──
+-|H|pickled;fermented;smoked;cured;aged;leftover;leftovers;reheated;canned fish;tinned fish
+-|B|wholemeal;wholegrain;whole grain;multigrain;high fibre;high fiber;bran
+-|S|sweetened;sugary;candied;glazed;honey roasted
+-|D|cheesy;creamy;with cheese;with milk
+-|P|protein
+-|G K|crumbed;battered
+-|-G|gluten free;gf
+-|-F|lactose free;low fodmap
+-|-C|decaf;decaffeinated;caffeine free
+-|-S|sugar free;no sugar;no added sugar;diet;zero sugar;unsweetened;zero
+-|-A|alcohol free;non alcoholic;zero alcohol;mocktail

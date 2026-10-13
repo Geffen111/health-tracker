@@ -47,6 +47,8 @@
   onMount(async () => {
     try {
       await Promise.all([loadDefinitions(), loadDay(), loadHistory()]);
+      // Pick up anything still untagged (e.g. logged before tagging existed).
+      if (foods.some((f) => f.tag_source == null)) tagNew();
     } catch (e) {
       console.error('Error loading food data:', e);
     } finally {
@@ -71,8 +73,8 @@
     if (date === selectedDate) { entries = list; recent = range; }
   }
   // Tag newly created items in the background; the list refreshes when the tags land.
+  // With AI off this uses the built-in food list, so it's instant and free.
   function tagNew() {
-    if (!aiOn('ai_food_tags')) return;
     invoke<number>('tag_untagged_foods')
       .then((n) => { if (n) loadDefinitions(); })
       .catch((e) => console.warn('Food tagging failed:', e));
@@ -719,10 +721,10 @@
             {@const cat = categoryName(f.category_id)}
             {@const fl = flagNames(f.flag_ids)}
             {#if cat || fl.length}
-              <span class="item-tags" title={f.tag_source === 'ai' ? 'Tagged by AI. Edit the item to correct it.' : 'Set by you'}>
+              <span class="item-tags" title={f.tag_source === 'ai' ? 'Tagged by AI. Edit the item to correct it.' : f.tag_source === 'dataset' ? 'Tagged from the built-in food list. Edit the item to correct it.' : 'Set by you'}>
                 {#if cat}<span class="item-cat">{cat}</span>{/if}
                 {#each fl as n}<span class="item-flag">{n}</span>{/each}
-                {#if f.tag_source === 'ai'}<span class="ai-mark">AI</span>{/if}
+                {#if f.tag_source === 'ai'}<span class="ai-mark">AI</span>{:else if f.tag_source === 'dataset'}<span class="ai-mark">Auto</span>{/if}
               </span>
             {/if}
           {/if}
@@ -739,9 +741,7 @@
           {#if openMenuId === f.id}
             <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
               <button class="menu-item" role="menuitem" onclick={() => startEdit(f)}>Edit</button>
-              {#if aiOn('ai_food_tags')}
-                <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; retag(f); }}>Re-tag with AI</button>
-              {/if}
+              <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; retag(f); }}>{aiOn('ai_food_tags') ? 'Re-tag with AI' : 'Re-tag from food list'}</button>
               <button class="menu-item" role="menuitem" onclick={() => { openMenuId = null; setActive(f, !f.active); }}>{f.active ? 'Hide' : 'Restore'}</button>
               {#if f.days_logged === 0}
                 <button class="menu-item danger" role="menuitem" onclick={() => { openMenuId = null; removeItem(f); }}>Delete</button>
@@ -1001,7 +1001,7 @@
       </div>
     </div>
     {#if comparison.rows.length === 0}
-      <p class="muted">{cmpBy === 'item' ? 'Items appear' : `A ${cmpBy} appears`} here once logged on at least {MIN_DAYS} days that also have a fatigue rating.{#if cmpBy !== 'item'} Items get flags and categories when they're tagged{#if aiOn('ai_food_tags')} — try <strong>Tidy up</strong>{:else} — set them with <strong>Edit</strong> on each item{/if}.{/if}</p>
+      <p class="muted">{cmpBy === 'item' ? 'Items appear' : `A ${cmpBy} appears`} here once logged on at least {MIN_DAYS} days that also have a fatigue rating.{#if cmpBy !== 'item'} Items get flags and categories when they're tagged{#if aiOn('ai_food_tags')} — try <strong>Tidy up</strong>{:else} — common foods are tagged from the built-in list; set the rest with <strong>Edit</strong>{/if}.{/if}</p>
     {:else}
       <div class="cmp-grid cmp-head">
         <span>{cmpBy === 'item' ? 'Item' : cmpBy === 'flag' ? 'Flag' : 'Category'}</span><span>Days</span><span>Same day</span><span>vs other days</span><span>Day after</span><span>vs other days</span>

@@ -2,13 +2,14 @@
 //!
 //! An item has at most one category ("Dairy") and any number of flags ("Gluten",
 //! "High-histamine"), both picked from lists the person edits on the Food page.
-//! `foods.tag_source` records who set them: the model only tags items that have never
-//! been tagged (NULL), so anything set or corrected by hand ('user') is never overwritten.
+//! `foods.tag_source` records who set them: 'ai' (the model), 'dataset' (the built-in food
+//! list, food_dataset.rs — used when the AI tagger is off) or 'user'. Both taggers only
+//! touch items that have never been tagged (NULL), so a hand correction is never overwritten.
 //!
 //! Clean-ups (merging duplicates, fixing names, splitting "toast and jam") rewrite the log,
 //! so the model only *suggests* them; each is applied when the person accepts it.
 
-use crate::commands::{ai, settings};
+use crate::commands::{ai, food_dataset, settings};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use std::collections::HashMap;
@@ -199,14 +200,51 @@ fn parse_json<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, String> {
     serde_json::from_str(json).map_err(|e| format!("The model's reply couldn't be read: {}", e))
 }
 
-/// Tag every item that has never been tagged. Returns how many were tagged. Without an
-/// API key it does nothing (not an error: tagging is a nicety). Called after an item is
-/// created, by "Tidy up" on the Food page, and before each weekly summary.
+/// Tag from the built-in food list: instant and local. Items it can't place stay untagged.
+async fn tag_from_dataset(pool: &SqlitePool) -> Result<i64, String> {
+    let lower = |rows: Vec<(i64, String)>| -> HashMap<String, i64> {
+        rows.into_iter().map(|(id, n)| (n.to_lowercase(), id)).collect()
+    };
+    // By name, so a renamed or deleted category or flag is simply skipped.
+    let cats = lower(sqlx::query_as("SELECT id, name FROM food_categories").fetch_all(pool).await.map_err(|e| e.to_string())?);
+    let flags = lower(sqlx::query_as("SELECT id, name FROM food_flags").fetch_all(pool).await.map_err(|e| e.to_string())?);
+    let items: Vec<(i64, String)> = sqlx::query_as("SELECT id, name FROM foods WHERE tag_source IS NULL")
+        .fetch_all(pool).await.map_err(|e| e.to_string())?;
+
+    let mut tagged = 0i64;
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    for (id, name) in items {
+        let Some(t) = food_dataset::tag(&name) else { continue };
+        let category = t.category.and_then(|c| cats.get(&c.to_lowercase()).copied());
+        let flag_ids: Vec<i64> = t.flags.iter().filter_map(|f| flags.get(&f.to_lowercase()).copied()).collect();
+        if category.is_none() && flag_ids.is_empty() {
+            continue; // nothing usable (e.g. its category was deleted): leave it for the person
+        }
+        let done = sqlx::query("UPDATE foods SET category_id = ?, tag_source = 'dataset' WHERE id = ? AND tag_source IS NULL")
+            .bind(category).bind(id)
+            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        if done.rows_affected() == 0 {
+            continue;
+        }
+        for fid in flag_ids {
+            sqlx::query("INSERT OR IGNORE INTO food_item_flags (food_id, flag_id) VALUES (?, ?)")
+                .bind(id).bind(fid).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        }
+        tagged += 1;
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(tagged)
+}
+
+/// Tag every item that has never been tagged. Returns how many were tagged. With the AI
+/// tagger switched on (and a key set) the model does it; otherwise the built-in food list.
+/// Called after an item is created, when the Food page opens, by "Tidy up", and before
+/// each weekly summary.
 pub async fn tag_untagged(pool: &SqlitePool) -> Result<i64, String> {
     if !crate::commands::features::ai(|f| f.ai_food_tags) {
-        return Ok(0);
+        return tag_from_dataset(pool).await;
     }
-    let Some(api_key) = settings::get_api_key().await? else { return Ok(0) };
+    let Some(api_key) = settings::get_api_key().await? else { return tag_from_dataset(pool).await };
     if TAGGING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return Ok(0); // a run is already going; it re-queries, so it will pick these up
     }
@@ -269,7 +307,8 @@ pub async fn tag_untagged_foods(pool: State<'_, SqlitePool>) -> Result<i64, Stri
     tag_untagged(&pool).await
 }
 
-/// Hand an item back to the model: clears its tags so the next tagging run redoes them.
+/// Hand an item back to the tagger (the model, or the built-in list when AI is off): clears
+/// its tags and tags it again.
 #[tauri::command]
 pub async fn retag_food(pool: State<'_, SqlitePool>, food_id: i64) -> Result<i64, String> {
     sqlx::query("DELETE FROM food_item_flags WHERE food_id = ?")
@@ -479,6 +518,24 @@ mod tests {
 
     async fn rows(pool: &SqlitePool, sql: &str) -> Vec<(String,)> {
         sqlx::query_as(sql).fetch_all(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn dataset_tags_only_untagged_items() {
+        let pool = pool().await;
+        sqlx::query("INSERT INTO foods (id, name, tag_source) VALUES (10, 'Sausages', NULL), (11, 'Grandma special', NULL), (12, 'Ham', 'user')")
+            .execute(&pool).await.unwrap();
+        let n = tag_from_dataset(&pool).await.unwrap();
+        // Coffee / coffee black / Toast and jam / Jam from the fixture are untagged too.
+        assert!(n >= 2, "tagged {}", n);
+        let row: (Option<String>, String) = sqlx::query_as(
+            "SELECT c.name, f.tag_source FROM foods f LEFT JOIN food_categories c ON c.id = f.category_id WHERE f.id = 10")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(row, (Some("Meat & fish".into()), "dataset".into()));
+        let flags = rows(&pool, "SELECT g.name FROM food_item_flags i JOIN food_flags g ON g.id = i.flag_id WHERE i.food_id = 10 ORDER BY g.name").await;
+        assert_eq!(flags, vec![("High-histamine".into(),), ("Protein".into(),)]);
+        assert_eq!(rows(&pool, "SELECT COALESCE(tag_source, 'none') FROM foods WHERE id = 11").await, vec![("none".into(),)]);
+        assert_eq!(rows(&pool, "SELECT tag_source FROM foods WHERE id = 12").await, vec![("user".into(),)]);
     }
 
     #[tokio::test]

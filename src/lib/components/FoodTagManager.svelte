@@ -75,7 +75,11 @@
   <div class="head">
     <div>
       <div class="card-heading">Categories &amp; flags</div>
-      <div class="card-subtitle">The AI tags new items from these lists. The number is how many items have each one.</div>
+      <div class="card-subtitle">
+        New items are tagged from these lists — by the AI if it's switched on, otherwise from a built-in list of
+        common foods. The number is how many items have each one. Flags are a guide: histamine and FODMAP lists
+        disagree, and portion size matters, so correct any item with <strong>Edit</strong>.
+      </div>
     </div>
     <button class="ghost-btn" onclick={onclose}>Done</button>
   </div>

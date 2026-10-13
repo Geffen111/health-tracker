@@ -10,8 +10,8 @@ export interface Food {
   times_logged: number;
   last_logged: string | null;
   category_id: number | null;
-  /** null = not yet tagged, 'ai' = tagged by the model, 'user' = set by hand. */
-  tag_source: 'ai' | 'user' | null;
+  /** null = not yet tagged; 'ai' = the model, 'dataset' = the built-in food list, 'user' = by hand. */
+  tag_source: 'ai' | 'dataset' | 'user' | null;
   flag_ids: number[];
 }
 

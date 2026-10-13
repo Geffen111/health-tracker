@@ -255,7 +255,8 @@ No separate "lite" branch — switches instead (`commands/features.rs`).
    modules on, Advanced off; an existing install gets everything on.
 3. ✅ **Weekly summary without AI** — `weekly_text.rs` writes headline, overview and sections
    from `WeekMetrics`; the Weekly page and banner show for everyone, AI is an upgrade.
-4. ⏳ Built-in food dataset (category + flags) as a non-AI tagger (`tag_source = 'dataset'`).
+4. ✅ **Built-in food list** — `food_dataset.tsv` (~200 lines, ~900 names) tags new items when
+   the AI tagger is off (`tag_source = 'dataset'`, shown as "Auto"); 95/100 of the real list matched.
 5. ⏳ Sweep for assumptions specific to this log (e.g. the weekly prompt's exertion finding),
    then signed installers, auto-update and a getting-started guide.
 
