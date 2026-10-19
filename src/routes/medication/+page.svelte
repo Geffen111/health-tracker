@@ -9,7 +9,7 @@
   import { confirmAction } from '$lib/stores/confirm.svelte';
   import { menuPosFor, menuStyle, type MenuPos } from '$lib/menuPosition';
   import MedSupply from '$lib/components/MedSupply.svelte';
-  import { daysLeft, supplyLevel } from '$lib/medSupply';
+  import { daysLeft, supplyLevel, scriptDaysLeft, SCRIPT_WARN_DAYS } from '$lib/medSupply';
 
   let medications = $state<any[]>([]);
   let schedule = $state<any[]>([]);            // all schedule items, flat
@@ -664,6 +664,12 @@
               {/if}
               {#if med.active && med.needs_script}
                 <button class="supply-badge script" onclick={() => supplyId = supplyId === med.id ? null : med.id}>New script</button>
+              {:else if med.active && scriptDaysLeft(med) != null && scriptDaysLeft(med)! <= SCRIPT_WARN_DAYS}
+                {@const e = scriptDaysLeft(med)!}
+                <button class="supply-badge {e <= 7 ? 'out' : 'low'}" onclick={() => supplyId = supplyId === med.id ? null : med.id}
+                  title="Script expires {formatDate(med.script_expiry)}">
+                  {e < 0 ? 'Script expired' : `Script ends ${formatDate(med.script_expiry)}`}
+                </button>
               {/if}
               {#if med.active}
                 <div class="dose-buttons">

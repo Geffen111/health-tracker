@@ -86,6 +86,8 @@ pub struct Medication {
     pub supply_warn_days: i64,
     pub script_repeats_left: Option<i64>,
     pub needs_script: bool,
+    /// When the current script expires, YYYY-MM-DD (migration 20240703).
+    pub script_expiry: Option<String>,
 }
 
 /// One script fill / top-up.

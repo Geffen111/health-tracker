@@ -122,6 +122,8 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   less `supply_per_day` per day since, floored at 0: `on_hand_at` in `commands/medications.rs`
   (applies a fill, re-bases when the daily use changes) and `onHandAt` in `$lib/medSupply.ts`
   (the badge). Keep them in step. Opt-in per med (`supply_tracking`); fills in `medication_fills`.
+  `supplyAlerts()` (low/out, new script, `script_expiry` within 30 days) drives the badges and the
+  Dashboard's medication banner.
 - **Signal check correlates anything with anything** (`$lib/components/Relationships.svelte` on
   Pacing). A med is "off" only on a day with *other* doses logged, food only on a day with food
   logged — a day with nothing logged is unknown, not "without". Still descriptive: r, means, n.

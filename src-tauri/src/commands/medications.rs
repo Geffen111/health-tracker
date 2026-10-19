@@ -456,6 +456,14 @@ fn on_hand_at(med: &Medication, day: NaiveDate) -> f64 {
     (count - per_day * days).max(0.0)
 }
 
+/// A blank expiry clears it; anything else must be a real date.
+fn expiry_or_none(d: Option<String>) -> Result<Option<String>, String> {
+    match d.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        Some(s) if parse_day(&s).is_none() => Err(format!("Invalid script expiry date: {s}")),
+        other => Ok(other),
+    }
+}
+
 async fn fetch_med(pool: &SqlitePool, id: i64) -> Result<Medication, String> {
     sqlx::query_as::<_, Medication>("SELECT * FROM medications WHERE id = ?")
         .bind(id)
@@ -475,6 +483,7 @@ pub struct SupplySettings {
     pub warn_days: i64,
     pub repeats_left: Option<i64>,
     pub needs_script: bool,
+    pub script_expiry: Option<String>,
 }
 
 /// Save a medication's supply settings. Changing the daily use re-bases the count at
@@ -497,12 +506,13 @@ pub async fn save_medication_supply(
     sqlx::query(
         "UPDATE medications SET supply_tracking = ?, supply_count = ?, supply_date = ?,
             supply_per_day = ?, supply_box_size = ?, supply_boxes_per_fill = ?,
-            supply_warn_days = ?, script_repeats_left = ?, needs_script = ?
+            supply_warn_days = ?, script_repeats_left = ?, needs_script = ?, script_expiry = ?
          WHERE id = ?",
     )
     .bind(supply.tracking).bind(count).bind(date)
     .bind(supply.per_day).bind(supply.box_size).bind(supply.boxes_per_fill.max(0.0))
     .bind(supply.warn_days.max(0)).bind(supply.repeats_left.map(|r| r.max(0))).bind(supply.needs_script)
+    .bind(expiry_or_none(supply.script_expiry)?)
     .bind(id)
     .execute(&*pool)
     .await
@@ -523,6 +533,7 @@ pub async fn record_medication_fill(
     repeats_left: Option<i64>,
     needs_script: bool,
     box_size: Option<f64>,
+    script_expiry: Option<String>,
     note: Option<String>,
 ) -> Result<Medication, String> {
     let day = parse_day(&fill_date).ok_or("Invalid fill date")?;
@@ -535,11 +546,12 @@ pub async fn record_medication_fill(
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     sqlx::query(
         "UPDATE medications SET supply_tracking = 1, supply_count = ?, supply_date = ?,
-            script_repeats_left = ?, needs_script = ?,
+            script_repeats_left = ?, needs_script = ?, script_expiry = ?,
             supply_box_size = COALESCE(supply_box_size, ?) WHERE id = ?",
     )
     .bind(left + quantity).bind(&fill_date)
     .bind(repeats_left.map(|r| r.max(0))).bind(needs_script)
+    .bind(expiry_or_none(script_expiry)?)
     .bind(box_size.filter(|b| *b > 0.0)).bind(id)
     .execute(&mut *tx)
     .await

@@ -40,6 +40,7 @@
     boxSize: num(med.supply_box_size),
     repeats: repeatsAfter(),
     needsScript: med.script_repeats_left != null ? med.script_repeats_left - 1 <= 0 : !!med.needs_script,
+    expiry: med.script_expiry ?? '',
     note: '',
   })));
   let fillQty = $derived((parse(fill.boxes) ?? 0) * (parse(fill.boxSize) ?? 0));
@@ -59,6 +60,7 @@
         repeatsLeft: fill.repeats.trim() === '' ? null : Math.round(parse(fill.repeats) ?? 0),
         needsScript: fill.needsScript,
         boxSize: parse(fill.boxSize),
+        scriptExpiry: fill.expiry || null,
         note: fill.note || null,
       });
       showToast(`${med.name}: ${fmt(fillQty)} added`);
@@ -79,6 +81,7 @@
     warnDays: num(med.supply_warn_days ?? 7),
     repeats: num(med.script_repeats_left),
     needsScript: !!med.needs_script,
+    expiry: med.script_expiry ?? '',
   })));
   const onHandStart = set.onHand;
 
@@ -92,6 +95,7 @@
       warn_days: Math.round(parse(set.warnDays) ?? 7),
       repeats_left: set.repeats.trim() === '' ? null : Math.round(parse(set.repeats) ?? 0),
       needs_script: set.needsScript,
+      script_expiry: set.expiry || null,
     };
   }
 
@@ -150,6 +154,7 @@
     <div class="row">
       <label>Repeats left after this <input class="n" bind:value={fill.repeats} oninput={onRepeatsInput} placeholder="—" inputmode="numeric" /></label>
       <label class="check"><input type="checkbox" bind:checked={fill.needsScript} /> Need a new script</label>
+      <label>Script expires <input type="date" bind:value={fill.expiry} /></label>
       <input class="note" bind:value={fill.note} placeholder="Note (optional)" />
     </div>
     <div class="row end">
@@ -175,6 +180,9 @@
     <div class="row">
       <label>Repeats left <input class="n" bind:value={set.repeats} placeholder="—" inputmode="numeric" /></label>
       <label class="check"><input type="checkbox" bind:checked={set.needsScript} /> Need a new script</label>
+      <label>Script expires <input type="date" bind:value={set.expiry} /></label>
+    </div>
+    <div class="row">
       <label>Warn at <input class="n" bind:value={set.warnDays} inputmode="numeric" /> days left</label>
     </div>
     <div class="row end">

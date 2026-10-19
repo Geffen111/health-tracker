@@ -35,6 +35,48 @@ export function supplyLevel(med: any): 'out' | 'low' | 'ok' {
   return d <= (med.supply_warn_days ?? 7) ? 'low' : 'ok';
 }
 
+/** How long before a script's expiry it's flagged. */
+export const SCRIPT_WARN_DAYS = 30;
+
+/** Days until the script expires (negative once it has), or null when no expiry is set. */
+export function scriptDaysLeft(med: any): number | null {
+  return med?.script_expiry ? daysBetween(todayISO(), med.script_expiry) : null;
+}
+
+export interface SupplyAlert {
+  med: any;
+  level: 'out' | 'low';
+  text: string;
+}
+
+/**
+ * What needs doing for one active medication: running out, a new script needed, or the
+ * script expiring soon. The Medication page badges and the Dashboard banner both use it.
+ */
+export function supplyAlerts(med: any): SupplyAlert[] {
+  if (!med?.active) return [];
+  const out: SupplyAlert[] = [];
+  if (med.supply_tracking) {
+    const d = daysLeft(med);
+    const lvl = supplyLevel(med);
+    if (d != null && lvl !== 'ok') {
+      out.push({ med, level: lvl, text: d <= 0 ? 'run out' : `${d} day${d === 1 ? '' : 's'} left` });
+    }
+  }
+  // Flagged early it's a reminder; with the supply also low it's urgent.
+  if (med.needs_script) {
+    out.push({ med, level: med.supply_tracking && supplyLevel(med) !== 'ok' ? 'out' : 'low', text: 'new script needed' });
+  }
+  const e = scriptDaysLeft(med);
+  if (e != null && !med.needs_script && e <= SCRIPT_WARN_DAYS) {
+    out.push({
+      med, level: e <= 7 ? 'out' : 'low',
+      text: e < 0 ? 'script expired' : e === 0 ? 'script expires today' : `script expires in ${e} day${e === 1 ? '' : 's'}`,
+    });
+  }
+  return out;
+}
+
 /** Tablets added by a usual fill: boxes x box size, or null without a box size. */
 export function usualFill(med: any): number | null {
   return med?.supply_box_size ? med.supply_box_size * (med.supply_boxes_per_fill ?? 1) : null;

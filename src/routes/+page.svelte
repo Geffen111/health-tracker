@@ -7,7 +7,8 @@
   import Chart from '$lib/Chart.svelte';
   import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { weekly, runPendingWeekly } from '$lib/stores/weekly.svelte';
-  import { aiOn } from '$lib/stores/features.svelte';
+  import { aiOn, features } from '$lib/stores/features.svelte';
+  import { supplyAlerts, type SupplyAlert } from '$lib/medSupply';
   import { resolveCSSVar } from '$lib/chartTheme';
   import { theme } from '$lib/stores/theme.svelte';
 
@@ -55,8 +56,15 @@
     Object.fromEntries(MARKERS.map((m) => [m.key, saved.shownMarkers?.[m.key] !== false]))
   );
   let events = $state<any[]>([]);
+  // Medications running low, needing a new script, or with a script about to expire.
+  let medAlerts = $state<SupplyAlert[]>([]);
 
   onMount(async () => {
+    if (features.medication) {
+      invoke<any[]>('list_medications')
+        .then((meds) => { medAlerts = meds.flatMap(supplyAlerts); })
+        .catch(() => {});
+    }
     try {
       const [s, log, loads] = await Promise.all([
         invoke<any>('get_dashboard_summary'),
@@ -564,6 +572,20 @@
   </div>
 {/if}
 
+{#if medAlerts.length}
+  {@const urgent = medAlerts.some((a) => a.level === 'out')}
+  <a href="/medication" class="weekly-banner med-banner" class:urgent>
+    <span class="wb-icon">💊</span>
+    <span class="wb-text">
+      <strong>{urgent ? 'Medication needs sorting' : 'Medication running low'}</strong>
+      <span>
+        {#each medAlerts as a, i}{i ? ' · ' : ''}<span class:wb-error={a.level === 'out'}>{a.med.name}: {a.text}</span>{/each}
+      </span>
+    </span>
+    <span class="wb-go">Medication →</span>
+  </a>
+{/if}
+
 {#if loading}
   <p class="loading-text">Loading...</p>
 {:else if summary}
@@ -884,6 +906,8 @@
   a.weekly-banner:hover { filter: brightness(0.97); }
   .weekly-banner.is-pending { background: var(--card); border-color: var(--border); color: var(--ts); }
   .wb-error { color: var(--red-fg); }
+  .med-banner { background: var(--amber-soft); border-color: var(--amber); color: var(--amber-fg); }
+  .med-banner.urgent { background: var(--red-soft); border-color: var(--red); color: var(--red-fg); }
   .wb-btn.ghost { background: var(--card); color: var(--ts); border: 1px solid var(--border); }
   .wb-btn { background: var(--accent); color: #fff; border: none; border-radius: 999px; padding: 9px 16px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 
