@@ -6,6 +6,7 @@
   import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { exportChartPng } from '$lib/chartExport';
   import { showToast } from '$lib/stores/toast.svelte';
+  import Relationships from '$lib/components/Relationships.svelte';
 
   // This page replaced the PEM Model screen. It predicts nothing: the old risk score
   // and next-day fatigue estimate scored no better than a constant (see migration
@@ -43,7 +44,7 @@
     try {
       [rows, logs, foodItems, foodDays, foodCategories, foodFlags] = await Promise.all([
         invoke<ActivityRow[]>('get_activity_history', { from: null }),
-        invoke<any[]>('list_daily_logs', { limit: 500, offset: 0 }),
+        invoke<any[]>('list_daily_logs', { limit: 100000, offset: 0 }),
         invoke<FoodItem[]>('list_foods'),
         invoke<FoodDay[]>('get_food_days'),
         invoke<FoodTag[]>('list_food_categories'),
@@ -409,59 +410,6 @@
     return `${d > 0 ? '+' : ''}${d.toFixed(1)} vs the week before`;
   }
 
-  // ── Signal check ──
-  // The honest version of what the old model claimed. Recomputed from the live data
-  // every time the page opens, so it stays true as the log grows.
-  function pearson(xs: number[], ys: number[]): number | null {
-    const n = xs.length;
-    if (n < 10) return null;
-    const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
-    let num = 0, dx = 0, dy = 0;
-    for (let i = 0; i < n; i++) {
-      num += (xs[i] - mx) * (ys[i] - my);
-      dx += (xs[i] - mx) ** 2;
-      dy += (ys[i] - my) ** 2;
-    }
-    return dx && dy ? num / Math.sqrt(dx * dy) : null;
-  }
-
-  interface Signal { label: string; r: number | null; n: number }
-  let signals = $derived.by(() => {
-    // One pair per day that has both logged activity and a fatigue score the next day.
-    const pairs: { day: string; next: number }[] = [];
-    for (const [date] of dayAgg) {
-      const next = fatigueByDate.get(shiftISO(date, 1));
-      if (next != null) pairs.push({ day: date, next });
-    }
-    const logByDate = new Map(logs.map((l) => [l.log_date, l]));
-    const feature = (label: string, f: (day: string) => number | null | undefined): Signal => {
-      const xs: number[] = [], ys: number[] = [];
-      for (const p of pairs) {
-        const v = f(p.day);
-        if (v != null) { xs.push(v); ys.push(p.next); }
-      }
-      return { label, r: pearson(xs, ys), n: xs.length };
-    };
-    return [
-      feature("That day's fatigue", (d) => fatigueByDate.get(d)),
-      feature('Activity hours', (d) => dayAgg.get(d)?.hours),
-      feature('Activity load', (d) => dayAgg.get(d)?.load),
-      feature('High-energy hours', (d) => dayAgg.get(d)?.high),
-      feature('Steps', (d) => logByDate.get(d)?.steps),
-      feature('Sleep', (d) => logByDate.get(d)?.sleep_avg ?? logByDate.get(d)?.my_sleep_rating),
-      feature('Work hours', (d) => (logByDate.get(d)?.office_hours ?? 0) + (logByDate.get(d)?.wfh_hours ?? 0)),
-    ].sort((a, b) => Math.abs(b.r ?? 0) - Math.abs(a.r ?? 0));
-  });
-
-  function strength(r: number | null): { text: string; color: string } {
-    if (r == null) return { text: 'not enough data', color: 'var(--tm)' };
-    const a = Math.abs(r);
-    if (a < 0.15) return { text: 'no signal', color: 'var(--tm)' };
-    if (a < 0.3) return { text: 'very weak', color: 'var(--ts)' };
-    if (a < 0.5) return { text: 'weak', color: 'var(--amber-fg)' };
-    return { text: 'moderate', color: 'var(--accent-fg)' };
-  }
-
   // ── Recent days table ──
   let recentDays = $derived(
     [...logs]
@@ -658,38 +606,7 @@
     {/if}
   </div>
 
-  <div class="card">
-    <div class="card-head">
-      <div>
-        <div class="card-heading">Signal check</div>
-        <div class="card-subtitle">
-          How strongly each measure has tracked the <em>next</em> day's fatigue, across your whole log.
-          Recomputed every time this page opens.
-        </div>
-      </div>
-    </div>
-    <div class="signal-grid">
-      {#each signals as s}
-        {@const st = strength(s.r)}
-        <div class="signal-row">
-          <span class="signal-label">{s.label}</span>
-          <div class="signal-bar-track">
-            <div class="signal-bar" style="width:{Math.min(100, Math.abs(s.r ?? 0) * 200)}%;background:{st.color};"></div>
-          </div>
-          <span class="signal-r">{s.r == null ? '—' : (s.r > 0 ? '+' : '') + s.r.toFixed(2)}</span>
-          <span class="signal-strength" style="color:{st.color};">{st.text}</span>
-        </div>
-      {/each}
-    </div>
-    <p class="signal-note">
-      This replaced the old PEM risk score and predicted-fatigue gauge. Measured over 102 day-pairs,
-      that model scored no better than always guessing your average (RMSE 1.88 vs 1.90), never once
-      predicted a good day, and none of its exertion inputs correlated with the next day. Low activity
-      tends to <em>follow</em> a bad day rather than precede one, which is why a load-to-risk formula
-      couldn't work. A weak reading here is not proof that pacing doesn't matter — it means daily
-      totals are too coarse to see it.
-    </p>
-  </div>
+  <Relationships {logs} {dayAgg} {foodItems} {foodDays} {foodCategories} {foodFlags} />
 
   <div class="card">
     <div class="card-heading" style="margin-bottom:12px;">Recent days</div>
@@ -756,15 +673,6 @@
           font-weight:600; color:var(--ts); cursor:pointer; font-family:inherit; }
   .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   .chip.clear { background:transparent; color:var(--accent-fg); font-weight:700; }
-
-  .signal-grid { display:flex; flex-direction:column; gap:9px; }
-  .signal-row { display:grid; grid-template-columns:150px 1fr 52px 92px; align-items:center; gap:12px; }
-  .signal-label { font-size:12.5px; color:var(--tp); font-weight:600; }
-  .signal-bar-track { height:8px; border-radius:999px; background:var(--inset); overflow:hidden; }
-  .signal-bar { height:100%; border-radius:999px; min-width:2px; }
-  .signal-r { font-size:12.5px; color:var(--ts); font-weight:700; font-variant-numeric:tabular-nums; text-align:right; }
-  .signal-strength { font-size:11.5px; font-weight:700; }
-  .signal-note { font-size:12px; color:var(--tm); line-height:1.6; margin:18px 0 0; padding-top:14px; border-top:1px solid var(--border); max-width:80ch; }
 
   .day-row { display:flex; align-items:center; gap:12px; padding:9px 14px; border-radius:8px; }
   .day-row.head { padding:4px 14px; }

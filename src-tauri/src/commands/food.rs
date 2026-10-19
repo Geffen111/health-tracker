@@ -314,6 +314,22 @@ pub async fn add_food_log(
     Ok(())
 }
 
+/// Change when a logged entry was had (blank clears it).
+#[tauri::command]
+pub async fn set_food_log_time(
+    pool: State<'_, SqlitePool>,
+    id: i64,
+    time_taken: Option<String>,
+) -> Result<(), String> {
+    sqlx::query("UPDATE food_log SET time_taken = ? WHERE id = ?")
+        .bind(blank_to_none(time_taken))
+        .bind(id)
+        .execute(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn delete_food_log(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM food_log WHERE id = ?")

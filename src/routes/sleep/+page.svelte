@@ -23,6 +23,10 @@
   // and active calories burned.
   let showFatigue = $state(saved.showFatigue === true);
   let showCalories = $state(saved.showCalories === true);
+  // A 7-day average of whichever sleep metric is plotted.
+  let showMetricAvg = $state(saved.showMetricAvg === true);
+  // Lines switched off from the chart legend (by dataset `key`), so they stay off too.
+  let hiddenSeries = $state<string[]>(Array.isArray(saved.hiddenSeries) ? saved.hiddenSeries.filter((k: unknown) => typeof k === 'string') : []);
 
   onMount(async () => {
     await loadLogs();
@@ -65,7 +69,7 @@
   function nextDay() { goDay(shiftISO(selectedDate, 1)); }
 
   let selectedMetric = $state<string>(typeof saved.selectedMetric === 'string' ? saved.selectedMetric : 'score');
-  $effect(() => rememberView('sleep', { rangeDays, selectedMetric, showFatigue, showCalories }));
+  $effect(() => rememberView('sleep', { rangeDays, selectedMetric, showFatigue, showCalories, showMetricAvg, hiddenSeries }));
 
   function pickMetric(k: string) { selectedMetric = k; }
 
@@ -119,11 +123,14 @@
   // Nulls stay in (spanGaps bridges them) so every value keeps its own date.
   let chartData = $derived(trendLogs.map((l: any) => fieldOf(l, curMetric.field)));
 
-  // Trailing 7-day mean of the fatigue rating, over the whole log so the first days of a
-  // range still average their week. Needs 3 rated days in the window.
-  let fatigueAvg7 = $derived.by(() => {
+  // Trailing 7-day mean of `value`, over the whole log so the first days of a range
+  // still average their week. Needs 3 days with a value in the window.
+  function avg7(value: (l: any) => number | null): (number | null)[] {
     const byDate = new Map<string, number>();
-    for (const l of allLogs) if (l.fatigue_rating != null) byDate.set(l.log_date, l.fatigue_rating);
+    for (const l of allLogs) {
+      const v = value(l);
+      if (v != null) byDate.set(l.log_date, v);
+    }
     return trendLogs.map((l: any) => {
       const vals: number[] = [];
       for (let k = 0; k < 7; k++) {
@@ -132,11 +139,19 @@
       }
       return vals.length >= 3 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
     });
-  });
+  }
+  let fatigueAvg7 = $derived(avg7((l) => l.fatigue_rating ?? null));
+  let metricAvg7 = $derived(avg7((l) => fieldOf(l, curMetric.field)));
+
+  // Legend clicks toggle `hiddenSeries` (remembered) instead of Chart.js's own hidden flag.
+  function toggleSeries(key: string) {
+    hiddenSeries = hiddenSeries.includes(key) ? hiddenSeries.filter((k) => k !== key) : [...hiddenSeries, key];
+  }
 
   let chartDatasets = $derived.by(() => {
     const dense = trendLogs.length > 90;
     const ds: any[] = [{
+      key: 'metric',
       label: curMetric.label,
       data: chartData,
       borderColor: curMetric.color,
@@ -145,8 +160,24 @@
       yAxisID: 'y',
       order: 1,
     }];
+    if (showMetricAvg) {
+      ds.push({
+        key: 'metricAvg',
+        label: `${curMetric.label} (7-day avg)`,
+        data: metricAvg7,
+        borderColor: curMetric.color,
+        backgroundColor: curMetric.color,
+        borderWidth: 2,
+        borderDash: [5, 4],
+        pointRadius: 0,
+        tension: 0.3,
+        yAxisID: 'y',
+        order: 0,
+      });
+    }
     if (showFatigue) {
       ds.push({
+        key: 'fatigue',
         label: 'Fatigue',
         data: trendLogs.map((l: any) => l.fatigue_rating ?? null),
         borderColor: 'var(--red)',
@@ -157,6 +188,7 @@
         order: 2,
       });
       ds.push({
+        key: 'fatigueAvg',
         label: 'Fatigue (7-day avg)',
         data: fatigueAvg7,
         borderColor: 'var(--red)',
@@ -171,6 +203,7 @@
     }
     if (showCalories) {
       ds.push({
+        key: 'calories',
         label: 'Active calories',
         data: trendLogs.map((l: any) => l.activity_calories ?? null),
         borderColor: 'var(--peri)',
@@ -181,6 +214,7 @@
         order: 4,
       });
     }
+    for (const d of ds) d.hidden = hiddenSeries.includes(d.key);
     return ds;
   });
 
@@ -206,7 +240,11 @@
     },
     plugins: {
       legend: {
-        display: showFatigue || showCalories,
+        display: showFatigue || showCalories || showMetricAvg,
+        onClick: (_e: any, item: any, legend: any) => {
+          const key = legend.chart.data.datasets[item.datasetIndex]?.key;
+          if (key) toggleSeries(key);
+        },
         labels: { color: 'var(--ts)', font: { size: 11 }, boxWidth: 10, padding: 12 },
       },
     },
@@ -496,6 +534,7 @@
       <div class="overlay-row">
         <span class="overlay-label">Overlay</span>
         <button class="metric-btn overlay" class:active={showFatigue} onclick={() => showFatigue = !showFatigue} aria-pressed={showFatigue}>Fatigue</button>
+        <button class="metric-btn overlay" class:active={showMetricAvg} onclick={() => showMetricAvg = !showMetricAvg} aria-pressed={showMetricAvg}>7-day avg</button>
         <button class="metric-btn overlay" class:active={showCalories} onclick={() => showCalories = !showCalories} aria-pressed={showCalories}>Calories burned</button>
       </div>
     </div>

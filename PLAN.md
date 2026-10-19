@@ -72,6 +72,7 @@ Pacing view → activity & fatigue history → Dashboard
 | 14 | Food & Drink page (`/food`, items + groups, descriptive fatigue-alongside-food table); Exposures of note on Activity (with photo attachments stored as BLOBs); Medication day note; occasional meds logged as "added"; chart/view settings remembered per page | ✅ Done 2026-09-28 — migrations `20240625`–`20240627` |
 | 15 | Dashboard **Timeline** (was Compare signals): 30D–All ranges, 7-day average toggle, calories instead of steps, event strip of medication changes / exposures / health notes with hover detail and per-type toggles; **Health notes** on Activity (appointment / test / other); medical entries from the Obsidian Health-Records Timeline seeded once | ✅ Done 2026-10-02 — migration `20240629`. 2026-10-03: one strip row per marker type; "Hide from timeline" on exposures, health notes and medication history (migration `20240630`). Markers show headings only and click through to their page/day; date picker on every day-arrow page |
 | 15 | Food & drink chart on Pacing; meal-photo recognition on the Food page (OpenRouter vision model, suggestions only — nothing logged until picked); native controls follow the dark theme (`color-scheme`) | ✅ Done 2026-09-28 |
+| 17 | Sleep chart: 7-day average of the plotted metric, legend toggles remembered; Food: time row before logging a recent meal, editable time on any logged entry, date picker on the right; Medication **supply & scripts** (opt-in "x days left" badge, "Script filled" adds boxes x box size, repeats left + new-script flag, fill list with undo); Pacing **Signal check** generalised to any measure vs any other (same/next day, meds and food flags as on/off days) | ✅ Done 2026-10-19 — migration `20240702` |
 | 16 | Weekly summary (`/weekly`) — Rust computes the week's figures against an 8-week baseline, the model writes them up; generated on the first launch after a week ends, Dashboard banner + sidebar dot, older weeks collapsed | ✅ Done 2026-10-01 — migration `20240628`, `commands/weekly.rs` |
 
 **AI integration (Phase 10):** OpenRouter (`deepseek/deepseek-v4-flash`), mirroring Family
@@ -208,7 +209,12 @@ The `/pem-model` route became `/pacing`:
   chosen few (e.g. Yard Work + Walking).
 - **Fatigue over time** — daily rating plus a 7-day rolling average.
 - **Signal check** — the correlations above, recomputed live from the log each time the page
-  opens, so the honesty survives as the data grows.
+  opens, so the honesty survives as the data grows. Since 2026-10-19
+  (`$lib/components/Relationships.svelte`) any numeric measure can be the outcome (deep sleep,
+  resting HR, BP…), same day or next day; medications (a day with a dose logged vs a day with
+  other doses but not this one) and food flags/categories are on/off days, shown as the
+  outcome's mean with vs without (>= 5 days each side). Click a row for a scatter, or the
+  outcome over time with the "on" days shaded.
 - **Recent days** — 14 days of fatigue, hours, high-energy hours, steps and longest activity.
 
 Dashboard: the risk gauge now shows today's *logged* fatigue; recovery debt became

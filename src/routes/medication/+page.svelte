@@ -8,6 +8,8 @@
   import { showToast } from '$lib/stores/toast.svelte';
   import { confirmAction } from '$lib/stores/confirm.svelte';
   import { menuPosFor, menuStyle, type MenuPos } from '$lib/menuPosition';
+  import MedSupply from '$lib/components/MedSupply.svelte';
+  import { daysLeft, supplyLevel } from '$lib/medSupply';
 
   let medications = $state<any[]>([]);
   let schedule = $state<any[]>([]);            // all schedule items, flat
@@ -85,6 +87,9 @@
   // Schedule slot editing.
   let manageScheduleId = $state<number | null>(null);
   let newSlot = $state({ label: '', dose_amount: '', time_of_day: '', bulk_routine: null as string | null });
+
+  // Supply & scripts panel (days-left counter, script fills), keyed by medication id.
+  let supplyId = $state<number | null>(null);
 
   // Per-row actions (edit / pause / delete) live in a 3-dot menu so each med fits
   // on a single condensed row. Only one menu is open at a time.
@@ -650,6 +655,16 @@
                 {#if medDetail(med)}<div class="med-detail">{medDetail(med)}</div>{/if}
               </div>
               {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
+              {#if med.active && med.supply_tracking}
+                {@const d = daysLeft(med)}
+                <button class="supply-badge {supplyLevel(med)}" onclick={() => supplyId = supplyId === med.id ? null : med.id}
+                  title="Supply &amp; scripts">
+                  {d == null ? 'Set up supply' : d <= 0 ? 'Run out' : `${d} day${d === 1 ? '' : 's'} left`}
+                </button>
+              {/if}
+              {#if med.active && med.needs_script}
+                <button class="supply-badge script" onclick={() => supplyId = supplyId === med.id ? null : med.id}>New script</button>
+              {/if}
               {#if med.active}
                 <div class="dose-buttons">
                   {#each slotsFor(med.id) as slot}
@@ -682,6 +697,10 @@
                       {/if}
                     </button>
                     {#if med.active}
+                      <button class="menu-item" role="menuitem" onclick={() => { supplyId = med.id; openMenuId = null; }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="4" rx="1"/><rect x="5" y="7" width="14" height="14" rx="2"/><path d="M9 14h6"/></svg>
+                        Supply &amp; scripts
+                      </button>
                       <button class="menu-item" role="menuitem" onclick={() => { startManageSchedule(med.id); openMenuId = null; }}>
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
                         Manage buttons
@@ -705,6 +724,9 @@
                 <button class="dose-save" onclick={() => saveDose(med.id)}>Log dose</button>
                 <button class="dose-cancel" onclick={cancelDose}>Cancel</button>
               </div>
+            {/if}
+            {#if supplyId === med.id}
+              <MedSupply {med} dosesPerDay={slotsFor(med.id).length} onchange={loadAll} onclose={() => supplyId = null} />
             {/if}
             {#if manageScheduleId === med.id}
               <div class="schedule-edit">
@@ -911,6 +933,9 @@
   .med-info { flex:1; min-width:0; display:flex; flex-direction:row; align-items:baseline; gap:9px; flex-wrap:wrap; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); display:inline-block; padding:3px 9px; border-radius:7px; }
   .med-detail { font-size:11.5px; color:var(--tm); }
+  .supply-badge { font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:999px; border:none; cursor:pointer; white-space:nowrap; font-variant-numeric:tabular-nums; background:var(--accent-soft); color:var(--accent-fg); }
+  .supply-badge.low { background:var(--amber-soft); color:var(--amber-fg); }
+  .supply-badge.out, .supply-badge.script { background:var(--red-soft); color:var(--red-fg); }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
 
   .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; align-items:center; flex-shrink:1; min-width:0; }

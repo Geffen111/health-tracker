@@ -1,5 +1,6 @@
-use crate::models::{Medication, MedicationDose, MedicationHistoryEntry, MedicationScheduleItem};
-use chrono::Local;
+use crate::models::{Medication, MedicationDose, MedicationFill, MedicationHistoryEntry, MedicationScheduleItem};
+use chrono::{Local, NaiveDate};
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use tauri::State;
 
@@ -254,6 +255,8 @@ pub async fn delete_medication_history(pool: State<'_, SqlitePool>, id: i64) -> 
 pub async fn delete_medication(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM medication_schedule WHERE medication_id = ?")
         .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM medication_fills WHERE medication_id = ?")
+        .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
     sqlx::query("DELETE FROM medications WHERE id = ?")
         .bind(id).execute(&*pool).await.map_err(|e| e.to_string())?;
     Ok(())
@@ -434,5 +437,157 @@ pub async fn save_medication_note(pool: State<'_, SqlitePool>, date: String, not
              ON CONFLICT(log_date) DO UPDATE SET note = excluded.note, updated_at = datetime('now')")
             .bind(&date).bind(&note).execute(&*pool).await.map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+// ── Supply counter ("x days left") ──
+
+fn parse_day(d: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()
+}
+
+/// Tablets on hand on `day`: the recorded count, less a day's use for each day since it
+/// was recorded. Never below zero. `$lib/medSupply.ts` (onHandAt) is the same sum.
+fn on_hand_at(med: &Medication, day: NaiveDate) -> f64 {
+    let count = med.supply_count.unwrap_or(0.0);
+    let since = med.supply_date.as_deref().and_then(parse_day);
+    let per_day = med.supply_per_day.unwrap_or(0.0);
+    let days = since.map(|s| (day - s).num_days().max(0)).unwrap_or(0) as f64;
+    (count - per_day * days).max(0.0)
+}
+
+async fn fetch_med(pool: &SqlitePool, id: i64) -> Result<Medication, String> {
+    sqlx::query_as::<_, Medication>("SELECT * FROM medications WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SupplySettings {
+    pub tracking: bool,
+    /// Set the count to this many tablets as of today; None keeps the running count.
+    pub on_hand: Option<f64>,
+    pub per_day: Option<f64>,
+    pub box_size: Option<f64>,
+    pub boxes_per_fill: f64,
+    pub warn_days: i64,
+    pub repeats_left: Option<i64>,
+    pub needs_script: bool,
+}
+
+/// Save a medication's supply settings. Changing the daily use re-bases the count at
+/// today first, so the days already gone are charged at the old rate.
+#[tauri::command]
+pub async fn save_medication_supply(
+    pool: State<'_, SqlitePool>,
+    id: i64,
+    supply: SupplySettings,
+) -> Result<Medication, String> {
+    let med = fetch_med(&pool, id).await?;
+    let today = Local::now().date_naive();
+    let (count, date) = match supply.on_hand {
+        Some(n) => (Some(n.max(0.0)), Some(today.to_string())),
+        None if med.supply_count.is_some() && med.supply_per_day != supply.per_day => {
+            (Some(on_hand_at(&med, today)), Some(today.to_string()))
+        }
+        None => (med.supply_count, med.supply_date.clone()),
+    };
+    sqlx::query(
+        "UPDATE medications SET supply_tracking = ?, supply_count = ?, supply_date = ?,
+            supply_per_day = ?, supply_box_size = ?, supply_boxes_per_fill = ?,
+            supply_warn_days = ?, script_repeats_left = ?, needs_script = ?
+         WHERE id = ?",
+    )
+    .bind(supply.tracking).bind(count).bind(date)
+    .bind(supply.per_day).bind(supply.box_size).bind(supply.boxes_per_fill.max(0.0))
+    .bind(supply.warn_days.max(0)).bind(supply.repeats_left.map(|r| r.max(0))).bind(supply.needs_script)
+    .bind(id)
+    .execute(&*pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    fetch_med(&pool, id).await
+}
+
+/// Record a script fill / top-up: what was left on `fill_date` plus `quantity` becomes
+/// the new count from that day. The repeats left and new-script flag come from the
+/// fill form (it suggests one repeat fewer, and the flag once none are left).
+/// `box_size` becomes the usual box size only when none is set yet.
+#[tauri::command]
+pub async fn record_medication_fill(
+    pool: State<'_, SqlitePool>,
+    id: i64,
+    fill_date: String,
+    quantity: f64,
+    repeats_left: Option<i64>,
+    needs_script: bool,
+    box_size: Option<f64>,
+    note: Option<String>,
+) -> Result<Medication, String> {
+    let day = parse_day(&fill_date).ok_or("Invalid fill date")?;
+    if !(quantity > 0.0) {
+        return Err("Quantity must be more than zero".into());
+    }
+    let med = fetch_med(&pool, id).await?;
+    let left = on_hand_at(&med, day);
+    let note = note.filter(|n| !n.trim().is_empty());
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query(
+        "UPDATE medications SET supply_tracking = 1, supply_count = ?, supply_date = ?,
+            script_repeats_left = ?, needs_script = ?,
+            supply_box_size = COALESCE(supply_box_size, ?) WHERE id = ?",
+    )
+    .bind(left + quantity).bind(&fill_date)
+    .bind(repeats_left.map(|r| r.max(0))).bind(needs_script)
+    .bind(box_size.filter(|b| *b > 0.0)).bind(id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    sqlx::query("INSERT INTO medication_fills (medication_id, fill_date, quantity, note) VALUES (?, ?, ?, ?)")
+        .bind(id).bind(&fill_date).bind(quantity).bind(note)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
+    fetch_med(&pool, id).await
+}
+
+#[tauri::command]
+pub async fn list_medication_fills(
+    pool: State<'_, SqlitePool>,
+    medication_id: i64,
+) -> Result<Vec<MedicationFill>, String> {
+    sqlx::query_as::<_, MedicationFill>(
+        "SELECT * FROM medication_fills WHERE medication_id = ? ORDER BY fill_date DESC, id DESC",
+    )
+    .bind(medication_id)
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Undo a fill entered by mistake: its tablets come off the count again (the repeats
+/// and script flag are left for the person to set back).
+#[tauri::command]
+pub async fn delete_medication_fill(pool: State<'_, SqlitePool>, id: i64) -> Result<(), String> {
+    let fill = sqlx::query_as::<_, MedicationFill>("SELECT * FROM medication_fills WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(fill) = fill else { return Ok(()) };
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE medications SET supply_count = MAX(0, COALESCE(supply_count, 0) - ?) WHERE id = ?")
+        .bind(fill.quantity).bind(fill.medication_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM medication_fills WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }

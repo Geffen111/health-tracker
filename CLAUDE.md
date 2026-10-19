@@ -118,6 +118,13 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   the head of the name (before " - "/"with", last food named), flags unioned, modifiers add/remove. Clean-ups (merge/rename/split)
   rewrite `food_log`, so the model only suggests them and each is applied on accept.
   No FK enforcement in this DB: deleting a food/flag/category clears its link rows by hand.
+- **Medication supply is one sum in two places.** On hand = `supply_count` as of `supply_date`
+  less `supply_per_day` per day since, floored at 0: `on_hand_at` in `commands/medications.rs`
+  (applies a fill, re-bases when the daily use changes) and `onHandAt` in `$lib/medSupply.ts`
+  (the badge). Keep them in step. Opt-in per med (`supply_tracking`); fills in `medication_fills`.
+- **Signal check correlates anything with anything** (`$lib/components/Relationships.svelte` on
+  Pacing). A med is "off" only on a day with *other* doses logged, food only on a day with food
+  logged — a day with nothing logged is unknown, not "without". Still descriptive: r, means, n.
 - **Food vs fatigue is descriptive only**: mean fatigue on days an item was had / the day after,
   beside other tracked days. Same rule as Pacing — no scores, no forecasts.
 

@@ -298,6 +298,26 @@
     }
   }
 
+  // ── Change a logged entry's time ──
+  let timeEditId = $state<number | null>(null);
+  let timeEdit = $state('');
+  function startTimeEdit(e: any) {
+    closeForms();
+    timeEditId = e.id;
+    timeEdit = e.time_taken ?? '';
+  }
+  async function saveTimeEdit() {
+    const id = timeEditId;
+    if (id == null) return;
+    try {
+      await invoke('set_food_log_time', { id, timeTaken: timeEdit || null });
+      timeEditId = null;
+      await refreshAfterLog();
+    } catch (e) {
+      showToast(String(e), 'error');
+    }
+  }
+
   async function deleteEntry(id: number) {
     await invoke('delete_food_log', { id });
     await refreshAfterLog();
@@ -398,12 +418,22 @@
   let meals = $derived(findMeals(recent.filter((e) => e.log_date < selectedDate)));
   // Two weeks back, skipping anything that was a group being logged (already one tap).
   let recentMeals = $derived(meals.filter((m) => !m.fromGroup && m.last >= shiftISO(selectedDate, -14)).slice(0, 6));
+  // Picking a recent meal opens a time row first, so it can be logged at when it was had.
+  let mealLogKey = $state<string | null>(null);
+  let mealLogTime = $state('');
+  function openMeal(m: Meal) {
+    if (mealLogKey === m.key) { mealLogKey = null; return; }
+    closeForms();
+    mealLogKey = m.key;
+    mealLogTime = defaultTime();
+  }
   async function logMeal(m: Meal) {
     try {
       await invoke('add_food_log', {
         logDate: selectedDate,
-        entries: m.food_ids.map((id) => ({ food_id: id, time_taken: defaultTime() || null, amount: null, group_id: null })),
+        entries: m.food_ids.map((id) => ({ food_id: id, time_taken: mealLogTime || null, amount: null, group_id: null })),
       });
+      mealLogKey = null;
       await refreshAfterLog();
       showToast(`${m.names.length} items logged`);
     } catch (e) {
@@ -500,7 +530,7 @@
   }
 
   // One inline form at a time.
-  function closeForms() { logId = null; groupLogId = null; editId = null; groupFormId = null; openMenuId = null; }
+  function closeForms() { logId = null; groupLogId = null; editId = null; groupFormId = null; openMenuId = null; mealLogKey = null; timeEditId = null; }
   let openMenuId = $state<number | null>(null);
 
   // 3-dot menus are drawn fixed over the page (see $lib/menuPosition) so the card's
@@ -938,11 +968,21 @@
               </button>
             {/if}
             {#each recentMeals as m (m.key)}
-              <button class="meal-chip" onclick={() => logMeal(m)} title="Log {m.names.join(', ')}{selectedDate === today ? ' now' : ''}">
+              <button class="meal-chip" class:open={mealLogKey === m.key} onclick={() => openMeal(m)} title="Log {m.names.join(', ')}">
                 {m.names.join(' · ')}{#if m.count > 1}<span class="repeat-n">×{m.count}</span>{/if}
               </button>
             {/each}
           </div>
+          {#each recentMeals.filter((m) => m.key === mealLogKey) as m (m.key)}
+            <div class="copy-list">
+              <div class="muted">{m.names.join(', ')}</div>
+              <div class="inline-form-row">
+                <input class="sm-input" type="time" bind:value={mealLogTime} aria-label="Time" />
+                <button class="cancel-sm" onclick={() => mealLogKey = null}>Cancel</button>
+                <button class="save-sm" onclick={() => logMeal(m)}>Log these</button>
+              </div>
+            </div>
+          {/each}
           {#if showCopy}
             <div class="copy-list">
               {#each yesterday as e (e.id)}
@@ -964,7 +1004,14 @@
         {:else}
           {#each entries as e (e.id)}
             <div class="entry" class:drink={e.kind === 'drink'}>
-              <span class="entry-time">{e.time_taken ?? '--:--'}</span>
+              {#if timeEditId === e.id}
+                <input class="sm-input entry-time-input" type="time" bind:value={timeEdit} aria-label="Time"
+                  onkeydown={(ev) => { if (ev.key === 'Enter') saveTimeEdit(); else if (ev.key === 'Escape') timeEditId = null; }} />
+                <button class="save-sm" onclick={saveTimeEdit}>Save</button>
+                <button class="cancel-sm" onclick={() => timeEditId = null}>Cancel</button>
+              {:else}
+                <button class="entry-time entry-time-btn" onclick={() => startTimeEdit(e)} title="Change the time">{e.time_taken ?? '--:--'}</button>
+              {/if}
               <div class="entry-name">
                 {e.food_name}
                 {#if e.amount}<span class="entry-amt">{e.amount}</span>{/if}
@@ -1030,7 +1077,10 @@
   .page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:22px; gap:16px; flex-wrap:wrap; }
   .page-title { font-family:'Source Serif 4',serif; font-size:30px; font-weight:600; color:var(--tp); letter-spacing:-.01em; }
   .page-subtitle { font-size:13.5px; color:var(--ts); margin-top:3px; }
-  .header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; margin-left:auto; }
+  .entry-time-btn { background:none; border:none; padding:2px 4px; margin:-2px -4px; border-radius:6px; cursor:pointer; font:inherit; }
+  .entry-time-btn:hover { background:var(--accent-soft, var(--border)); }
+  .entry-time-input { width:auto; }
   .day-nav { display:flex; align-items:center; gap:2px; background:var(--card); border:1px solid var(--border); border-radius:999px; padding:4px; box-shadow:var(--shadow); }
   .day-arrow { width:30px;height:30px;border-radius:50%;border:none;background:transparent;color:var(--ts);display:flex;align-items:center;justify-content:center;cursor:pointer; }
   .day-arrow:disabled { color:var(--tm); cursor:not-allowed; }
@@ -1168,7 +1218,7 @@
   .repeat { display:flex; flex-wrap:wrap; gap:6px; padding:0 18px 12px; }
   .repeat-btn, .meal-chip { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border); border-radius:999px; padding:5px 11px; font-size:12px; font-weight:600; cursor:pointer; background:var(--card); color:var(--ts); max-width:100%; text-align:left; }
   .repeat-btn { background:var(--accent-soft); color:var(--accent-fg); border-color:var(--accent-soft); font-weight:700; }
-  .repeat-btn.open { border-color:var(--accent); }
+  .repeat-btn.open, .meal-chip.open { border-color:var(--accent); }
   .meal-chip:hover, .repeat-btn:hover { filter:brightness(.97); }
   .repeat-n { font-size:10.5px; font-weight:800; color:var(--tm); }
   .copy-list { display:flex; flex-direction:column; gap:6px; margin:0 18px 12px; padding:10px 12px; background:var(--inset); border-radius:12px; }
