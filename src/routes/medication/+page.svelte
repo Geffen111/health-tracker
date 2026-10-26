@@ -9,7 +9,7 @@
   import { confirmAction } from '$lib/stores/confirm.svelte';
   import { menuPosFor, menuStyle, type MenuPos } from '$lib/menuPosition';
   import MedSupply from '$lib/components/MedSupply.svelte';
-  import { daysLeft, supplyLevel, scriptDaysLeft, SCRIPT_WARN_DAYS } from '$lib/medSupply';
+  import { supplyName, supplyLevel, supplyAlerts, type Supply } from '$lib/medSupply';
 
   let medications = $state<any[]>([]);
   let schedule = $state<any[]>([]);            // all schedule items, flat
@@ -90,6 +90,33 @@
 
   // Supply & scripts panel (days-left counter, script fills), keyed by medication id.
   let supplyId = $state<number | null>(null);
+  let supplies = $state<Supply[]>([]);
+  async function loadSupplies() {
+    try { supplies = await invoke<Supply[]>('list_medication_supplies'); } catch (e) { console.error('Error loading supplies:', e); }
+  }
+  function suppliesFor(medId: number): Supply[] {
+    return supplies.filter((s) => s.medication_id === medId);
+  }
+  // The row's badges: one per supply ("8 mg · 23 days"), then any script reminders.
+  function supplyBadges(med: any): { text: string; level: string; title: string }[] {
+    const mine = suppliesFor(med.id);
+    const out = mine.map((s) => {
+      const nm = mine.length > 1 ? supplyName(s, med) : '';
+      const pre = nm ? `${nm} · ` : '';
+      if (s.needs_strength) return { text: `${pre}set strength`, level: 'low', title: 'Set the tablet strength so doses can be counted' };
+      const count = s.days_left != null
+        ? (s.days_left <= 0 ? 'run out' : `${s.days_left} day${s.days_left === 1 ? '' : 's'} left`)
+        : `${Math.round(s.on_hand * 10) / 10} on hand`;
+      return { text: pre + count, level: supplyLevel(s), title: `${Math.round(s.on_hand * 10) / 10} tablets on hand` };
+    });
+    for (const s of mine) {
+      for (const a of supplyAlerts(med, s).filter((a) => a.text.includes('script'))) {
+        const nm = mine.length > 1 ? `${supplyName(s, med)} · ` : '';
+        out.push({ text: nm + a.text[0].toUpperCase() + a.text.slice(1), level: a.level, title: 'Supply & scripts' });
+      }
+    }
+    return out;
+  }
 
   // Per-row actions (edit / pause / delete) live in a 3-dot menu so each med fits
   // on a single condensed row. Only one menu is open at a time.
@@ -131,6 +158,7 @@
     } catch (e) {
       console.error('Error loading meds:', e);
     }
+    await loadSupplies();
   }
 
   function isOccasional(m: any): boolean {
@@ -174,6 +202,7 @@
       invoke<any[]>('get_doses_for_date', { date: selectedDate }),
       invoke<any[]>('get_all_doses'),
     ]);
+    loadSupplies();
     showToast('Dose logged');
   }
 
@@ -183,6 +212,7 @@
       invoke<any[]>('get_doses_for_date', { date: selectedDate }),
       invoke<any[]>('get_all_doses'),
     ]);
+    loadSupplies();
   }
 
   async function addMedication() {
@@ -384,6 +414,7 @@
       invoke<any[]>('get_doses_for_date', { date: selectedDate }),
       invoke<any[]>('get_all_doses'),
     ]);
+    loadSupplies();
     showToast(`${toLog.length} doses logged`);
   }
 
@@ -649,76 +680,71 @@
               <button class="dose-cancel" onclick={() => editId = null}>Cancel</button>
             </div>
           {:else}
-            <div class="med-row" class:dimmed={!med.active} class:menu-open={openMenuId === med.id}>
-              <div class="med-info">
-                <span class="med-name" style={med.active ? `background:var(${medColor(med.id)}-soft);` : ''}>{med.name}</span>
-                {#if medDetail(med)}<div class="med-detail">{medDetail(med)}</div>{/if}
-              </div>
-              {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
-              {#if med.active && med.supply_tracking}
-                {@const d = daysLeft(med)}
-                <button class="supply-badge {supplyLevel(med)}" onclick={() => supplyId = supplyId === med.id ? null : med.id}
-                  title="Supply &amp; scripts">
-                  {d == null ? 'Set up supply' : d <= 0 ? 'Run out' : `${d} day${d === 1 ? '' : 's'} left`}
-                </button>
-              {/if}
-              {#if med.active && med.needs_script}
-                <button class="supply-badge script" onclick={() => supplyId = supplyId === med.id ? null : med.id}>New script</button>
-              {:else if med.active && scriptDaysLeft(med) != null && scriptDaysLeft(med)! <= SCRIPT_WARN_DAYS}
-                {@const e = scriptDaysLeft(med)!}
-                <button class="supply-badge {e <= 7 ? 'out' : 'low'}" onclick={() => supplyId = supplyId === med.id ? null : med.id}
-                  title="Script expires {formatDate(med.script_expiry)}">
-                  {e < 0 ? 'Script expired' : `Script ends ${formatDate(med.script_expiry)}`}
-                </button>
-              {/if}
-              {#if med.active}
-                <div class="dose-buttons">
-                  {#each slotsFor(med.id) as slot}
-                    <button class="slot-btn" onclick={() => openDose(med, slot)}>
-                      {slot.label ?? slot.time_of_day ?? 'Dose'}{slot.dose_amount != null ? ` ${slot.dose_amount}${med.dose_unit || 'mg'}` : ''}
-                    </button>
-                  {/each}
-                  <button class="add-dose-btn" onclick={() => openDose(med, null)} aria-label="Log a dose" title="Log a dose">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-                  </button>
+            <div class="med-row two-line" class:dimmed={!med.active} class:menu-open={openMenuId === med.id}>
+              <div class="med-line">
+                <div class="med-info">
+                  <span class="med-name" style={med.active ? `background:var(${medColor(med.id)}-soft);` : ''}>{med.name}</span>
+                  {#if medDetail(med)}<div class="med-detail">{medDetail(med)}</div>{/if}
+                  {#if !med.active}<span class="ceased-badge">Ceased</span>{/if}
                 </div>
-              {/if}
-              <div class="med-menu">
-                <button class="icon-btn menu-trigger" onclick={(e) => toggleMenu(med.id, e)} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === med.id}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
-                </button>
-                {#if openMenuId === med.id}
-                  <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
-                    <button class="menu-item" role="menuitem" onclick={() => { startEdit(med); openMenuId = null; }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-                      Edit
-                    </button>
-                    <button class="menu-item" role="menuitem" onclick={() => { toggleActive(med); openMenuId = null; }}>
+                <div class="med-menu">
+                  <button class="icon-btn menu-trigger" onclick={(e) => toggleMenu(med.id, e)} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenuId === med.id}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>
+                  </button>
+                  {#if openMenuId === med.id}
+                    <div class="menu-pop" role="menu" style={menuStyle(menuPos)}>
+                      <button class="menu-item" role="menuitem" onclick={() => { startEdit(med); openMenuId = null; }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                        Edit
+                      </button>
+                      <button class="menu-item" role="menuitem" onclick={() => { toggleActive(med); openMenuId = null; }}>
+                        {#if med.active}
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                          Cease
+                        {:else}
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8Z"/></svg>
+                          Restart
+                        {/if}
+                      </button>
                       {#if med.active}
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
-                        Cease
-                      {:else}
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8Z"/></svg>
-                        Restart
+                        <button class="menu-item" role="menuitem" onclick={() => { supplyId = med.id; openMenuId = null; }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="4" rx="1"/><rect x="5" y="7" width="14" height="14" rx="2"/><path d="M9 14h6"/></svg>
+                          Supply &amp; scripts
+                        </button>
+                        <button class="menu-item" role="menuitem" onclick={() => { startManageSchedule(med.id); openMenuId = null; }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                          Manage buttons
+                        </button>
                       {/if}
-                    </button>
-                    {#if med.active}
-                      <button class="menu-item" role="menuitem" onclick={() => { supplyId = med.id; openMenuId = null; }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="4" rx="1"/><rect x="5" y="7" width="14" height="14" rx="2"/><path d="M9 14h6"/></svg>
-                        Supply &amp; scripts
+                      <button class="menu-item danger" role="menuitem" onclick={() => { removeMed(med); openMenuId = null; }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+                        Delete
                       </button>
-                      <button class="menu-item" role="menuitem" onclick={() => { startManageSchedule(med.id); openMenuId = null; }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                        Manage buttons
+                    </div>
+                  {/if}
+                </div>
+              </div>
+              {#if med.active}
+                <div class="med-line second">
+                  <div class="dose-buttons">
+                    {#each slotsFor(med.id) as slot}
+                      <button class="slot-btn" onclick={() => openDose(med, slot)}>
+                        {slot.label ?? slot.time_of_day ?? 'Dose'}{slot.dose_amount != null ? ` ${slot.dose_amount}${med.dose_unit || 'mg'}` : ''}
                       </button>
-                    {/if}
-                    <button class="menu-item danger" role="menuitem" onclick={() => { removeMed(med); openMenuId = null; }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
-                      Delete
+                    {/each}
+                    <button class="add-dose-btn" onclick={() => openDose(med, null)} aria-label="Log a dose" title="Log a dose">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
                     </button>
                   </div>
-                {/if}
-              </div>
+                  {#if supplyBadges(med).length}
+                    <div class="supply-badges">
+                      {#each supplyBadges(med) as b}
+                        <button class="supply-badge {b.level}" onclick={() => supplyId = supplyId === med.id ? null : med.id} title={b.title}>{b.text}</button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
             {#if openId === med.id}
               <div class="dose-inline">
@@ -732,7 +758,7 @@
               </div>
             {/if}
             {#if supplyId === med.id}
-              <MedSupply {med} dosesPerDay={slotsFor(med.id).length} onchange={loadAll} onclose={() => supplyId = null} />
+              <MedSupply {med} supplies={suppliesFor(med.id)} onchange={loadSupplies} onclose={() => supplyId = null} />
             {/if}
             {#if manageScheduleId === med.id}
               <div class="schedule-edit">
@@ -939,9 +965,14 @@
   .med-info { flex:1; min-width:0; display:flex; flex-direction:row; align-items:baseline; gap:9px; flex-wrap:wrap; }
   .med-name { font-size:13.5px; font-weight:600; color:var(--tp); display:inline-block; padding:3px 9px; border-radius:7px; }
   .med-detail { font-size:11.5px; color:var(--tm); }
+  .med-row.two-line { flex-direction:column; align-items:stretch; gap:7px; padding:10px 18px; }
+  .med-line { display:flex; align-items:center; gap:10px; min-width:0; }
+  .med-line.second { flex-wrap:wrap; }
+  .med-line.second .dose-buttons { justify-content:flex-start; flex:1; }
+  .supply-badges { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; margin-left:auto; }
   .supply-badge { font-size:10.5px; font-weight:700; padding:3px 9px; border-radius:999px; border:none; cursor:pointer; white-space:nowrap; font-variant-numeric:tabular-nums; background:var(--accent-soft); color:var(--accent-fg); }
   .supply-badge.low { background:var(--amber-soft); color:var(--amber-fg); }
-  .supply-badge.out, .supply-badge.script { background:var(--red-soft); color:var(--red-fg); }
+  .supply-badge.out { background:var(--red-soft); color:var(--red-fg); }
   .ceased-badge { font-size:10.5px; font-weight:700; color:var(--red-fg); background:var(--red-soft); padding:3px 9px; border-radius:999px; }
 
   .dose-buttons { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; align-items:center; flex-shrink:1; min-width:0; }

@@ -76,25 +76,34 @@ pub struct Medication {
     pub default_time: Option<String>,
     /// 'regular' (daily, scheduled) or 'occasional' (PRN / as-needed).
     pub med_type: Option<String>,
-    // Supply counter (migration 20240702) — see `medications::on_hand_at`.
-    pub supply_tracking: bool,
-    pub supply_count: Option<f64>,
-    pub supply_date: Option<String>,
-    pub supply_per_day: Option<f64>,
-    pub supply_box_size: Option<f64>,
-    pub supply_boxes_per_fill: f64,
-    pub supply_warn_days: i64,
-    pub script_repeats_left: Option<i64>,
-    pub needs_script: bool,
-    /// When the current script expires, YYYY-MM-DD (migration 20240703).
-    pub script_expiry: Option<String>,
 }
 
-/// One script fill / top-up.
+/// One tablet strength / script of a medication, with its own count (migration 20240704).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct MedicationSupply {
+    pub id: i64,
+    pub medication_id: i64,
+    pub strength: Option<f64>,
+    pub label: Option<String>,
+    pub base_count: f64,
+    pub base_at: String,
+    pub base_local: String,
+    pub in_use_since: String,
+    pub box_size: Option<f64>,
+    pub boxes_per_fill: f64,
+    pub warn_days: i64,
+    pub repeats_left: Option<i64>,
+    pub needs_script: bool,
+    pub script_expiry: Option<String>,
+    pub created_at: String,
+}
+
+/// One script fill / top-up of a supply.
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct MedicationFill {
     pub id: i64,
     pub medication_id: i64,
+    pub supply_id: Option<i64>,
     pub fill_date: String,
     pub quantity: f64,
     pub note: Option<String>,

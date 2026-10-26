@@ -8,7 +8,7 @@
   import { recallView, rememberView, oneOf } from '$lib/viewState';
   import { weekly, runPendingWeekly } from '$lib/stores/weekly.svelte';
   import { aiOn, features } from '$lib/stores/features.svelte';
-  import { supplyAlerts, type SupplyAlert } from '$lib/medSupply';
+  import { supplyAlerts, supplyName, type Supply, type SupplyAlert } from '$lib/medSupply';
   import { resolveCSSVar } from '$lib/chartTheme';
   import { theme } from '$lib/stores/theme.svelte';
 
@@ -58,11 +58,18 @@
   let events = $state<any[]>([]);
   // Medications running low, needing a new script, or with a script about to expire.
   let medAlerts = $state<SupplyAlert[]>([]);
+  // "Candesartan 4 mg" when the alerts name more than one strength of a med.
+  function alertName(a: SupplyAlert): string {
+    const several = new Set(medAlerts.filter((x) => x.med.id === a.med.id).map((x) => x.supply.id)).size > 1;
+    return several ? `${a.med.name} ${supplyName(a.supply, a.med)}`.trim() : a.med.name;
+  }
 
   onMount(async () => {
     if (features.medication) {
-      invoke<any[]>('list_medications')
-        .then((meds) => { medAlerts = meds.flatMap(supplyAlerts); })
+      Promise.all([invoke<any[]>('list_medications'), invoke<Supply[]>('list_medication_supplies')])
+        .then(([meds, supplies]) => {
+          medAlerts = supplies.flatMap((s) => supplyAlerts(meds.find((m) => m.id === s.medication_id), s));
+        })
         .catch(() => {});
     }
     try {
@@ -579,7 +586,7 @@
     <span class="wb-text">
       <strong>{urgent ? 'Medication needs sorting' : 'Medication running low'}</strong>
       <span>
-        {#each medAlerts as a, i}{i ? ' · ' : ''}<span class:wb-error={a.level === 'out'}>{a.med.name}: {a.text}</span>{/each}
+        {#each medAlerts as a, i}{i ? ' · ' : ''}<span class:wb-error={a.level === 'out'}>{alertName(a)}: {a.text}</span>{/each}
       </span>
     </span>
     <span class="wb-go">Medication →</span>

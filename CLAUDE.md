@@ -118,12 +118,15 @@ import via calamine). Register new commands in `src-tauri/src/lib.rs`.
   the head of the name (before " - "/"with", last food named), flags unioned, modifiers add/remove. Clean-ups (merge/rename/split)
   rewrite `food_log`, so the model only suggests them and each is applied on accept.
   No FK enforcement in this DB: deleting a food/flag/category clears its link rows by hand.
-- **Medication supply is one sum in two places.** On hand = `supply_count` as of `supply_date`
-  less `supply_per_day` per day since, floored at 0: `on_hand_at` in `commands/medications.rs`
-  (applies a fill, re-bases when the daily use changes) and `onHandAt` in `$lib/medSupply.ts`
-  (the badge). Keep them in step. Opt-in per med (`supply_tracking`); fills in `medication_fills`.
-  `supplyAlerts()` (low/out, new script, `script_expiry` within 30 days) drives the badges and the
-  Dashboard's medication banner.
+- **Medication supply counts logged doses, per tablet strength.** `medication_supplies` has one
+  row per strength/script (own box, repeats, expiry). On hand = `base_count` (counted at
+  `base_at`/`base_local`) + fills entered since − the tablets in each dose logged after it;
+  a dose is split over the med's strengths largest first (12 mg = 8 + 4). Days left divides by
+  the average over the last 14 days with *any* dose logged (skips count), or the quick-add
+  slots while there are < 3 such days. All of it is `supply_views` in `commands/medications.rs`
+  — the page only displays `SupplyView`; don't recompute it in TS. `supplyAlerts()` in
+  `$lib/medSupply.ts` (low/out, new script, expiry within 30 days) drives the row badges and the
+  Dashboard banner.
 - **Signal check correlates anything with anything** (`$lib/components/Relationships.svelte` on
   Pacing). A med is "off" only on a day with *other* doses logged, food only on a day with food
   logged — a day with nothing logged is unknown, not "without". Still descriptive: r, means, n.
